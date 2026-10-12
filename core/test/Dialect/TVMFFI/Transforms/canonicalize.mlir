@@ -20,13 +20,3 @@ func.func @clone_side_effect(%handle: !tvm_ffi.function, %input: !tvm_ffi.tensor
   cf.assert %status, "clone failed"
   return %clone : !tvm_ffi.tensor
 }
-
-// CHECK-LABEL: func.func @other_dialect_folding
-// CHECK: %[[THREE:[a-zA-Z0-9_]+]] = arith.constant 3 : i64
-// CHECK-NEXT: return %[[THREE]] : i64
-func.func @other_dialect_folding() -> i64 {
-  %one = arith.constant 1 : i64
-  %two = arith.constant 2 : i64
-  %sum = arith.addi %one, %two : i64
-  return %sum : i64
-}

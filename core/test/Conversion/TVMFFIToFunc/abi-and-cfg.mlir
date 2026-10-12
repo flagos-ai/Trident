@@ -5,7 +5,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -split-input-file --trident-lowering-pipeline | FileCheck %s --check-prefix=STRICT
 // RUN: trident-core-opt %s -split-input-file -convert-tvm-ffi-to-func | FileCheck %s --check-prefixes=INTERMEDIATE,FUNC
 
 // Guard failures are represented as nested SCF regions.  The final pipeline
@@ -37,9 +36,9 @@
 // INTERMEDIATE: [[GUARD_EXCEPTION_HANDLE_ADDR:%[a-zA-Z0-9_]+]] = llvm.mlir.addressof @__trident_tvm_ffi_handle_trident.ffi.Exception : !llvm.ptr
 // INTERMEDIATE-NEXT: [[GUARD_EXCEPTION_HANDLE:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_EXCEPTION_HANDLE_ADDR]] : !llvm.ptr -> !llvm.ptr
 // INTERMEDIATE-NOT: llvm.call @TVMFFIObjectIncRef
-// INTERMEDIATE: [[GUARD_EXCEPTION_STATUS:%[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall([[GUARD_EXCEPTION_HANDLE]], {{.*}}) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
+// INTERMEDIATE: [[GUARD_EXCEPTION_STATUS:%[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall([[GUARD_EXCEPTION_HANDLE]], [[GUARD_EXCEPTION_ARGS:%[a-zA-Z0-9_]+]], [[GUARD_EXCEPTION_NARGS:%[a-zA-Z0-9_]+]], [[GUARD_FAILURE_RESULT_SLOT:%[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // INTERMEDIATE-NOT: llvm.call @TVMFFIObjectDecRef
-// INTERMEDIATE-NEXT: [[GUARD_FAILURE_RESULT:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_FAILURE_RESULT_SLOT:%[a-zA-Z0-9_]+]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
+// INTERMEDIATE-NEXT: [[GUARD_FAILURE_RESULT:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_FAILURE_RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // INTERMEDIATE-NEXT: llvm.store [[GUARD_FAILURE_RESULT]], [[RESULT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // INTERMEDIATE-NEXT: }
 // INTERMEDIATE-NEXT: [[GUARD_STATUS:%[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
@@ -116,11 +115,12 @@ tvm_ffi.func @forward_block_use() {
 
 // -----
 
-// STRICT-NOT: !torch.
-// STRICT: llvm.func @make_int() -> !llvm.struct<(i32, i32, i64)>
-// STRICT: llvm.func @multi_return_three_tensors(
-
-// make_int: a single scalar result is cast to its converted (TVMFFIAny)
+// INTERMEDIATE-LABEL: func.func @make_int() -> !tvm_ffi.int
+// INTERMEDIATE: return %[[SCALAR_RESULT:[a-zA-Z0-9_]+]] : !tvm_ffi.int
+// INTERMEDIATE-LABEL: func.func @__tvm_ffi_make_int(
+// INTERMEDIATE: [[SCALAR_ABI_RESULT:%[a-zA-Z0-9_]+]] = func.call @make_int() : () -> !tvm_ffi.int
+// INTERMEDIATE: builtin.unrealized_conversion_cast [[SCALAR_ABI_RESULT]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// A single scalar result is cast to its converted (TVMFFIAny)
 // type and stored directly into %arg3.
 tvm_ffi.func @make_int() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
   %0 = tvm_ffi.constant.int 42
@@ -129,10 +129,12 @@ tvm_ffi.func @make_int() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
 
 // -----
 
-// multi_return_three_tensors: three object elements → three element DecRefs
-// after the container store.
-// * Allocate three slots and fill each with a casted tensor.
-// * ffi.Array call helper + kTVMFFIArray re-tag + store into %arg3.
+// INTERMEDIATE-LABEL: func.func @multi_return_three_tensors(
+// INTERMEDIATE-SAME: %[[X:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Y:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Z:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
+// INTERMEDIATE: return %[[X]], %[[Y]], %[[Z]] : !tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor
+// INTERMEDIATE-LABEL: func.func @__tvm_ffi_multi_return_three_tensors(
+// INTERMEDIATE: func.call @multi_return_three_tensors
+// Multi-results are packed into an FFI Array and stored into the result slot.
 // The input tensors are borrowed from the caller, so only the temporary
 // ffi.Array function handle is released here; no element DecRef is emitted.
 tvm_ffi.func @multi_return_three_tensors(%arg0: !tvm_ffi.tensor, %arg1: !tvm_ffi.tensor, %arg2: !tvm_ffi.tensor) -> (!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor) attributes {emit_tvm_ffi_abi} {

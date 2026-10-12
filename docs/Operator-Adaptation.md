@@ -37,15 +37,22 @@ For a new operator:
 1. Inspect the raw exported graph and schema, including defaults and overloads.
 2. Verify the generated wrapper exists, or add an import/lowering rule for an
    operation that has no dispatch schema.
-3. Add an importer or end-to-end Python test under `test/` and a focused MLIR
-   test at the relevant dialect, conversion or pipeline layer.
+3. Add public execution checks under `test/e2e`, organized by operator.
+   `test/unit/test_guards.py` is reserved for guard parsing and expression IR.
+   When dialect or lowering behavior changes, add a focused MLIR test at that
+   layer. Existing generic dispatch coverage can be reused for an
+   operator that needs no new lowering; avoid repeating its packed ABI checks.
 4. Run the focused tests, full Python suite and core Lit target.
 
 When adapting a mutation, verify both input writeback and output storage alias
-on a cached call. When adapting a factory or clone, verify dtype/device and
-allocation behavior. Multi-result calls return an FFI Array; retrieve each
-result with its semantic type. Python output container structure is restored
-from its pytree specification.
+on warmup and cached calls. Check specialization reuse so the repeated call
+cannot silently exercise warmup again. Use owned input tensors when testing
+cache reuse: `_base` guards conservatively force a miss. Non-contiguous inputs
+can retain their layout with `clone(memory_format=torch.preserve_format)`.
+When adapting a factory or clone, verify dtype/device and allocation behavior.
+Do not compare uninitialized factory contents. Multi-result calls return an
+FFI Array; retrieve each result with its semantic type. Python output container
+structure is restored from its pytree specification.
 
 ## Semantic IR and ABI
 
@@ -105,5 +112,6 @@ validates specializations, obtains the current stream through TVM FFI, and emits
 exception through the enclosing wrapper's Any/union result.
 
 Add a kernel launch or specialization Lit test and a cached Python execution
-test for changes to this path. Use hook-free `triton.Config` definitions in JIT
-examples because Dynamo export cannot capture arbitrary Triton callbacks.
+test under `test/e2e` for changes to this path. Use hook-free `triton.Config`
+definitions in JIT examples because Dynamo export cannot capture arbitrary
+Triton callbacks.

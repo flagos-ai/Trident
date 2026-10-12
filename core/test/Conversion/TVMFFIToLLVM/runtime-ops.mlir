@@ -134,10 +134,10 @@ func.func @get_bool(%value: !tvm_ffi.bool) -> i1 {
 // CHECK: llvm.func internal @__trident_tvm_ffi_ctor_test.identity()
 // CHECK: llvm.call @TVMFFIFunctionGetGlobal(%[[CTOR_NAME:[a-zA-Z0-9_]+]], %[[CTOR_SLOT:[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr) -> i32
 // CHECK: %[[CTOR_HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[CTOR_SLOT]] : !llvm.ptr -> !llvm.ptr
-// CHECK: llvm.store %[[CTOR_HANDLE]], %{{[a-zA-Z0-9_]+}} : !llvm.ptr, !llvm.ptr
+// CHECK: llvm.store %[[CTOR_HANDLE]], %[[CTOR_CACHE:[a-zA-Z0-9_]+]] : !llvm.ptr, !llvm.ptr
 // The destructor drops the load-time reference.
 // CHECK: llvm.func internal @__trident_tvm_ffi_dtor_test.identity()
-// CHECK: %[[DTOR_HANDLE:[a-zA-Z0-9_]+]] = llvm.load %{{[a-zA-Z0-9_]+}} : !llvm.ptr -> !llvm.ptr
+// CHECK: %[[DTOR_HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[DTOR_CACHE:[a-zA-Z0-9_]+]] : !llvm.ptr -> !llvm.ptr
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[DTOR_HANDLE]]) : (!llvm.ptr) -> i32
 // CHECK: llvm.mlir.global_ctors ctors = [@__trident_tvm_ffi_ctor_test.identity], priorities = [65535 : i32], data = [#llvm.zero]
 // CHECK: llvm.mlir.global_dtors dtors = [@__trident_tvm_ffi_dtor_test.identity], priorities = [65535 : i32], data = [#llvm.zero]

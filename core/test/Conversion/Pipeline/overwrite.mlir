@@ -12,7 +12,7 @@
 // The in-place copy keeps the destination as the first tensor argument to the
 // runtime copy function and passes the source as the second argument.
 
-// CHECK-LABEL: llvm.func @overwrite_impl(
+// CHECK-LABEL: llvm.func @overwrite(
 // CHECK-SAME: %[[SOURCE:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[DESTINATION:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>) {
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE:[a-zA-Z0-9_]+]], %[[ARGUMENTS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RESULT:[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: llvm.return
@@ -20,12 +20,6 @@
 // CHECK-SAME: %[[WRAPPER_CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAPPER_ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAPPER_NARGS:[a-zA-Z0-9_]+]]: i32, %[[WRAPPER_RESULT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 {
 // CHECK: %[[WRAPPER_SOURCE:[a-zA-Z0-9_]+]] = llvm.load %[[WRAPPER_ARGS]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: llvm.call @overwrite(%[[WRAPPER_SOURCE]], %[[WRAPPER_DESTINATION:[a-zA-Z0-9_]+]]) : (!llvm.struct<(i32, i32, i64)>, !llvm.struct<(i32, i32, i64)>) -> ()
-
-func.func @overwrite_impl(%source: !tvm_ffi.tensor,
-                           %destination: !tvm_ffi.tensor) {
-  tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.tensor
-  return
-}
 
 tvm_ffi.func @overwrite(%source: !tvm_ffi.tensor,
                          %destination: !tvm_ffi.tensor)

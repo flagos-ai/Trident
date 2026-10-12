@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -ownership-deallocation | FileCheck %s
+// RUN: trident-core-opt %s -split-input-file -ownership-deallocation | FileCheck %s
 
 module {
   func.func private @make_tensor() -> !tvm_ffi.tensor
@@ -254,4 +254,27 @@ module {
         : (!tvm_ffi.tensor) -> !tvm_ffi.tensor, i1
     tvm_ffi.return %result : !tvm_ffi.tensor
   }
+}
+
+// -----
+
+// A generic object returned by tvm_ffi.get is a borrowed view and is not
+// tracked by this pass.
+// CHECK-LABEL: tvm_ffi.func @get_object(
+// CHECK-SAME: %[[OBJECT_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor) -> !tvm_ffi.object {
+// CHECK-NEXT: %[[OBJECT:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[OBJECT_ARG]] : !tvm_ffi.tensor -> !tvm_ffi.object
+// CHECK-NEXT: tvm_ffi.return %[[OBJECT]] : !tvm_ffi.object
+tvm_ffi.func @get_object(%arg: !tvm_ffi.tensor) -> !tvm_ffi.object {
+  %object = tvm_ffi.get %arg : !tvm_ffi.tensor -> !tvm_ffi.object
+  tvm_ffi.return %object : !tvm_ffi.object
+}
+
+// Object-valued return operands are retained for the caller before local
+// ownership credits are released.
+// CHECK-LABEL: tvm_ffi.func @return_tensor(
+// CHECK-SAME: [[RETURN_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
+// CHECK-NEXT: tvm_ffi.ObjectIncRef [[RETURN_ARG]] : !tvm_ffi.tensor
+// CHECK-NEXT: tvm_ffi.return [[RETURN_ARG]] : !tvm_ffi.tensor
+tvm_ffi.func @return_tensor(%arg: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
+  tvm_ffi.return %arg : !tvm_ffi.tensor
 }

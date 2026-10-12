@@ -124,9 +124,11 @@ initialization; call sites retain and release the cached reference.
 
 `core/` contains the DLPack and TVM FFI dialects, lowering passes,
 C API and Python bindings. `ffi/` generates ATen wrappers from dispatcher schemas
-and provides runtime conversion and exception helpers. Python import and guard
-tests live under `test/`; dialect, conversion and pipeline tests live under
-`core/test/`. Operator work follows [Operator-Adaptation.md](Operator-Adaptation.md).
+and provides runtime conversion and exception helpers. Python guard parsing and
+expression IR tests live under `test/unit`; public JIT tests live under
+`test/e2e`. Dialect, conversion and pipeline tests live under `core/test/`. See
+[the Python test guide](../test/README.md) for coverage boundaries.
+Operator work follows [Operator-Adaptation.md](Operator-Adaptation.md).
 
 Build with the editable command in the repository contributor guide, then run
 `python -m unittest discover -s test -p 'test_*.py'` and

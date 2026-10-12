@@ -22,7 +22,7 @@ The repository contains:
 - `examples`: Functional demos (`add.py`, `attn.py`, `mm.py`, `softmax.py`).
 - `ffi`: Lightweight C++ shared library for FFI-level types (`trident.ffi.Exception`).
 - `python/trident`: Python APIs (`jit`, `compile`) and runtime backend.
-- `test`: Python end-to-end tests for lowered ATen ops.
+- `test`: Python guard unit tests and public-JIT end-to-end tests.
 
 ## Prerequisites
 
@@ -77,11 +77,22 @@ All examples compare direct Torch/Triton outputs with Trident-jitted outputs.
 
 ```bash
 python -m unittest discover -s test -p "test_*.py"
+cmake --build build/core --target check-trident-core
 ```
 
-Tests in `test/` validate frontend specialization and guards together with
-end-to-end lowering and execution for `all`, `clone`, `empty`, `empty_like`,
-`mul`, `overwrite`, `sub`, `t`, and value tensor literals.
+Python tests are organized into `test/unit` (guard parsing and expression IR)
+and `test/e2e` (public `trident.jit` behavior). End-to-end execution tests require
+a usable CUDA GPU. Unit tests do not require GPU execution.
+
+Run a group or a focused module with:
+
+```bash
+python -m unittest discover -s test/unit -t . -p "test_*.py"
+python -m unittest test.e2e.test_specialization
+```
+
+See [the Python test guide](test/README.md) for coverage boundaries and the
+test migration map, and [the core test guide](core/test/README.md) for Lit.
 
 ## License
 
