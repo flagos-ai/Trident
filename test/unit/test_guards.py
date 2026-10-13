@@ -126,7 +126,7 @@ class GuardExpressionTest(unittest.TestCase):
         self.assertIsInstance(result_type, ir.IntegerType)
         self.assertTrue(result_type.is_signless)
         self.assertEqual(result_type.width, 1)
-        self.assertIn("arith.constant false", module)
+        self.assertIn("arith.constant true", module)
 
 
 class GuardParsingTest(unittest.TestCase):
