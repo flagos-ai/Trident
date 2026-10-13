@@ -181,7 +181,7 @@ class ASTVisitor(ast.NodeVisitor):
                 RuntimeWarning,
                 stacklevel=2,
             )
-            raise _SkipGuard(False)
+            raise _SkipGuard(True)
 
         return build
 
