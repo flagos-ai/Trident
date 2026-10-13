@@ -11,6 +11,7 @@ import torch
 import trident
 
 from test.support.cuda import assert_no_cuda_leak
+from test.support.operators import make_operator_check, operator_configs
 
 
 class AllTest(unittest.TestCase):
@@ -34,3 +35,13 @@ class AllTest(unittest.TestCase):
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
+
+    def test_all_eager_reference(self) -> None:
+        def all(x):
+            return torch.all(x, dim=1)
+
+        cuda_device = torch.device("cuda", torch.cuda.current_device())
+        for device, dtype in operator_configs(cuda_device):
+            with self.subTest(device=str(device), dtype=dtype):
+                check = make_operator_check(self, all, "boolean_unary", device, dtype)
+                assert_no_cuda_leak(self, check, cuda_device)

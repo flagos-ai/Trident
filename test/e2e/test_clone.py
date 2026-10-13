@@ -11,6 +11,7 @@ import torch
 import trident
 
 from test.support.cuda import assert_no_cuda_leak
+from test.support.operators import make_operator_check, operator_configs
 
 
 class CloneTest(unittest.TestCase):
@@ -55,3 +56,13 @@ class CloneTest(unittest.TestCase):
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
+
+    def test_clone_eager_reference(self) -> None:
+        def clone(x):
+            return torch.clone(x)
+
+        cuda_device = torch.device("cuda", torch.cuda.current_device())
+        for device, dtype in operator_configs(cuda_device):
+            with self.subTest(device=str(device), dtype=dtype):
+                check = make_operator_check(self, clone, "noncontiguous", device, dtype)
+                assert_no_cuda_leak(self, check, cuda_device)

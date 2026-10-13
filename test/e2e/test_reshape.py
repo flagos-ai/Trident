@@ -11,6 +11,7 @@ import torch
 import trident
 
 from test.support.cuda import assert_no_cuda_leak
+from test.support.operators import make_operator_check, operator_configs
 
 
 class ReshapeTest(unittest.TestCase):
@@ -34,3 +35,13 @@ class ReshapeTest(unittest.TestCase):
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
+
+    def test_reshape_eager_reference(self) -> None:
+        def reshape(x):
+            return torch.reshape(x, (2, 6))
+
+        cuda_device = torch.device("cuda", torch.cuda.current_device())
+        for device, dtype in operator_configs(cuda_device):
+            with self.subTest(device=str(device), dtype=dtype):
+                check = make_operator_check(self, reshape, "unary", device, dtype)
+                assert_no_cuda_leak(self, check, cuda_device)
