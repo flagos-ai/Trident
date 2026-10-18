@@ -86,7 +86,7 @@ TVM_FFI_STATIC_INIT_BLOCK() {
              int32_t torch_device_type;
              int32_t device_index;
              int64_t storage_offset;
-             const int status =
+             const int32_t status =
                  aoti_torch_get_dim(input, &ndim) |
                  aoti_torch_get_sizes(input, &sizes) |
                  aoti_torch_get_strides(input, &strides) |

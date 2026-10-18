@@ -17,9 +17,12 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/SmallVectorExtras.h>
 #include <mlir/Analysis/Liveness.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Location.h>
 #include <mlir/IR/OpDefinition.h>
 #include <mlir/IR/Operation.h>
@@ -160,10 +163,25 @@ mlir::LogicalResult BlockPlan::analyze() {
     for (auto [index, result] : llvm::make_filter_range(
              llvm::enumerate(operation.getResults()),
              [&operation](const auto &indexedResult) -> bool {
-               return !mlir::isa<mlir::CastOpInterface,
-                                 mlir::SelectLikeOpInterface>(operation) &&
+               // Semantic casts borrow their ABI source. A materialization
+               // from native values needs an explicit contract or known zero.
+               bool const materialization =
+                   mlir::isa<mlir::UnrealizedConversionCastOp>(operation) &&
+                   !llvm::any_of(operation.getOperandTypes(),
+                                 [](mlir::Type type) -> bool {
+                                   return mlir::isa<tvm_ffi::TVMFFIABIType>(
+                                       type);
+                                 });
+               return !mlir::isa<mlir::SelectLikeOpInterface>(operation) &&
+                      (!mlir::isa<mlir::CastOpInterface>(operation) ||
+                       materialization) &&
                       isObjectCapableType(indexedResult.value().getType());
              })) {
+      // A typed zero ABI materialization has no object or ownership credit.
+      // Recognize only a layout-matching cast directly from LLVM zero.
+      if (tvm_ffi::TVMFFIABIType::isZero(result)) {
+        continue;
+      }
       if (!ownership) {
         operation.emitError("object-capable result has no ownership contract");
         return mlir::failure();
@@ -196,6 +214,17 @@ mlir::LogicalResult BlockPlan::analyze() {
     }
   }
 
+  if (ReturnOp returned = mlir::dyn_cast<ReturnOp>(terminator)) {
+    for (mlir::Value const value : returned.getOperands()) {
+      mlir::UnrealizedConversionCastOp fields =
+          value.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+      if (!fields || fields.getNumOperands() != 2 ||
+          !fields.getInputs().back().getType().isInteger(1)) {
+        return returned.emitError("Result returns must be materialized before "
+                                  "ownership deallocation");
+      }
+    }
+  }
   if (terminator->getNumSuccessors() == 0) {
     if (!terminator->hasTrait<mlir::OpTrait::ReturnLike>() &&
         llvm::any_of(terminator->getOperandTypes(), isObjectCapableType)) {
@@ -272,7 +301,32 @@ void EdgePlan::materialize(mlir::Operation *terminator) const {
 
 void BlockPlan::materialize() const {
   mlir::Operation *terminator = block->getTerminator();
-  if (edges.empty() && terminator->hasTrait<mlir::OpTrait::ReturnLike>()) {
+  if (ReturnOp returned = mlir::dyn_cast<ReturnOp>(terminator)) {
+    mlir::OpBuilder builder(terminator);
+    mlir::Value ready;
+    llvm::SmallVector<mlir::Value> payloads;
+    for (mlir::Value const value : returned.getOperands()) {
+      mlir::ValueRange const fields =
+          value.getDefiningOp<mlir::UnrealizedConversionCastOp>().getInputs();
+      ready = ready ? mlir::arith::AndIOp::create(builder, returned.getLoc(),
+                                                  ready, fields.back())
+                    : fields.back();
+      if (isObjectCapableType(fields.front().getType())) {
+        payloads.push_back(fields.front());
+      }
+    }
+    if (!payloads.empty()) {
+      mlir::scf::IfOp branch =
+          mlir::scf::IfOp::create(builder, returned.getLoc(), ready, false);
+      mlir::OpBuilder::InsertionGuard const guard(builder);
+      builder.setInsertionPoint(branch.thenBlock()->getTerminator());
+      for (mlir::Value const payload : payloads) {
+        ObjectIncRefOp::create(builder, returned.getLoc(), payload);
+      }
+    }
+    materializeReferences(builder, returned.getLoc(), {}, credits);
+  } else if (edges.empty() &&
+             terminator->hasTrait<mlir::OpTrait::ReturnLike>()) {
     mlir::OpBuilder builder(terminator);
     const llvm::SmallVector<mlir::Value> returnedValues =
         llvm::filter_to_vector(terminator->getOperands(),

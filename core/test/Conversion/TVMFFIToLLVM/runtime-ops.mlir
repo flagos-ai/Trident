@@ -7,14 +7,18 @@
 
 // RUN: trident-core-opt %s -split-input-file -convert-tvm-ffi-to-llvm | FileCheck %s
 
-// A null cached handle means the load-time lookup failed, so the status the
-// caller checks is derived from it and its success check stays intact.
+// A null cached handle means the load-time lookup found no function.
+// Only resolved handles are retained; a missing handle sets a runtime error.
 // CHECK-LABEL: func.func @checked_global_call(
 // CHECK: %[[HANDLE_ADDR:[a-zA-Z0-9_]+]] = llvm.mlir.addressof @__trident_tvm_ffi_handle_test.identity : !llvm.ptr
 // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[HANDLE_ADDR]] : !llvm.ptr -> !llvm.ptr
 // CHECK: %[[NULL:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.ptr
-// CHECK: %[[IS_NULL:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[HANDLE]], %[[NULL]] : !llvm.ptr
-// CHECK: %[[GET_STATUS:[a-zA-Z0-9_]+]] = llvm.zext %[[IS_NULL]] : i1 to i32
+// CHECK: %[[IS_NULL:[a-zA-Z0-9_]+]] = llvm.icmp "ne" %[[HANDLE]], %[[NULL]] : !llvm.ptr
+// CHECK: llvm.cond_br %[[IS_NULL]], ^[[RESOLVED:bb[0-9]+]], ^[[MISSING:bb[0-9]+]]
+// CHECK: ^[[RESOLVED]]:
+// CHECK: llvm.call @TVMFFIObjectIncRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
+// CHECK: llvm.br ^[[CONTINUATION:bb[0-9]+]](%[[LOOKUP_ZERO:[a-zA-Z0-9_]+]] : i32)
+// CHECK: ^[[CONTINUATION]](%[[GET_STATUS:[a-zA-Z0-9_]+]]: i32):
 // CHECK: %[[GET_ZERO:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK: %[[GET_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[GET_STATUS]], %[[GET_ZERO]] : i32
 // CHECK: %[[INITIAL_RESULT:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.struct<(i32, i32, i64)>
@@ -84,9 +88,9 @@ func.func @exception() -> !tvm_ffi.exception {
 
 // CHECK-LABEL: func.func @function_refs(
 // CHECK-SAME: %[[FUNCTION:[a-zA-Z0-9_]+]]: !llvm.ptr) {
-// CHECK-NEXT: llvm.call @TVMFFIObjectIncRef(%[[FUNCTION]]) : (!llvm.ptr) -> i32
-// CHECK-NEXT: llvm.call @TVMFFIObjectDecRef(%[[FUNCTION]]) : (!llvm.ptr) -> i32
-// CHECK-NEXT: return
+// CHECK: llvm.call @TVMFFIObjectIncRef(%[[FUNCTION]]) : (!llvm.ptr) -> i32
+// CHECK: llvm.call @TVMFFIObjectDecRef(%[[FUNCTION]]) : (!llvm.ptr) -> i32
+// CHECK: return
 func.func @function_refs(%function: !tvm_ffi.function) {
   tvm_ffi.ObjectIncRef %function : !tvm_ffi.function
   tvm_ffi.ObjectDecRef %function : !tvm_ffi.function

@@ -13,17 +13,22 @@
 // runtime copy function and passes the source as the second argument.
 
 // CHECK-LABEL: llvm.func @overwrite(
-// CHECK-SAME: %[[SOURCE:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[DESTINATION:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>) {
+// CHECK-SAME: %[[SOURCE:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[DESTINATION:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 {
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE:[a-zA-Z0-9_]+]], %[[ARGUMENTS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RESULT:[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: llvm.return
 // CHECK-LABEL: llvm.func @__tvm_ffi_overwrite(
 // CHECK-SAME: %[[WRAPPER_CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAPPER_ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAPPER_NARGS:[a-zA-Z0-9_]+]]: i32, %[[WRAPPER_RESULT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 {
 // CHECK: %[[WRAPPER_SOURCE:[a-zA-Z0-9_]+]] = llvm.load %[[WRAPPER_ARGS]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.call @overwrite(%[[WRAPPER_SOURCE]], %[[WRAPPER_DESTINATION:[a-zA-Z0-9_]+]]) : (!llvm.struct<(i32, i32, i64)>, !llvm.struct<(i32, i32, i64)>) -> ()
+// CHECK: %[[WRAPPER_DESTINATION:[a-zA-Z0-9_]+]] = llvm.load %[[DEST_PTR:[a-zA-Z0-9_]+]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[RESULT_SLOT:[a-zA-Z0-9_]+]] = llvm.alloca
+// CHECK: llvm.call @overwrite(%[[WRAPPER_SOURCE]], %[[WRAPPER_DESTINATION]], %[[RESULT_SLOT]]) : (!llvm.struct<(i32, i32, i64)>, !llvm.struct<(i32, i32, i64)>, !llvm.ptr) -> i32
 
 tvm_ffi.func @overwrite(%source: !tvm_ffi.tensor,
-                         %destination: !tvm_ffi.tensor)
+                         %destination: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     attributes {emit_tvm_ffi_abi} {
   tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.tensor
-  tvm_ffi.return
+
+  %returned_none = tvm_ffi.constant.none
+  %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.none>
 }

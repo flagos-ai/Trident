@@ -15,7 +15,11 @@
 
 namespace trident::tvm_ffi {
 
-ObjectResultOwnership CastOp::getObjectResultOwnership(uint32_t) {
+ObjectResultOwnership DowncastOp::getObjectResultOwnership(uint32_t) {
+  return ObjectResultOwnership::Borrowed;
+}
+
+ObjectResultOwnership UpcastOp::getObjectResultOwnership(uint32_t) {
   return ObjectResultOwnership::Borrowed;
 }
 

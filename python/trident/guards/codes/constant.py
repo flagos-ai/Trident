@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Hashable
-from typing import Final, Self, override
+from typing import TYPE_CHECKING, Final, Self, override
 
 from trident.core import ir
 from trident.input import InputTable
 
-from ..ast import ASTVisitor
+from ..ast import ASTVisitor, GuardExpressionVisitor
 from ..local import Local
-from .base import GuardBuildFn, GuardBuilder, GuardCode
+from .base import GuardCode
+
+if TYPE_CHECKING:
+    from trident.importer import TridentFxImporter
 
 
 class ConstantCode(GuardCode):
@@ -24,17 +27,16 @@ class ConstantCode(GuardCode):
     ) -> None:
         super().__init__(text, source)
         self.expression: Final[ast.expr] = expression
-        self.build_fn: Final[GuardBuildFn | None] = ASTVisitor(text).visit(expression)
+        self.supported: Final[bool] = ASTVisitor.supports(expression)
 
     @override
-    def build(
-        self,
-        tree: InputTable,
-        context: ir.Context,
-    ) -> ir.Value:
-        if self.build_fn is None:
-            return super().build(tree, context)
-        return self.build_fn(tree, context)
+    def build_result(
+        self, tree: InputTable, context: ir.Context, importer: TridentFxImporter
+    ) -> list[ir.Value]:
+        assert self.supported, f"guard expression cannot be lowered: {self.text!r}"
+        return GuardExpressionVisitor(self.text, tree, context, importer).build(
+            self.expression
+        )
 
     @property
     def key(self) -> Hashable:
@@ -72,14 +74,8 @@ class ConstantCode(GuardCode):
         ) or (
             isinstance(operation, ast.Eq)
             and Local.from_expression(comparator) is None
-            and ASTVisitor(text).visit(comparator) is not None
+            and ASTVisitor.supports(comparator)
         ):
             return cls(text, source, expression)
         else:
             return None
-
-    def to_builder(self) -> GuardBuilder:
-        assert self.build_fn is not None, (
-            f"guard expression cannot be lowered: {self.text!r}"
-        )
-        return GuardBuilder(code=self, build_fn=self.build_fn)

@@ -5,41 +5,16 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Hashable
-from dataclasses import dataclass
-from typing import ClassVar, Final, Self
+from typing import TYPE_CHECKING, ClassVar, Final, Self
 
 from trident.core import ir
+from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
+from trident.ir import bind, pure
 
-from ..ast import GuardBuildFn
+if TYPE_CHECKING:
+    from trident.importer import TridentFxImporter
 from ..local import Local
-
-
-@dataclass(frozen=True)
-class GuardBuilder:
-    """Metadata and delayed IR builder for one parsed guard code."""
-
-    code: GuardCode
-    build_fn: GuardBuildFn
-
-    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
-        return self.build_fn(tree, context)
-
-    @property
-    def depth(self) -> int:
-        return self.code.depth
-
-    @property
-    def key(self) -> Hashable:
-        return self.code.key
-
-    @property
-    def priority(self) -> int:
-        return self.code.priority
-
-    @property
-    def text(self) -> str:
-        return self.code.text
 
 
 class GuardCode:
@@ -48,6 +23,7 @@ class GuardCode:
     # Lower priorities are built first.  Priority zero is reserved for
     # structure checks, whose source depth is used as a secondary key.
     priority: ClassVar[int] = 1
+    requires_input: ClassVar[bool] = False
 
     def __init__(self, text: str, source: Local | None) -> None:
         self.text: Final[str] = text
@@ -62,6 +38,22 @@ class GuardCode:
         raise NotImplementedError(
             f"guard code {type(self).__name__} cannot be lowered: {self.text!r}"
         )
+
+    def build_result(
+        self, tree: InputTable, context: ir.Context, importer: TridentFxImporter
+    ) -> list[ir.Value]:
+        types = [tvm_ffi_d.ResultType.get(ir.IntegerType.get_signless(1))]
+        if self.source is None or not self.requires_input:
+            return pure([self.build(tree, context)], result_types=types)
+        with bind(
+            importer.build_input(tree, self.source.subscripts), result_types=types
+        ) as operation:
+            [value] = operation.arguments
+            scoped = tree.with_value(self.source.subscripts, value)
+            tvm_ffi_d.MonadYieldOp(
+                pure([self.build(scoped, context)], result_types=types)
+            )
+        return [*operation.outputs]
 
     @property
     def depth(self) -> int:
@@ -78,9 +70,3 @@ class GuardCode:
         text: str,
         source: Local | None,
     ) -> Self | None: ...
-
-    def to_builder(self) -> GuardBuilder:
-        return GuardBuilder(
-            code=self,
-            build_fn=self.build,
-        )

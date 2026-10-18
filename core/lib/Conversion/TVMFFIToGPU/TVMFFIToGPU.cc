@@ -98,7 +98,9 @@ public:
             "enclosing function must have one result to report "
             "specialization failure");
       }
-      mlir::Type const resultType = functionType.getResult(0);
+      mlir::Type const resultType =
+          mlir::cast<tvm_ffi::ResultType>(functionType.getResult(0))
+              .getPayloadType();
       bool const canReportFailure =
           llvm::TypeSwitch<mlir::Type, bool>(resultType)
               .Case<tvm_ffi::AnyType>(
@@ -129,8 +131,14 @@ public:
           rewriter, loc, tvm_ffi::ExceptionType::get(function.getContext()),
           "GuardMatch");
       mlir::Value const failureResult =
-          tvm_ffi::CastOp::create(rewriter, loc, resultType, exception);
-      tvm_ffi::ReturnOp::create(rewriter, loc, failureResult);
+          tvm_ffi::UpcastOp::create(rewriter, loc, resultType, exception);
+      mlir::Value const ready =
+          mlir::arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+      mlir::Value const result = mlir::UnrealizedConversionCastOp::create(
+                                     rewriter, loc, functionType.getResult(0),
+                                     mlir::ValueRange{failureResult, ready})
+                                     .getResult(0);
+      tvm_ffi::ReturnOp::create(rewriter, loc, result);
       rewriter.setInsertionPoint(op);
     }
     // TODO: Materialized native values can borrow storage from their source

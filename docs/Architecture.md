@@ -24,7 +24,11 @@ call failures. ABI field reads and calls share local builders.
 `importer.py` maps FX nodes to SSA values. Tensors use `!tvm_ffi.tensor` and
 retain reference semantics. Graph traversal binds call results through one path;
 call dispatch handles scalar operations, ATen and higher-order operators.
-ATen schema selection and argument conversion are separate helpers.
+The current-node dispatcher delegates ATen, cond, kernel and scalar construction
+to dedicated methods; ATen construction owns schema selection and argument
+conversion. Checked-call helpers return complete Results; callers bind them
+explicitly. Private graph functions return Results; the public wrapper binds them and
+uses `tvm_ffi.return` at its packed boundary.
 An in-place ATen call operates on the original object, and views keep their
 storage aliases. ATen calls use the schema to
 order positional and keyword arguments, fill defaults, select a scalar overload
@@ -39,12 +43,21 @@ nodes bind their expressions to imported SSA values. Composite shape expressions
 are evaluated from those bindings. Runtime expressions never use example hints;
 unbound symbols produce an explicit import error. Native scalars are boxed only
 at FFI calls, containers or function return boundaries. `torch.cond` imports its
-branches into `scf.if`, with native predicates and semantic result values.
+branches into `scf.if`, with native predicates and monadic Result values.
 
-`ir.py` shares scalar arithmetic, constants, boxing and checked calls with
-the guard frontend. Its binary operation mappings also define the supported
-FX scalar operations; the importer only normalizes symbolic min/max aliases.
-Each call asserts lookup success, a non-null handle and call success. Integer
+`ir.py` shares scalar arithmetic, constants, boxing and Result construction with
+the guard frontend. `make_result_types` wraps payload types and supplies the
+None default for empty sequences. `pure` infers Result types from payloads unless
+the caller declares a boundary type; at typed boundaries it boxes native scalars
+and widens semantic values to Any/Union before wrapping them. Empty successful
+sequences produce one explicit None payload. Checked calls are owned by
+`TridentFxImporter`. The shared binary operation mappings also define the
+supported FX scalar operations; the importer only normalizes symbolic min/max
+aliases.
+Each call checks lookup success, a non-null handle and call success. A failed
+call skips the remaining continuation and propagates the runtime error through
+a nonzero packed ABI status. A missing cached global establishes a RuntimeError
+on the calling thread; resolved globals retain their cached fast path. Integer
 division uses floor semantics; integer remainder follows
 `a - floor(a / b) * b`. Supported arithmetic follows the runtime's 64-bit scalar
 ABI. Unsupported scalar expressions or higher-order operators fail explicitly.
@@ -61,16 +74,18 @@ compatibility constructor.
 
 ## Guards and containers
 
-Guards are parsed into `Code`, `Guard` and collection objects under
+Guards are parsed into `GuardCode`, `Guard` and collection objects under
 `python/trident/guards/`. `InputTableBuilder` maps function arguments and nested
 list/tuple paths to semantic values. Containers use `!tvm_ffi.array`; extraction
 calls `ffi.ArrayGetItem` lazily in the block that needs the element.
 A single input-node implementation handles leaves and containers; each fresh
-table owns its cached values so extraction remains local to its region. Scalar guards
+table owns a scope-checked cache of complete extraction Results. Scalar guards
 use native arithmetic and comparisons; tensor metadata uses existing semantic
-metadata operations. Guard collections build short-circuit CFG branches. A
-failed specialization returns `!tvm_ffi.exception` widened to `!tvm_ffi.any`, so
-the dispatcher can try another specialization or request compilation.
+metadata operations. Guard collections build structured short-circuit branches
+with fresh input tables per region and explicitly bind fallible extraction
+Results. A failed specialization returns `!tvm_ffi.exception` widened to
+`!tvm_ffi.any`, so the dispatcher can try another specialization or request
+compilation.
 
 Tensor identity and `_base` guards retain their existing conservative handling;
 DLPack does not expose Python wrapper identity or autograd view relationships.
@@ -79,9 +94,10 @@ DLPack does not expose Python wrapper identity or autograd view relationships.
 
 `importer.py` resolves the compiled Triton kernel from its warmup cache,
 imports its cubin as `gpu.binary`, and emits `tvm_ffi.kernel_launch`.
-Cache resolution, specialization attributes and binary insertion are separate
-helpers; kernel import assembles operands, clones functional outputs and emits
-the launch, then returns its output dictionary to graph traversal.
+The kernel construction method resolves the cache, builds specialization
+attributes and assembles operands. Recursive launch construction clones functional
+outputs, inserts the binary and emits the launch, returning complete Results
+for its output tensors.
 Each specialization has a unique binary symbol. Operands retain semantic FFI
 values and carry constant or variable specialization attributes in source
 parameter order. Variable attributes record native ABI type and divisibility;
@@ -100,12 +116,123 @@ runs first so these failure branches belong to the public guarded wrapper.
 
 The lowering pipeline is:
 
-1. Inline private graph functions and lower kernel launches to GPU operations.
-2. Lower SCF to CFG and finalize semantic metadata operations.
-3. Insert ownership deallocation while semantic object types are available.
-4. Convert `tvm_ffi.func` to ordinary functions and packed ABI wrappers.
-5. Lower semantic values and DLPack to LLVM, followed by native arithmetic,
-   control flow and GPU conversions, canonicalization and cast reconciliation.
+1. Inline private graph functions and remove unused helper symbols.
+2. Run the TVM FFI dialect transform `decompose-tvm-ffi` to lower monadic
+   binds to `monad.unpack` and `scf.if`, then run `lower-tvm-ffi-monad` to
+   expand Results to payloads and success bits. Lower SCF to CFG afterward.
+3. Lower kernel launches to GPU operations and finalize metadata operations.
+4. Insert ownership deallocation while semantic object types are available.
+5. Convert monadic returns to checked functions with output slots and an i32
+   status, and generate packed ABI wrappers. Canonicalization removes unused
+   Result materialization casts. Ordinary returns remain supported.
+6. Lower semantic values, DLPack, arithmetic, control flow, GPU and UB operations
+   to LLVM, followed by canonicalization and cast reconciliation.
+
+`!tvm_ffi.monad.result<T>` always carries one payload and a success bit.
+No-data results use `!tvm_ffi.monad.result<!tvm_ffi.none>` with an explicit
+`tvm_ffi.constant.none` payload. `monad.pure` constructs successful
+Results, and `monad.fail` constructs failure without replacing the runtime
+error. `monad.bind` runs its continuation only when every input succeeds;
+its body terminates with `monad.yield`. Decomposition moves that body into the
+success branch of `scf.if`, restores typed payloads there with `tvm_ffi.downcast`
+when unpack widens them to Any, and yields failed Results in the failure branch.
+Decomposition handles binds throughout the module, including ordinary helper
+functions. Result expansion runs after inlining and handles `tvm_ffi.func` bodies;
+only function signatures and return materializations retain Result types.
+Unsupported Result uses fail conversion. Redundant unpack selection branches
+and Any round trips are a TODO; they do not change failure propagation.
+Independent effects after a checked call are also nested in its continuation,
+so failure suppresses them without requiring a payload dependency.
+
+`TridentFxImporter.visit` consumes a shared iterator over the original FX nodes.
+Pure nodes stay in a loop. Node handlers construct only their current node and
+return its ordinary value structure, whose leaves may include complete Results.
+The visitor flattens
+this structure, binds its Result leaves, restores payloads in place, and
+recursively imports the remaining iterator inside the successful body. Unit
+Result leaves with a None payload restore to Python `None`, consuming their
+corresponding block argument. The visitor does not redispatch on the node target
+after binding. Each bind yields inner
+Results as the stack unwinds. Final outputs use `pure`, including a None
+payload for no-data returns.
+
+Ordinary scalar, schema and metadata helpers return ordinary values. Independent
+fallible helpers construct arguments, checked calls, ATen conversions and result
+extraction, inputs, or guard expressions and return complete Results. One
+argument builder automatically converts Python `torch.dtype` arguments to ATen's
+integer enum, including elements of nested lists and tuples. Existing SSA values
+keep their types; ordinary dtype constants and guard expressions retain the TVM
+FFI dtype representation.
+Ordered argument, input, guard-operand and result extraction builders carry
+accumulated payloads into each successful bind and wrap them once at the end.
+They keep pure prefixes iterative and nested list/tuple elements recursive,
+preserving element order and failure short circuiting.
+Empty argument and input builders return one None Result to preserve success
+tracking. Consumers use the original list length to omit this placeholder from
+actual call arguments; explicit Python None arguments retain their positions.
+Argument construction does not invoke an operator or traverse later FX nodes. Kernel clone, grid and
+launch construction likewise preserves its original order.
+
+The shared `trident.ir.bind` function is the only construction context manager.
+It yields the `MonadBindOp`; its read-only `arguments` property exposes
+one successful payload per input in input order, including None payloads,
+while `outputs` exposes complete Results.
+The property is also available on parsed and traversed OpViews. MLIR verification
+checks the successful terminator and yielded Result types. The context manager
+restores insertion points on normal and exceptional exits. There are no
+continuation callbacks, Effects objects, generator resume protocols or task
+queues. Deep fallible chains may exceed the unchanged Python recursion limit;
+pure FX nodes and pure argument prefixes do not add recursive frames.
+`import_program` and direct `visit` calls retain their value and symbol mappings;
+use a fresh importer for each program.
+
+Function entries and branches use insertion points directly. Cond branches use
+independent importers sharing the parent module, and return Results for the
+parent visitor to bind. Input tables cache complete Results, never extraction
+bind payloads. Cached Results must belong to an ancestor block; sibling scopes
+rebuild their extraction. Input and guard construction retain cached Results
+until their input table is discarded or explicitly cleared. Guards and backend
+input flattening use fresh tables, so caches remain local to each construction.
+Construction exceptions propagate without automatic cache clearing; discard the
+importer and its input tables after a construction failure rather than reusing
+them. A guard consuming an extracted value receives a separate structural table
+scoped to its bind. Imported payloads check block ancestry before reuse.
+
+Each guard-expression visitor caches one recursive analysis per AST node for its
+type, active operands, purity, fallback and checked array-size requirement.
+Synthesized operands are reused, while expression values are evaluated afresh;
+comparison chains still evaluate their intermediate operands twice. Both pure
+and fallible construction reuse the cached active operand list; comparison
+construction slices its operand pairs from that list and uses the cached
+whole-expression fallback instead of rescanning the remaining chain. Analysis
+stops at fallback so later operands are neither resolved nor built. Guard
+expressions share ordinary scalar evaluation helpers and consume pure operand
+prefixes in a loop before opening checked-operation binds. Fallible expression
+helpers return complete Results; static fallback metadata preserves
+whole-expression `_base` and storage-offset behavior without a continuation
+protocol. Previously constructed checked calls still run and propagate failures;
+fallback suppresses later operands. Guard collections return a short-circuiting
+boolean Result. The backend explicitly binds this result, constructs the guarded
+branch, binds flattened inputs and the graph call, then packs the output into
+the public Result. All `tvm_ffi.func` return types are Results, and
+`tvm_ffi.return` must match the signature exactly. No-data functions declare
+`Result<!tvm_ffi.none>`; these results use the ordinary TVM FFI None ABI
+representation and allocate output slots just like other payloads.
+Successful payloads are wrapped with `monad.pure`; the shared Python `pure`
+builder performs boxing and Any/Union widening at declared boundaries. Private
+graph helpers use `func.return` with Result values and are inlined before Result
+lowering. Packed output slots are read and written only on success. Packed
+wrappers forward one ABI payload directly or reuse the implementation output
+slots as the source arguments to `ffi.Array` for multiple payloads, without
+redundant semantic casts or staging copies. Guard rejection and Triton
+specialization failure remain successful `GuardMatch` values, requesting
+another specialization; runtime FFI failures return nonzero status without
+inspecting output payloads.
+
+Failed semantic ABI payloads are zero-initialized. Function handles use null
+native-pointer placeholders; native scalar payloads may be poison and are never
+consumed on failure. The retained ownership pass recognizes these placeholders
+and retains monadic return payloads only when the whole return succeeds.
 
 The TVM FFI dialect distinguishes boxed values, owned runtime objects, borrowed
 objects and native pointers. Its ownership interfaces describe allocations,
@@ -113,19 +240,35 @@ borrows, transfers and aliases; the ownership pass retains escaping borrowed
 values and releases owned values along CFG edges. The importer does not add
 manual reference counting. Runtime objects use the TVMFFIAny representation
 `!llvm.struct<(i32, i32, i64)>`; function handles are native pointers.
+`ResultType` has C and Python bindings with mandatory payload access and TypeID
+registration.
 
-`tvm_ffi.cast` widens a semantic ABI value to Any or a compatible union;
+`tvm_ffi.upcast` widens a tagged semantic ABI value to Any or a compatible union;
+`tvm_ffi.downcast` narrows Any/Union to a concrete type or a smaller Union,
+checking the result type against the runtime type tag. Failed checks branch to
+an `abort()` call and LLVM unreachable in every build mode. A shared LLVM assertion helper
+contains a TODO for diagnostic output before aborting. Neither cast supports
+native Function/Object handles or unions containing them. Both casts borrow
+their source; downcast checks remain observable even when its result is unused.
 `tvm_ffi.get` extracts a native scalar or borrowed object, and `tvm_ffi.to` boxes
 a native scalar. Metadata operations lower through DLPack. Tensor literals use
 the existing runtime staging path. Global function handles are cached at module
 initialization; call sites retain and release the cached reference.
+
+`tvm_ffi.monad.unpack` exposes one Result as a success `i1` followed by its
+payload. Payload types compatible with `tvm_ffi.upcast` to Any produce
+`!tvm_ffi.any`: success preserves the value and failure produces None.
+Other payload types, including native scalars and Function/Object handles,
+remain unchanged and may only be used when success is true. Unpack neither
+clears runtime errors nor transfers ownership. Result payload types remain
+unrestricted except for the existing prohibition on nested Results.
 
 ## Source layout and validation
 
 `core/` contains the DLPack and TVM FFI dialects, lowering passes,
 C API and Python bindings. `ffi/` generates ATen wrappers from dispatcher schemas
 and provides runtime conversion and exception helpers. Python guard parsing and
-expression IR tests live under `test/unit`; public JIT tests live under
+expression IR and importer diagnostic tests live under `test/unit`; public JIT tests live under
 `test/e2e`. Dialect, conversion and pipeline tests live under `core/test/`. See
 [the Python test guide](../test/README.md) for coverage boundaries.
 Operator work follows [Operator-Adaptation.md](Operator-Adaptation.md).

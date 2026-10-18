@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
-from ..codes.base import GuardBuilder, GuardCode
+from ..codes.base import GuardCode
 from ..local import Local
 
 if TYPE_CHECKING:
@@ -22,10 +22,10 @@ class Guard:
     def __init__(
         self,
         source: Local | None,
-        codes: list[GuardBuilder],
+        codes: list[GuardCode],
     ) -> None:
         self.source: Final[Local | None] = source
-        self.codes: Final[list[GuardBuilder]] = codes
+        self.codes: Final[list[GuardCode]] = codes
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -59,9 +59,9 @@ class Guard:
         cls,
         texts: list[str],
         source: Local | None,
-    ) -> list[GuardBuilder] | None:
+    ) -> list[GuardCode] | None:
         assert cls.create_fn_name is not None
-        parsed_codes: list[GuardBuilder] = []
+        parsed_codes: list[GuardCode] = []
         for text in texts:
             matches = [
                 parsed
@@ -73,7 +73,7 @@ class Guard:
             if len(matches) != 1:
                 return None
             [match] = matches
-            parsed_codes.append(match.to_builder())
+            parsed_codes.append(match)
         return parsed_codes
 
     @classmethod

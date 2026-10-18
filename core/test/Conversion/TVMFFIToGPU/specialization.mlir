@@ -35,8 +35,9 @@
 // CHECK: tvm_ffi.return
 // CHECK: [[FAILURE]]:
 // CHECK: %[[EXCEPTION:[a-zA-Z0-9_]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
-// CHECK-NEXT: %[[FAILURE_RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.cast %[[EXCEPTION]] : !tvm_ffi.exception -> !tvm_ffi.any
-// CHECK-NEXT: tvm_ffi.return %[[FAILURE_RESULT]] : !tvm_ffi.any
+// CHECK-NEXT: %[[FAILURE_RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[EXCEPTION]] : !tvm_ffi.exception -> !tvm_ffi.any
+// CHECK: %[[RETURN:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[FAILURE_RESULT]], %[[READY:[a-zA-Z0-9_]+]] : !tvm_ffi.any, i1 to !tvm_ffi.monad.result<!tvm_ffi.any>
+// CHECK: tvm_ffi.return %[[RETURN]] : !tvm_ffi.monad.result<!tvm_ffi.any>
 // CHECK-NOT: tvm_ffi.kernel_launch
 
 module attributes {gpu.container_module} {
@@ -55,12 +56,13 @@ module attributes {gpu.container_module} {
   }
 
   tvm_ffi.func @validate(%tensor: !tvm_ffi.tensor, %value: !tvm_ffi.float,
-      %specialized: !tvm_ffi.int)
-      -> !tvm_ffi.any {
+      %specialized: !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.any> {
     %result = func.call @launch(%tensor, %specialized, %value)
         : (!tvm_ffi.tensor, !tvm_ffi.int, !tvm_ffi.float) -> !tvm_ffi.int
-    %success = tvm_ffi.cast %result : !tvm_ffi.int -> !tvm_ffi.any
-    tvm_ffi.return %success : !tvm_ffi.any
+    %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.any
+
+    %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
+    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.any>
   }
 }
 
@@ -101,12 +103,13 @@ module attributes {gpu.container_module} {
   }
 
   tvm_ffi.func @validate_scalar_constants(%flag: !tvm_ffi.bool,
-      %value: !tvm_ffi.int, %scale: !tvm_ffi.float)
-      -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception> {
+      %value: !tvm_ffi.int, %scale: !tvm_ffi.float) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
     %result = func.call @launch_scalar_constants(%flag, %value, %scale)
         : (!tvm_ffi.bool, !tvm_ffi.int, !tvm_ffi.float) -> !tvm_ffi.int
-    %success = tvm_ffi.cast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
-    tvm_ffi.return %success : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
+    %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
+
+    %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
+    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
   }
 }
 
@@ -138,12 +141,13 @@ module attributes {gpu.container_module} {
     return %result : !tvm_ffi.int
   }
 
-  tvm_ffi.func @validate_string(%activation: !tvm_ffi.raw_str)
-      -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception> {
+  tvm_ffi.func @validate_string(%activation: !tvm_ffi.raw_str) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
     %result = func.call @launch_string(%activation)
         : (!tvm_ffi.raw_str) -> !tvm_ffi.int
-    %success = tvm_ffi.cast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
-    tvm_ffi.return %success : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
+    %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
+
+    %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
+    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
   }
 }
 
@@ -180,11 +184,12 @@ module attributes {gpu.container_module} {
   }
 
   tvm_ffi.func @validate_tuple(
-      %value: !tvm_ffi.array)
-      -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception> {
+      %value: !tvm_ffi.array) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
     %result = func.call @launch_tuple(%value)
         : (!tvm_ffi.array) -> !tvm_ffi.int
-    %success = tvm_ffi.cast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
-    tvm_ffi.return %success : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
+    %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
+
+    %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
+    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
   }
 }

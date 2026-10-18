@@ -84,7 +84,7 @@ def TVMFFI_TypeIndexInterface
   let methods = [
     StaticInterfaceMethod<
       "Returns the concrete TVM FFI runtime type index.",
-      "int", "getTypeIndex", (ins)
+      "int32_t", "getTypeIndex", (ins)
     >
   ];
 }

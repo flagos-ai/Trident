@@ -14,7 +14,7 @@
 // and preserve-format clones through the public frontend.
 
 // CHECK-LABEL: llvm.func @clone(
-// CHECK-SAME: %[[ARG0:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>) -> !llvm.struct<(i32, i32, i64)> {
+// CHECK-SAME: %[[ARG0:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[OUTPUT_SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 {
 // The callee is resolved once at load time, so the dispatch reads the cached
 // handle rather than calling TVMFFIFunctionGetGlobal per invocation. The
 // module owns the cached reference, so each call retains it and releases it
@@ -32,19 +32,22 @@
 // CHECK: %[[RET:[a-zA-Z0-9_]+]] = llvm.load %[[RET_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // The call site retains the cached handle, so it also releases it.
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
-// CHECK: llvm.return %[[RET]] : !llvm.struct<(i32, i32, i64)>
+// CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
+// CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 // CHECK-LABEL: llvm.func @__tvm_ffi_clone(
 // CHECK-SAME: %[[WRAP_CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAP_ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAP_NARGS:[a-zA-Z0-9_]+]]: i32, %[[WRAP_RESULT:[a-zA-Z0-9_]+]]: !llvm.ptr)
 // CHECK: %[[WRAP_ARG:[a-zA-Z0-9_]+]] = llvm.load %[[WRAP_ARGS]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: %[[WRAP_RET:[a-zA-Z0-9_]+]] = llvm.call @clone(%[[WRAP_ARG]]) : (!llvm.struct<(i32, i32, i64)>) -> !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[WRAP_STATUS:[a-zA-Z0-9_]+]] = llvm.call @clone(%[[WRAP_ARG]], %[[WRAP_SLOT:[a-zA-Z0-9_]+]]) : (!llvm.struct<(i32, i32, i64)>, !llvm.ptr) -> i32
+// CHECK: %[[WRAP_RET:[a-zA-Z0-9_]+]] = llvm.load %[[WRAP_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: llvm.store %[[WRAP_RET]], %[[WRAP_RESULT]]
 
-tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor)
-    -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> attributes {emit_tvm_ffi_abi} {
   %memory_format = tvm_ffi.constant.int 0
   %clone_handle, %clone_lookup = tvm_ffi.FunctionGetGlobal "trident.aten.clone" : !tvm_ffi.function, i1
   cf.assert %clone_lookup, "lookup failed"
   %clone, %clone_status = tvm_ffi.FunctionCall %clone_handle(%arg0, %memory_format) : (!tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.tensor, i1
   cf.assert %clone_status, "call failed"
-  tvm_ffi.return %clone : !tvm_ffi.tensor
+
+  %returned = tvm_ffi.monad.pure %clone : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.tensor>
 }

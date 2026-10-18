@@ -38,7 +38,7 @@ class TVMFFIIndexed_Type<string name, string typeMnemonic, int typeIndex,
                      !listconcat([TVMFFI_TypeIndexInterface], traits),
                      baseCppClass> {
   let extraClassDeclaration = [{
-    static constexpr int getTypeIndex() { return }] # typeIndex # [{; }
+    static constexpr int32_t getTypeIndex() { return }] # typeIndex # [{; }
   }] # extraDeclarations;
 }
 
@@ -99,6 +99,12 @@ def TVMFFI_NoneType : TVMFFIIndexed_Type<"None", "none", 0>;
 def TVMFFI_ObjectType
     : TVMFFIABI_Type<"Object", "object">;
 def TVMFFI_RawStrType : TVMFFIIndexed_Type<"RawStr", "raw_str", 8>;
+def TVMFFI_ResultType : TVMFFI_Type<"Result", "monad.result"> {
+  let summary = "One payload guarded by a success bit";
+  let parameters = (ins "::mlir::Type":$payloadType);
+  let assemblyFormat = "`<` $payloadType `>`";
+  let genVerifyDecl = 1;
+}
 def TVMFFI_SmallStrType
     : TVMFFIIndexed_Type<"SmallStr", "small_str", 11>;
 def TVMFFI_StrType

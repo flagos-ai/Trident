@@ -8,33 +8,41 @@
 // RUN: trident-core-opt %s -split-input-file | FileCheck %s --check-prefix=DIALECT
 
 // A semantic TVM FFI value may be returned through the generic Any ABI slot.
-// DIALECT-LABEL: tvm_ffi.func @any_return() -> !tvm_ffi.any {
+// DIALECT-LABEL: tvm_ffi.func @any_return() -> !tvm_ffi.monad.result<!tvm_ffi.any> {
 // DIALECT-NEXT: [[ANY_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
-// DIALECT-NEXT: tvm_ffi.return [[ANY_VALUE]] : !tvm_ffi.int
+// DIALECT-NEXT: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi.upcast [[ANY_VALUE]] : !tvm_ffi.int -> !tvm_ffi.any
+// DIALECT-NEXT: %[[RETURN:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[WIDE]] : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
+// DIALECT-NEXT: tvm_ffi.return %[[RETURN]] : !tvm_ffi.monad.result<!tvm_ffi.any>
 // DIALECT-NEXT: }
-tvm_ffi.func @any_return() -> !tvm_ffi.any {
+tvm_ffi.func @any_return() -> !tvm_ffi.monad.result<!tvm_ffi.any> {
   %value = "tvm_ffi.constant.int"() <{value = 1 : i64}>
       : () -> !tvm_ffi.int
-  tvm_ffi.return %value : !tvm_ffi.int
+
+  %return_cast_0 = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.any
+  %returned = tvm_ffi.monad.pure %return_cast_0 : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.any>
 }
 
 // -----
 
-// DIALECT-LABEL: tvm_ffi.func @function_call() -> !tvm_ffi.array {
+// DIALECT-LABEL: tvm_ffi.func @function_call() -> !tvm_ffi.monad.result<!tvm_ffi.array> {
 // DIALECT-NEXT: [[ARRAY_FUNC:%[a-zA-Z0-9_]+]], [[GET_SUCCESS:%[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.function, i1
 // DIALECT-NEXT: [[ARRAY_RESULT:%[a-zA-Z0-9_]+]], [[CALL_SUCCESS:%[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall [[ARRAY_FUNC]]() : () -> !tvm_ffi.array, i1
 // DIALECT-NEXT: cf.assert [[GET_SUCCESS]], "TVMFFIFunctionGetGlobal failed"
 // DIALECT-NEXT: cf.assert [[CALL_SUCCESS]], "TVMFFIFunctionCall failed"
-// DIALECT-NEXT: tvm_ffi.return [[ARRAY_RESULT]] : !tvm_ffi.array
+// DIALECT-NEXT: %[[RETURN:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure [[ARRAY_RESULT]] : (!tvm_ffi.array) -> !tvm_ffi.monad.result<!tvm_ffi.array>
+// DIALECT-NEXT: tvm_ffi.return %[[RETURN]] : !tvm_ffi.monad.result<!tvm_ffi.array>
 // DIALECT-NEXT: }
-tvm_ffi.func @function_call() -> !tvm_ffi.array {
+tvm_ffi.func @function_call() -> !tvm_ffi.monad.result<!tvm_ffi.array> {
   %func, %get_success = tvm_ffi.FunctionGetGlobal "ffi.Array"
       : !tvm_ffi.function, i1
   %result, %call_success = tvm_ffi.FunctionCall %func()
       : () -> !tvm_ffi.array, i1
   cf.assert %get_success, "TVMFFIFunctionGetGlobal failed"
   cf.assert %call_success, "TVMFFIFunctionCall failed"
-  tvm_ffi.return %result : !tvm_ffi.array
+
+  %returned = tvm_ffi.monad.pure %result : (!tvm_ffi.array) -> !tvm_ffi.monad.result<!tvm_ffi.array>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.array>
 }
 
 // -----
@@ -90,11 +98,14 @@ func.func @to_native_scalars(%bool: i1, %int: i64, %float: f64)
 }
 
 // DIALECT-LABEL: tvm_ffi.func @with_ffi_int(
-// DIALECT-SAME: [[INT_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int) -> !tvm_ffi.int {
-// DIALECT-NEXT: tvm_ffi.return [[INT_ARG]] : !tvm_ffi.int
+// DIALECT-SAME: [[INT_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+// DIALECT-NEXT: %[[RETURN:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure [[INT_ARG]] : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+// DIALECT-NEXT: tvm_ffi.return %[[RETURN]] : !tvm_ffi.monad.result<!tvm_ffi.int>
 // DIALECT-NEXT: }
-tvm_ffi.func @with_ffi_int(%arg0: !tvm_ffi.int) -> !tvm_ffi.int {
-  tvm_ffi.return %arg0 : !tvm_ffi.int
+tvm_ffi.func @with_ffi_int(%arg0: !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+
+  %returned = tvm_ffi.monad.pure %arg0 : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.int>
 }
 
 // -----
@@ -104,45 +115,58 @@ tvm_ffi.func @with_ffi_int(%arg0: !tvm_ffi.int) -> !tvm_ffi.int {
 // DIALECT-SAME: [[ARRAY_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.array,
 // DIALECT-SAME: [[ANY_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.any,
 // DIALECT-SAME: [[INDEX_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int,
-// DIALECT-SAME: [[FUNCTION_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.function) -> !tvm_ffi.tensor {
+// DIALECT-SAME: [[FUNCTION_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.function) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
 // DIALECT: [[ITEM:%[a-zA-Z0-9_]+]], [[SUCCESS:%[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall [[FUNCTION_ARG]]([[ARRAY_ARG]], [[INDEX_ARG]]) : (!tvm_ffi.array, !tvm_ffi.int) -> !tvm_ffi.tensor, i1
 // DIALECT-NEXT: tvm_ffi.ObjectIncRef [[ITEM]] : !tvm_ffi.tensor
 // DIALECT-NEXT: tvm_ffi.ObjectDecRef [[ARRAY_ARG]] : !tvm_ffi.array
 // DIALECT-NEXT: tvm_ffi.ObjectIncRef [[ANY_ARG]] : !tvm_ffi.any
 // DIALECT-NEXT: tvm_ffi.ObjectDecRef [[ANY_ARG]] : !tvm_ffi.any
-// DIALECT-NEXT: tvm_ffi.return [[ITEM]] : !tvm_ffi.tensor
+// DIALECT-NEXT: %[[RETURN:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure [[ITEM]] : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+// DIALECT-NEXT: tvm_ffi.return %[[RETURN]] : !tvm_ffi.monad.result<!tvm_ffi.tensor>
 // DIALECT-NEXT: }
 tvm_ffi.func @lifetime_types(
     %tensor: !tvm_ffi.tensor,
     %array: !tvm_ffi.array,
     %any: !tvm_ffi.any,
     %index: !tvm_ffi.int,
-    %function: !tvm_ffi.function) -> !tvm_ffi.tensor {
+    %function: !tvm_ffi.function) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
   %item, %success = tvm_ffi.FunctionCall %function(%array, %index)
       : (!tvm_ffi.array, !tvm_ffi.int) -> !tvm_ffi.tensor, i1
   tvm_ffi.ObjectIncRef %item : !tvm_ffi.tensor
   tvm_ffi.ObjectDecRef %array : !tvm_ffi.array
   tvm_ffi.ObjectIncRef %any : !tvm_ffi.any
   tvm_ffi.ObjectDecRef %any : !tvm_ffi.any
-  tvm_ffi.return %item : !tvm_ffi.tensor
+
+  %returned = tvm_ffi.monad.pure %item : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.tensor>
 }
 
 // -----
 
-// DIALECT-LABEL: tvm_ffi.func @test() {
-// DIALECT-NEXT: tvm_ffi.return
+// DIALECT-LABEL: tvm_ffi.func @test() -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+// DIALECT-NEXT: %[[NONE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.none
+// DIALECT-NEXT: %[[UNIT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[NONE]] : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+// DIALECT-NEXT: tvm_ffi.return %[[UNIT]] : !tvm_ffi.monad.result<!tvm_ffi.none>
 // DIALECT-NEXT: }
-tvm_ffi.func @test() {
-  tvm_ffi.return
+tvm_ffi.func @test() -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+
+  %returned_none = tvm_ffi.constant.none
+  %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
 
 // -----
 
 // DIALECT-LABEL: tvm_ffi.func @unordered_union(
-// DIALECT-SAME: [[VALUE:%[a-zA-Z0-9_]+]]: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.int>) {
-// DIALECT-NEXT: tvm_ffi.return
+// DIALECT-SAME: [[VALUE:%[a-zA-Z0-9_]+]]: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+// DIALECT-NEXT: %[[NONE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.none
+// DIALECT-NEXT: %[[UNIT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[NONE]] : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+// DIALECT-NEXT: tvm_ffi.return %[[UNIT]] : !tvm_ffi.monad.result<!tvm_ffi.none>
 // DIALECT-NEXT: }
 tvm_ffi.func @unordered_union(
-    %value: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.int>) {
-  tvm_ffi.return
+    %value: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+
+  %returned_none = tvm_ffi.constant.none
+  %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.none>
 }

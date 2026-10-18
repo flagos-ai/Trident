@@ -33,7 +33,7 @@ class DynamoAttributeAbsentCode(GuardCode):
 
     @override
     def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
-        # These private Dynamo attributes are not part of the TVM FFI ABI.
+        # Private Dynamo attributes are not represented by the TVM FFI ABI.
         i1 = ir.IntegerType.get_signless(1, context)
         return arith.constant(i1, ir.IntegerAttr.get(i1, 1))
 
@@ -68,9 +68,7 @@ class RequiresGradCode(GuardCode):
 
     @override
     def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
-        # TVM FFI tensor metadata does not expose autograd state.  Treat this
-        # specialization guard as satisfied; the wrapper ABI cannot perform a
-        # runtime requires_grad check.
+        # The tensor ABI does not expose autograd state.
         i1 = ir.IntegerType.get_signless(1, context)
         return arith.constant(i1, ir.IntegerAttr.get(i1, 1))
 
@@ -94,6 +92,8 @@ class RequiresGradCode(GuardCode):
 
 
 class TensorDTypeCode(GuardCode):
+    requires_input = True
+
     def __init__(
         self,
         text: str,
@@ -106,17 +106,11 @@ class TensorDTypeCode(GuardCode):
         self.dtype: Final[torch.dtype] = dtype
 
     @override
-    def build(
-        self,
-        tree: InputTable,
-        context: ir.Context,
-    ) -> ir.Value:
+    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         source = self.source
-        if source is None:
-            return super().build(tree, context)
+        assert source is not None, f"guard source is required: {self.text!r}"
         tensor = source.resolve(tree)
-        if tensor is None:
-            return super().build(tree, context)
+        assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
         metadata = tvm_ffi_d.tensor_dtype(tensor)
         dtype = tvm_ffi.convert(self.dtype)
         i1 = ir.IntegerType.get_signless(1, context)
@@ -127,13 +121,11 @@ class TensorDTypeCode(GuardCode):
                     arith.CmpIPredicate.eq,
                     actual,
                     arith.constant(
-                        actual.type,
-                        ir.IntegerAttr.get(actual.type, expected_value),
+                        actual.type, ir.IntegerAttr.get(actual.type, expected_value)
                     ),
                 )
                 for actual, expected_value in zip(
-                    metadata,
-                    (dtype.type_code, dtype.bits, dtype.lanes),
+                    metadata, (dtype.type_code, dtype.bits, dtype.lanes)
                 )
             ],
             arith.constant(i1, ir.IntegerAttr.get(i1, 1)),
@@ -163,10 +155,13 @@ class TensorDTypeCode(GuardCode):
         dtype = getattr(torch, expected.removeprefix("torch."), None)
         if not isinstance(dtype, torch.dtype):
             return None
-        return cls(text, source, expected, dtype)
+        else:
+            return cls(text, source, expected, dtype)
 
 
 class TensorDeviceCode(GuardCode):
+    requires_input = True
+
     def __init__(
         self,
         text: str,
@@ -179,17 +174,11 @@ class TensorDeviceCode(GuardCode):
         self.device: Final[torch.device] = device
 
     @override
-    def build(
-        self,
-        tree: InputTable,
-        context: ir.Context,
-    ) -> ir.Value:
+    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         source = self.source
-        if source is None:
-            return super().build(tree, context)
+        assert source is not None, f"guard source is required: {self.text!r}"
         tensor = source.resolve(tree)
-        if tensor is None:
-            return super().build(tree, context)
+        assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
         i32 = ir.IntegerType.get_signless(32, context)
         metadata = tvm_ffi_d.tensor_device(tensor)
         i1 = ir.IntegerType.get_signless(1, context)
@@ -201,13 +190,7 @@ class TensorDeviceCode(GuardCode):
                 arith.cmpi(
                     arith.CmpIPredicate.eq,
                     index,
-                    arith.constant(
-                        i32,
-                        ir.IntegerAttr.get(
-                            i32,
-                            device_type,
-                        ),
-                    ),
+                    arith.constant(i32, ir.IntegerAttr.get(i32, device_type)),
                 ),
                 arith.cmpi(
                     arith.CmpIPredicate.eq,
@@ -248,6 +231,8 @@ class TensorDeviceCode(GuardCode):
 
 
 class TensorRankCode(GuardCode):
+    requires_input = True
+
     def __init__(
         self,
         text: str,
@@ -258,26 +243,17 @@ class TensorRankCode(GuardCode):
         self.expected: Final[int] = expected
 
     @override
-    def build(
-        self,
-        tree: InputTable,
-        context: ir.Context,
-    ) -> ir.Value:
+    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         source = self.source
-        if source is None:
-            return super().build(tree, context)
+        assert source is not None, f"guard source is required: {self.text!r}"
         i64 = ir.IntegerType.get_signless(64, context)
         tensor = source.resolve(tree)
-        if tensor is None:
-            return super().build(tree, context)
+        assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
         actual = tvm_ffi_d.tensor_dim(tensor)
         return arith.cmpi(
             arith.CmpIPredicate.eq,
             actual,
-            arith.constant(
-                i64,
-                ir.IntegerAttr.get(i64, self.expected),
-            ),
+            arith.constant(i64, ir.IntegerAttr.get(i64, self.expected)),
         )
 
     @property

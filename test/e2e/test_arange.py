@@ -29,7 +29,7 @@ class ArangeTest(unittest.TestCase):
             self.assertEqual(len(create_arange._sub_modules), 1)
             # This public wrapper boundary is absent from direct FX import tests.
             wrapper_module = f"{create_arange._sub_modules[0]}"
-            self.assertIn("tvm_ffi.cast", wrapper_module)
+            self.assertIn("tvm_ffi.upcast", wrapper_module)
             self.assertIn("-> !tvm_ffi.any", wrapper_module)
             self.assertNotIn("!torch.union<", wrapper_module)
 

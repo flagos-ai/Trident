@@ -8,8 +8,8 @@
 // RUN: trident-core-opt %s -split-input-file -verify-diagnostics
 
 func.func @cast_rejects_concrete_result(%arg: !tvm_ffi.int) {
-  // expected-error@+1 {{'tvm_ffi.cast' op result #0 must be widened TVM FFI any or union value, but got '!tvm_ffi.int'}}
-  %result = "tvm_ffi.cast"(%arg)
+  // expected-error@+1 {{'tvm_ffi.upcast' op result #0 must be widened TVM FFI any or union value, but got '!tvm_ffi.int'}}
+  %result = "tvm_ffi.upcast"(%arg)
       : (!tvm_ffi.int) -> !tvm_ffi.int
   return
 }
@@ -17,8 +17,8 @@ func.func @cast_rejects_concrete_result(%arg: !tvm_ffi.int) {
 // -----
 
 func.func @cast_rejects_incompatible_union(%arg: !tvm_ffi.int) {
-  // expected-error@+1 {{'tvm_ffi.cast' op operand type '!tvm_ffi.int' and result type '!tvm_ffi.union<!tvm_ffi.float, !tvm_ffi.exception>' are cast incompatible}}
-  %result = tvm_ffi.cast %arg
+  // expected-error@+1 {{'tvm_ffi.upcast' op operand type '!tvm_ffi.int' and result type '!tvm_ffi.union<!tvm_ffi.float, !tvm_ffi.exception>' are cast incompatible}}
+  %result = tvm_ffi.upcast %arg
       : !tvm_ffi.int
       -> !tvm_ffi.union<!tvm_ffi.float, !tvm_ffi.exception>
   return
@@ -27,8 +27,8 @@ func.func @cast_rejects_incompatible_union(%arg: !tvm_ffi.int) {
 // -----
 
 func.func @cast_rejects_native_operand(%arg: i64) {
-  // expected-error@+1 {{'tvm_ffi.cast' op operand #0 must be TVM FFI value with a TVMFFIAny ABI representation, but got 'i64'}}
-  %result = "tvm_ffi.cast"(%arg)
+  // expected-error@+1 {{'tvm_ffi.upcast' op operand #0 must be TVM FFI value with a TVMFFIAny ABI representation, but got 'i64'}}
+  %result = "tvm_ffi.upcast"(%arg)
       : (i64) -> !tvm_ffi.any
   return
 }
@@ -41,8 +41,8 @@ func.func @duplicate_union_member(
 
 // -----
 
-tvm_ffi.func @empty_any_return() -> !tvm_ffi.any {
-  // expected-error@+1 {{'tvm_ffi.return' op an any or union function must return at least one value}}
+tvm_ffi.func @empty_any_return() -> !tvm_ffi.monad.result<!tvm_ffi.any> {
+  // expected-error@+1 {{Result types must match the function results}}
   tvm_ffi.return
 }
 
@@ -72,19 +72,22 @@ func.func @invalid_dtype_constant() {
 
 // -----
 
-tvm_ffi.func @invalid_union_return()
-    -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.bool> {
+tvm_ffi.func @invalid_union_return() -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.bool>> {
   %value = "tvm_ffi.constant.float"() <{value = 1.0 : f64}>
       : () -> !tvm_ffi.float
-  // expected-error@+1 {{operand type is not a member of the result type}}
-  tvm_ffi.return %value : !tvm_ffi.float
+  // expected-error@+1 {{are cast incompatible}}
+  %return_cast_0 = tvm_ffi.upcast %value : !tvm_ffi.float -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.bool>
+  %returned = tvm_ffi.monad.pure %return_cast_0 : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.bool>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.bool>>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.bool>>
 }
 
 // -----
 
 // expected-error@+1 {{'tvm_ffi.func' op must have public visibility}}
-tvm_ffi.func private @private_function() {
-  tvm_ffi.return
+tvm_ffi.func private @private_function() -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %unit_none = tvm_ffi.constant.none
+  %unit = tvm_ffi.monad.pure %unit_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %unit : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
 
 // -----

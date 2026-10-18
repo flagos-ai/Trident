@@ -55,6 +55,27 @@ class ContainerTest(unittest.TestCase):
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
 
+    def test_empty_containers_and_none(self) -> None:
+        @trident.jit
+        def outputs(x: torch.Tensor):
+            scalar = torch.empty([], device=x.device).fill_(2)
+            return x + scalar, [], (), None, None
+
+        def check() -> None:
+            x = torch.ones(4, device="cuda")
+            for phase in ("warmup", "cached"):
+                with self.subTest(phase=phase):
+                    result, empty_list, empty_tuple, first, second = outputs(x)
+                    torch.testing.assert_close(result, x + 2)
+                    self.assertEqual(empty_list, [])
+                    self.assertEqual(empty_tuple, ())
+                    self.assertIsNone(first)
+                    self.assertIsNone(second)
+            self.assertEqual(len(outputs._sub_modules), 1)
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
     def test_nested_outputs(self) -> None:
         @trident.jit
         def outputs(x: torch.Tensor):

@@ -12,8 +12,8 @@ add_mlir_library(
   MLIRRegisterAllPasses
   MLIRSCFDialect
   MLIRToLLVMIRTranslationRegistration
-  OwnershipDeallocation
   TVMFFIDialect
   TVMFFIToGPU
   TVMFFIToLLVM
+  TVMFFITransforms
   TridentPipeline)

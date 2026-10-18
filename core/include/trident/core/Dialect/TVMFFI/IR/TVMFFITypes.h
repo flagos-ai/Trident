@@ -41,9 +41,13 @@ public:
   using ::mlir::Type::Type;
 
   bool isObject() const;
+
   static bool classof(::mlir::Type type);
   static ::mlir::LLVM::LLVMStructType getLLVMType(::mlir::MLIRContext *context);
-  static int getTypeIndex();
+  static int32_t getTypeIndex();
+  static ::mlir::Value getZero(::mlir::OpBuilder &builder, ::mlir::Location loc,
+                               TVMFFIABIType type);
+  static bool isZero(::mlir::Value value);
   static ::mlir::Value load(::mlir::OpBuilder &builder, ::mlir::Location loc,
                             ::mlir::Value slot);
 };

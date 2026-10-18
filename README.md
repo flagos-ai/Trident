@@ -80,9 +80,9 @@ python -m unittest discover -s test -p "test_*.py"
 cmake --build build/core --target check-trident-core
 ```
 
-Python tests are organized into `test/unit` (guard parsing and expression IR)
-and `test/e2e` (public `trident.jit` behavior). End-to-end execution tests require
-a usable CUDA GPU. Unit tests do not require GPU execution.
+Python tests are organized into `test/unit` (guard expression IR and importer
+diagnostics) and `test/e2e` (public `trident.jit` behavior). End-to-end execution
+tests require a usable CUDA GPU. Unit tests do not require GPU execution.
 
 Run a group or a focused module with:
 

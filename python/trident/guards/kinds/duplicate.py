@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from ..codes import ASTCode, GuardBuilder
+from ..codes import ASTCode, GuardCode
 from ..local import Local
 from .base import Guard
 
@@ -19,7 +19,7 @@ class DuplicateInputGuard(Guard):
         cls,
         texts: list[str],
         source: Local | None,
-    ) -> list[GuardBuilder] | None:
+    ) -> list[GuardCode] | None:
         if source is None:
             return None
         return super().parse_codes(texts, source)
