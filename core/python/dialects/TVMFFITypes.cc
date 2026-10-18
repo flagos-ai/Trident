@@ -39,7 +39,7 @@ template <typename DerivedTy> struct SimpleType : PyConcreteType<DerivedTy> {
   }
 };
 
-#define DEFINE_SIMPLE_TYPE(Name)                                               \
+#define DEFINE_GENERIC_TYPE(Name)                                              \
   struct Name##Type final : SimpleType<Name##Type> {                           \
     using SimpleType<Name##Type>::SimpleType;                                  \
     static constexpr GetFunctionTy getFunction = mlirTVMFFI##Name##TypeGet;    \
@@ -51,23 +51,54 @@ template <typename DerivedTy> struct SimpleType : PyConcreteType<DerivedTy> {
     static constexpr const char *pyClassName = #Name "Type";                   \
   };
 
-DEFINE_SIMPLE_TYPE(Any)
-DEFINE_SIMPLE_TYPE(Array)
-DEFINE_SIMPLE_TYPE(Bool)
-DEFINE_SIMPLE_TYPE(DType)
-DEFINE_SIMPLE_TYPE(Device)
-DEFINE_SIMPLE_TYPE(Exception)
-DEFINE_SIMPLE_TYPE(Float)
-DEFINE_SIMPLE_TYPE(Function)
-DEFINE_SIMPLE_TYPE(Int)
-DEFINE_SIMPLE_TYPE(None)
-DEFINE_SIMPLE_TYPE(Object)
-DEFINE_SIMPLE_TYPE(RawStr)
-DEFINE_SIMPLE_TYPE(SmallStr)
-DEFINE_SIMPLE_TYPE(Str)
-DEFINE_SIMPLE_TYPE(Tensor)
+DEFINE_GENERIC_TYPE(Any)
+DEFINE_GENERIC_TYPE(Array)
+DEFINE_GENERIC_TYPE(Bool)
+DEFINE_GENERIC_TYPE(DType)
+DEFINE_GENERIC_TYPE(Device)
+DEFINE_GENERIC_TYPE(Exception)
+DEFINE_GENERIC_TYPE(Float)
+DEFINE_GENERIC_TYPE(Function)
+DEFINE_GENERIC_TYPE(Int)
+DEFINE_GENERIC_TYPE(None)
+DEFINE_GENERIC_TYPE(Object)
+DEFINE_GENERIC_TYPE(RawStr)
+DEFINE_GENERIC_TYPE(SmallStr)
+DEFINE_GENERIC_TYPE(Str)
+DEFINE_GENERIC_TYPE(Tensor)
 
-#undef DEFINE_SIMPLE_TYPE
+#undef DEFINE_GENERIC_TYPE
+
+struct ResultType final : PyConcreteType<ResultType> {
+  using Base::Base;
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsATVMFFIResultType;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirTVMFFIResultTypeGetTypeID;
+  static constexpr const char *pyClassName = "ResultType";
+  static inline const MlirStringRef name = mlirTVMFFIResultTypeGetName();
+
+  static void bindDerived(ClassTy &typeClass) {
+    typeClass.def_static(
+        "get",
+        [](const PyType &payload,
+           DefaultingPyMlirContext context) -> ResultType {
+          CollectDiagnosticsToStringScope diagnostics(context.get()->get());
+          const MlirType type = mlirTVMFFIResultTypeGetChecked(
+              mlirLocationUnknownGet(context.get()->get()),
+              static_cast<MlirType>(payload));
+          if (mlirTypeIsNull(type)) {
+            throw nb::value_error(diagnostics.takeMessage().c_str());
+          }
+          return ResultType(context->getRef(), type);
+        },
+        nb::arg("payload_type"), nb::kw_only(),
+        nb::arg("context").none() = nb::none());
+    typeClass.def_prop_ro("payload_type", [](ResultType &type) -> nb::object {
+      const MlirType payload = mlirTVMFFIResultTypeGetPayloadType(type);
+      return nb::cast(PyType(type.getContext(), payload).maybeDownCast());
+    });
+  }
+};
 
 struct UnionType final : PyConcreteType<UnionType> {
   using Base::Base;
@@ -128,6 +159,7 @@ NB_MODULE(_tvm_ffi, module) {
   NoneType::bind(module);
   ObjectType::bind(module);
   RawStrType::bind(module);
+  ResultType::bind(module);
   SmallStrType::bind(module);
   StrType::bind(module);
   TensorType::bind(module);

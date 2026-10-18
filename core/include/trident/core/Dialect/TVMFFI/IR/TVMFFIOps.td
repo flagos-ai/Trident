@@ -54,16 +54,6 @@ def TVMFFI_CallOp : TVMFFI_Op<"call", [TVMFFI_ObjectOwnershipOpInterface]> {
                        "functional-type($operands, $results) `,` type($success)";
 }
 
-def TVMFFI_CastOp
-    : TVMFFI_Op<"cast", [Pure, DeclareOpInterfaceMethods<CastOpInterface>,
-        DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
-                                  ["getObjectResultOwnership"]>]> {
-  let summary = "Widen a TVM FFI value into an any or union ABI type";
-  let arguments = (ins AnyTVMFFIAnyABIType : $value);
-  let results = (outs AnyTVMFFICastResultType : $result);
-  let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
-}
-
 class TVMFFI_ConstantOp<string mnemonic, Type resultType, Attr valueType>
     : TVMFFI_Op<mnemonic, [
         DeclareOpInterfaceMethods<InferTypeOpInterface>,
@@ -113,6 +103,17 @@ def TVMFFI_ConstantRawStrOp
   let summary = "Create a TVM FFI raw string constant";
 }
 
+// Deliberately not Pure: a failed check must trap even if the result is unused.
+def TVMFFI_DowncastOp
+    : TVMFFI_Op<"downcast", [DeclareOpInterfaceMethods<CastOpInterface>,
+        DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
+                                  ["getObjectResultOwnership"]>]> {
+  let summary = "Check and narrow an any or union TVM FFI value";
+  let arguments = (ins AnyTVMFFICastResultType : $value);
+  let results = (outs AnyTVMFFIAnyABIType : $result);
+  let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
+}
+
 def TVMFFI_EqOp : TVMFFI_Op<"eq", [Pure,
     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Compare the ABI representation of two TVM FFI values";
@@ -136,14 +137,16 @@ def TVMFFI_FuncOp : TVMFFI_Op<"func", [
   AffineScope, AutomaticAllocationScope, FunctionOpInterface, IsolatedFromAbove,
   OpAsmOpInterface
 ]> {
-  let summary = "A TVM FFI function";
+  let summary = "A TVM FFI function with monadic Result returns";
   let description = [{
     Defines a function that can be called through the TVM FFI interface.
+    Return types must be nonempty monadic Results; use a unit Result for
+    functions with no payload.
 
     Example:
 
     ```mlir
-    tvm_ffi.func @add(%a: !tvm_ffi.int, %b: !tvm_ffi.int) -> !tvm_ffi.int {
+    tvm_ffi.func @add(%a: !tvm_ffi.int, %b: !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
       ...
     }
     ```
@@ -270,6 +273,51 @@ let extraClassDeclaration = [{
 }];
 }
 
+def TVMFFI_MonadBindOp : TVMFFI_Op<"monad.bind", [SingleBlock, RecursiveMemoryEffects]> {
+  let summary = "Run a continuation only when every input Result succeeds";
+  let arguments = (ins Variadic<TVMFFI_ResultType>:$inputs);
+  let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$inputs `:` functional-type($inputs, $outputs) $body attr-dict";
+  let hasVerifier = 1;
+}
+
+def TVMFFI_MonadFailOp : TVMFFI_Op<"monad.fail", [Pure]> {
+  let summary = "Construct failed Results without changing the runtime error";
+  let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
+  let assemblyFormat = "attr-dict `:` type($outputs)";
+  let hasVerifier = 1;
+}
+
+def TVMFFI_MonadPureOp : TVMFFI_Op<"monad.pure", [Pure]> {
+  let summary = "Wrap payloads in successful Results";
+  let arguments = (ins Variadic<AnyType>:$values);
+  let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
+  let assemblyFormat = "$values attr-dict `:` functional-type($values, $outputs)";
+  let hasVerifier = 1;
+}
+
+def TVMFFI_MonadUnpackOp : TVMFFI_Op<"monad.unpack", [Pure,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "Expose Result success and its payload, widening tagged ABI values";
+  let description = [{
+    Returns success followed by the payload. Payloads supporting upcast to Any
+    produce Any, with None on failure. Other payload types are preserved and
+    their values may only be used on success. Does not clear runtime errors.
+  }];
+  let arguments = (ins TVMFFI_ResultType:$input);
+  let results = (outs I1:$success, AnyType:$value);
+  let assemblyFormat = "$input attr-dict `:` functional-type(operands, results)";
+}
+
+def TVMFFI_MonadYieldOp
+    : TVMFFI_Op<"monad.yield", [Terminator]> {
+  let summary = "Yield Results from a bind continuation";
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
+  let hasVerifier = 1;
+}
+
 def TVMFFI_ObjectDecRefOp : TVMFFI_Op<"ObjectDecRef", [
     DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
                               ["getObjectOperandOwnership"]>]> {
@@ -287,20 +335,20 @@ def TVMFFI_ObjectIncRefOp : TVMFFI_Op<"ObjectIncRef", [
 }
 
 def TVMFFI_ReturnOp
-    : TVMFFI_Op<"return", [Pure, HasParent<"FuncOp">, ReturnLike, Terminator]> {
-  let summary = "Return operation inside a TVM FFI function";
+    : TVMFFI_Op<"return", [HasParent<"FuncOp">, ReturnLike, Terminator]> {
+  let summary = "Return successful Result payloads or propagate failure to the ABI";
   let description = [{
-    Returns values from a TVM FFI function. The operand count and types must
-    match the function signature result types.
+    Returns monadic Results from a TVM FFI function. The operand count and
+    types must match the function signature result types.
 
     Example:
 
     ```mlir
-    tvm_ffi.return %result : i64
+    tvm_ffi.return %result : !tvm_ffi.monad.result<i64>
     ```
   }];
 
-  let arguments = (ins Variadic<AnyTVMFFIAnyABIType> : $operands);
+  let arguments = (ins Variadic<TVMFFI_ResultType> : $operands);
 
   let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
   let hasVerifier = 1;
@@ -385,6 +433,16 @@ def TVMFFI_ToOp
   let arguments = (ins AnyTypeOf<[F64, I1, I64]> : $value);
   let results = (outs AnyTypeOf<[TVMFFI_BoolType, TVMFFI_FloatType, TVMFFI_IntType]> : $result);
   let hasVerifier = 1;
+  let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
+}
+
+def TVMFFI_UpcastOp
+    : TVMFFI_Op<"upcast", [Pure, DeclareOpInterfaceMethods<CastOpInterface>,
+        DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
+                                  ["getObjectResultOwnership"]>]> {
+  let summary = "Widen a TVM FFI value into an any or union ABI type";
+  let arguments = (ins AnyTVMFFIAnyABIType : $value);
+  let results = (outs AnyTVMFFICastResultType : $result);
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
 }
 

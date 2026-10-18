@@ -8,7 +8,6 @@
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
 #include "trident/core/Conversion/Utils/AOTICAPIDescriptors.h"
 #include "trident/core/Conversion/Utils/Check.h"
-#include "trident/core/Conversion/Utils/String.h"
 #include "trident/core/Conversion/Utils/TVMFFICAPIDescriptors.h"
 #include "trident/core/Conversion/Utils/TVMFFIUtils.h"
 #include "trident/core/Dialect/DLPack/IR/DLPackTypes.h"
@@ -19,6 +18,7 @@
 #include <dlpack/dlpack.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVectorExtras.h>
+#include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/FormatVariadic.h>
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h>
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
@@ -495,7 +495,10 @@ public:
     // An !tvm_ffi.any value can contain a scalar, so inspect its ABI
     // TypeIndex before passing the payload to ObjectIncRef/ObjectDecRef.
     // Statically typed TVM FFI objects retain the direct call path.
-    if (mlir::isa<tvm_ffi::AnyType, tvm_ffi::UnionType>(
+    mlir::Value ready = mlir::LLVM::ICmpOp::create(
+        rewriter, loc, mlir::LLVM::ICmpPredicate::ne, handle,
+        mlir::LLVM::ZeroOp::create(rewriter, loc, ptrTy));
+    if (!mlir::isa<tvm_ffi::ObjectType, tvm_ffi::FunctionType>(
             op.getObject().getType())) {
       mlir::Value const typeIndex = mlir::LLVM::ExtractValueOp::create(
           rewriter, loc, rewriter.getI32Type(), adaptor.getObject(),
@@ -504,38 +507,75 @@ public:
           rewriter, loc, mlir::LLVM::ICmpPredicate::uge, typeIndex,
           mlir::LLVM::ConstantOp::create(rewriter, loc, rewriter.getI32Type(),
                                          kTVMFFIStaticObjectBegin));
-      mlir::Block *currentBlock = rewriter.getInsertionBlock();
-      mlir::Block *continuation =
-          rewriter.splitBlock(currentBlock, op->getIterator());
-      mlir::Block *callBlock = rewriter.createBlock(
-          currentBlock->getParent(), continuation->getIterator());
-      rewriter.setInsertionPointToEnd(currentBlock);
-      mlir::LLVM::CondBrOp::create(rewriter, loc, isObject, callBlock,
-                                   continuation);
-      rewriter.setInsertionPointToEnd(callBlock);
-      mlir::LLVM::CallOp::create(rewriter, loc, callee.value(),
-                                 mlir::ValueRange{handle});
-      mlir::LLVM::BrOp::create(rewriter, loc, continuation);
-      rewriter.eraseOp(op);
-    } else {
-      mlir::LLVM::CallOp::create(rewriter, loc, callee.value(),
-                                 mlir::ValueRange{handle});
-      rewriter.eraseOp(op);
+      ready = mlir::LLVM::AndOp::create(rewriter, loc, ready, isObject);
     }
+    mlir::Block *currentBlock = rewriter.getInsertionBlock();
+    mlir::Block *continuation =
+        rewriter.splitBlock(currentBlock, op->getIterator());
+    mlir::Block *callBlock = rewriter.createBlock(currentBlock->getParent(),
+                                                  continuation->getIterator());
+    rewriter.setInsertionPointToEnd(currentBlock);
+    mlir::LLVM::CondBrOp::create(rewriter, loc, ready, callBlock, continuation);
+    rewriter.setInsertionPointToEnd(callBlock);
+    mlir::LLVM::CallOp::create(rewriter, loc, callee.value(),
+                               mlir::ValueRange{handle});
+    mlir::LLVM::BrOp::create(rewriter, loc, continuation);
+    rewriter.eraseOp(op);
     return mlir::success();
   }
 };
 
-class ConvertTVMFFICastOp final
-    : public mlir::OpConversionPattern<tvm_ffi::CastOp> {
+class ConvertTVMFFIDowncastOp final
+    : public mlir::OpConversionPattern<tvm_ffi::DowncastOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
-  matchAndRewrite(tvm_ffi::CastOp op, OpAdaptor adaptor,
+  matchAndRewrite(tvm_ffi::DowncastOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // All TVM FFI ABI semantic values are converted to the TVMFFIAny LLVM
-    // struct by the type converter.  The dialect-level cast therefore becomes
+    mlir::Location const loc = op.getLoc();
+    mlir::Value const tag = mlir::LLVM::ExtractValueOp::create(
+        rewriter, loc, rewriter.getI32Type(), adaptor.getValue(),
+        llvm::ArrayRef<int64_t>{0});
+    llvm::SmallVector<mlir::Type> const types =
+        llvm::TypeSwitch<mlir::Type, llvm::SmallVector<mlir::Type>>(
+            op.getType())
+            .Case<tvm_ffi::UnionType>(
+                [](tvm_ffi::UnionType type) -> llvm::SmallVector<mlir::Type> {
+                  return llvm::SmallVector<mlir::Type>(type.getTypes());
+                })
+            .Default([](mlir::Type type) -> llvm::SmallVector<mlir::Type> {
+              return {type};
+            });
+    mlir::Value condition = mlir::LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI1Type(), false);
+    for (mlir::Type const type : types) {
+      int32_t const index =
+          mlir::cast<tvm_ffi::TVMFFITypeIndexInterface>(type).getTypeIndex();
+      mlir::Value const expected = mlir::LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32Type(), index);
+      mlir::Value const matches = mlir::LLVM::ICmpOp::create(
+          rewriter, loc, mlir::LLVM::ICmpPredicate::eq, tag, expected);
+      condition = mlir::LLVM::OrOp::create(rewriter, loc, condition, matches);
+    }
+    if (mlir::failed(utils::emitLLVMAssert(rewriter, loc, condition))) {
+      return op.emitError("failed to emit LLVM assertion");
+    }
+    rewriter.replaceOp(op, adaptor.getValue());
+    return mlir::success();
+  }
+};
+
+class ConvertTVMFFIUpcastOp final
+    : public mlir::OpConversionPattern<tvm_ffi::UpcastOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(tvm_ffi::UpcastOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // All supported tagged cast values lower to the TVMFFIAny LLVM struct.
+    // The dialect-level upcast therefore becomes
     // an identity after conversion; the source conversion has already
     // materialized the correct type tag and payload.
     rewriter.replaceOp(op, adaptor.getValue());
@@ -963,7 +1003,7 @@ void populateTVMFFIToLLVMConversionPatterns(
                ConvertExceptionOp, ConvertFunctionCallOp,
                ConvertFunctionGetGlobalOp, ConvertGetOp, ConvertTensorCloneOp,
                ConvertTensorCopyOp, ConvertTensorLiteralOp, ConvertToOp,
-               ConvertTVMFFICastOp,
+               ConvertTVMFFIDowncastOp, ConvertTVMFFIUpcastOp,
                ConvertRefOp<tvm_ffi::ObjectDecRefOp,
                             &conversion::utils::getOrCreateTVMFFIObjectDecRef>,
                ConvertRefOp<tvm_ffi::ObjectIncRefOp,

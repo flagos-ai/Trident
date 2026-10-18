@@ -141,7 +141,7 @@ class GuardParsingTest(unittest.TestCase):
         parsed = Guard.parse(guard)
         self.assertIsInstance(parsed, kind)
         assert parsed is not None
-        self.assertEqual(tuple(type(item.code) for item in parsed.codes), code_types)
+        self.assertEqual(tuple(type(item) for item in parsed.codes), code_types)
         self.assertEqual(parsed.source, Local.parse(guard.name))
         return parsed
 
@@ -162,7 +162,7 @@ class GuardParsingTest(unittest.TestCase):
                     ConstantMatchGuard,
                     (ConstantCode,),
                 )
-                code = parsed.codes[0].code
+                code = parsed.codes[0]
                 assert isinstance(code, ConstantCode)
                 self.assertEqual(
                     ast.dump(code.expression, include_attributes=False),
@@ -294,12 +294,7 @@ class GuardParsingTest(unittest.TestCase):
                 DynamoAttributeAbsentCode,
             ),
         )
-        _, dtype_item, device_item, grad_item, rank_item, attribute_item = parsed.codes
-        dtype = dtype_item.code
-        device = device_item.code
-        grad = grad_item.code
-        rank = rank_item.code
-        attribute = attribute_item.code
+        _, dtype, device, grad, rank, attribute = parsed.codes
         assert isinstance(dtype, TensorDTypeCode)
         assert isinstance(device, TensorDeviceCode)
         assert isinstance(grad, RequiresGradCode)

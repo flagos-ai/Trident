@@ -98,6 +98,16 @@ MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFIRawStrTypeGetName(void);
 MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIRawStrTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIRawStrType(MlirType type);
 
+// ResultType
+// The payload is required; use TVM FFI None for no-data results.
+
+MLIR_CAPI_EXPORTED MlirType
+mlirTVMFFIResultTypeGetChecked(MlirLocation location, MlirType payload);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFIResultTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFIResultTypeGetPayloadType(MlirType type);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIResultTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIResultType(MlirType type);
+
 // SmallStrType
 
 MLIR_CAPI_EXPORTED MlirType mlirTVMFFISmallStrTypeGet(MlirContext context);

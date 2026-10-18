@@ -18,7 +18,7 @@
 #include <mlir/IR/Location.h>
 #include <mlir/Support/LLVM.h>
 
-#define DEFINE_SIMPLE_TYPE(Name)                                               \
+#define DEFINE_GENERIC_TYPE(Name)                                              \
   MlirType mlirTVMFFI##Name##TypeGet(MlirContext context) {                    \
     return wrap(trident::tvm_ffi::Name##Type::get(unwrap(context)));           \
   }                                                                            \
@@ -32,23 +32,57 @@
     return mlir::isa<trident::tvm_ffi::Name##Type>(unwrap(type));              \
   }
 
-DEFINE_SIMPLE_TYPE(Any)
-DEFINE_SIMPLE_TYPE(Array)
-DEFINE_SIMPLE_TYPE(Bool)
-DEFINE_SIMPLE_TYPE(DType)
-DEFINE_SIMPLE_TYPE(Device)
-DEFINE_SIMPLE_TYPE(Exception)
-DEFINE_SIMPLE_TYPE(Float)
-DEFINE_SIMPLE_TYPE(Function)
-DEFINE_SIMPLE_TYPE(Int)
-DEFINE_SIMPLE_TYPE(None)
-DEFINE_SIMPLE_TYPE(Object)
-DEFINE_SIMPLE_TYPE(RawStr)
-DEFINE_SIMPLE_TYPE(SmallStr)
-DEFINE_SIMPLE_TYPE(Str)
-DEFINE_SIMPLE_TYPE(Tensor)
+DEFINE_GENERIC_TYPE(Any)
+DEFINE_GENERIC_TYPE(Array)
+DEFINE_GENERIC_TYPE(Bool)
+DEFINE_GENERIC_TYPE(DType)
+DEFINE_GENERIC_TYPE(Device)
+DEFINE_GENERIC_TYPE(Exception)
+DEFINE_GENERIC_TYPE(Float)
+DEFINE_GENERIC_TYPE(Function)
+DEFINE_GENERIC_TYPE(Int)
+DEFINE_GENERIC_TYPE(None)
+DEFINE_GENERIC_TYPE(Object)
+DEFINE_GENERIC_TYPE(RawStr)
+DEFINE_GENERIC_TYPE(SmallStr)
+DEFINE_GENERIC_TYPE(Str)
+DEFINE_GENERIC_TYPE(Tensor)
 
-#undef DEFINE_SIMPLE_TYPE
+#undef DEFINE_GENERIC_TYPE
+
+MlirType mlirTVMFFIResultTypeGetChecked(MlirLocation location,
+                                        MlirType payload) {
+  const mlir::Location loc = unwrap(location);
+  const mlir::Type type = unwrap(payload);
+  if (!type) {
+    mlir::emitError(loc) << "Result requires one payload type";
+    return MlirType{nullptr};
+  }
+  if (type.getContext() != loc.getContext()) {
+    mlir::emitError(loc)
+        << "Result payload must belong to the construction context";
+    return MlirType{nullptr};
+  }
+  return wrap(
+      trident::tvm_ffi::ResultType::getChecked(loc, loc.getContext(), type));
+}
+
+MlirStringRef mlirTVMFFIResultTypeGetName(void) {
+  return wrap(trident::tvm_ffi::ResultType::name);
+}
+
+MlirType mlirTVMFFIResultTypeGetPayloadType(MlirType type) {
+  return wrap(
+      mlir::cast<trident::tvm_ffi::ResultType>(unwrap(type)).getPayloadType());
+}
+
+MlirTypeID mlirTVMFFIResultTypeGetTypeID(void) {
+  return wrap(trident::tvm_ffi::ResultType::getTypeID());
+}
+
+bool mlirTypeIsATVMFFIResultType(MlirType type) {
+  return mlir::isa<trident::tvm_ffi::ResultType>(unwrap(type));
+}
 
 MlirType mlirTVMFFIUnionTypeGetChecked(MlirLocation location, intptr_t numTypes,
                                        const MlirType *types) {

@@ -13,63 +13,52 @@
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/Location.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/Value.h>
+#include <mlir/Support/LLVM.h>
 #include <tvm/ffi/object.h>
 
 namespace trident::tvm_ffi {
 
-int ExceptionType::getTypeIndex() {
-  return tvm::ffi::TypeToRuntimeTypeIndex<trident::runtime::Exception>::v();
-}
-
-bool TVMFFIABIType::isObject() const {
-  return static_cast<mlir::Type>(*this).hasTrait<mlir::TypeTrait::Object>();
-}
-
-bool TVMFFIABIType::classof(mlir::Type type) {
-  return type && type.hasTrait<mlir::TypeTrait::TVMFFIABI>();
-}
-
-bool TVMFFIObjectType::classof(mlir::Type type) {
-  return type && type.hasTrait<mlir::TypeTrait::Object>();
+mlir::Type ArrayType::getNativeType() const {
+  return ObjectType::get(getContext());
 }
 
 mlir::Type BoolType::getNativeType() const {
   return mlir::IntegerType::get(getContext(), 1);
 }
 
+mlir::Value DTypeType::build(mlir::OpBuilder &builder, mlir::Location loc,
+                             int64_t code, int64_t bits, int64_t lanes) {
+  int64_t const payload =
+      (code & 0xff) | ((bits & 0xff) << 8) | ((lanes & 0xffff) << 16);
+  mlir::MLIRContext *context = builder.getContext();
+  mlir::Value const slot = IntType::build(builder, loc, payload);
+  mlir::IntegerType const i32Ty = mlir::IntegerType::get(context, 32);
+  mlir::LLVM::LLVMStructType const anyTy = TVMFFIABIType::getLLVMType(context);
+  mlir::LLVM::StoreOp::create(
+      builder, loc,
+      mlir::LLVM::ConstantOp::create(builder, loc, i32Ty,
+                                     DTypeType::getTypeIndex()),
+      mlir::LLVM::GEPOp::create(
+          builder, loc, mlir::LLVM::LLVMPointerType::get(context), anyTy, slot,
+          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0}));
+  return slot;
+}
+
+int32_t ExceptionType::getTypeIndex() {
+  return tvm::ffi::TypeToRuntimeTypeIndex<trident::runtime::Exception>::v();
+}
+
 mlir::Type FloatType::getNativeType() const {
   return mlir::Float64Type::get(getContext());
 }
 
-mlir::Type IntType::getNativeType() const {
-  return mlir::IntegerType::get(getContext(), 64);
-}
-
-mlir::Type ArrayType::getNativeType() const {
-  return ObjectType::get(getContext());
-}
-
 mlir::Type FunctionType::getNativeType() const {
   return ObjectType::get(getContext());
-}
-
-mlir::Type StrType::getNativeType() const {
-  return ObjectType::get(getContext());
-}
-
-mlir::Type TensorType::getNativeType() const {
-  return ObjectType::get(getContext());
-}
-
-mlir::LLVM::LLVMStructType
-TVMFFIABIType::getLLVMType(mlir::MLIRContext *context) {
-  mlir::IntegerType const i32Ty = mlir::IntegerType::get(context, 32);
-  mlir::IntegerType const i64Ty = mlir::IntegerType::get(context, 64);
-  return mlir::LLVM::LLVMStructType::getLiteral(context, {i32Ty, i32Ty, i64Ty});
 }
 
 mlir::Value IntType::build(mlir::OpBuilder &builder, mlir::Location loc,
@@ -115,22 +104,50 @@ mlir::Value IntType::build(mlir::OpBuilder &builder, mlir::Location loc,
   return slot;
 }
 
-mlir::Value DTypeType::build(mlir::OpBuilder &builder, mlir::Location loc,
-                             int64_t code, int64_t bits, int64_t lanes) {
-  int64_t const payload =
-      (code & 0xff) | ((bits & 0xff) << 8) | ((lanes & 0xffff) << 16);
-  mlir::MLIRContext *context = builder.getContext();
-  mlir::Value const slot = IntType::build(builder, loc, payload);
+mlir::Type IntType::getNativeType() const {
+  return mlir::IntegerType::get(getContext(), 64);
+}
+
+mlir::Type StrType::getNativeType() const {
+  return ObjectType::get(getContext());
+}
+
+bool TVMFFIABIType::classof(mlir::Type type) {
+  return type && type.hasTrait<mlir::TypeTrait::TVMFFIABI>();
+}
+
+mlir::LLVM::LLVMStructType
+TVMFFIABIType::getLLVMType(mlir::MLIRContext *context) {
   mlir::IntegerType const i32Ty = mlir::IntegerType::get(context, 32);
-  mlir::LLVM::LLVMStructType const anyTy = TVMFFIABIType::getLLVMType(context);
-  mlir::LLVM::StoreOp::create(
-      builder, loc,
-      mlir::LLVM::ConstantOp::create(builder, loc, i32Ty,
-                                     DTypeType::getTypeIndex()),
-      mlir::LLVM::GEPOp::create(
-          builder, loc, mlir::LLVM::LLVMPointerType::get(context), anyTy, slot,
-          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0}));
-  return slot;
+  mlir::IntegerType const i64Ty = mlir::IntegerType::get(context, 64);
+  return mlir::LLVM::LLVMStructType::getLiteral(context, {i32Ty, i32Ty, i64Ty});
+}
+
+mlir::Value TVMFFIABIType::getZero(mlir::OpBuilder &builder, mlir::Location loc,
+                                   TVMFFIABIType type) {
+  mlir::Type const storage =
+      mlir::isa<FunctionType, ObjectType>(type)
+          ? mlir::Type(mlir::LLVM::LLVMPointerType::get(builder.getContext()))
+          : mlir::Type(getLLVMType(builder.getContext()));
+  mlir::Value const zero = mlir::LLVM::ZeroOp::create(builder, loc, storage);
+  return mlir::UnrealizedConversionCastOp::create(builder, loc, type, zero)
+      .getResult(0);
+}
+
+bool TVMFFIABIType::isObject() const {
+  return static_cast<mlir::Type>(*this).hasTrait<mlir::TypeTrait::Object>();
+}
+
+bool TVMFFIABIType::isZero(mlir::Value value) {
+  mlir::UnrealizedConversionCastOp cast =
+      value.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+  return cast && cast.getNumOperands() == 1 && cast.getNumResults() == 1 &&
+         mlir::isa<TVMFFIABIType>(value.getType()) &&
+         (cast.getOperand(0).getType() == getLLVMType(value.getContext()) ||
+          (mlir::isa<FunctionType, ObjectType>(value.getType()) &&
+           mlir::isa<mlir::LLVM::LLVMPointerType>(
+               cast.getOperand(0).getType()))) &&
+         cast.getOperand(0).getDefiningOp<mlir::LLVM::ZeroOp>();
 }
 
 mlir::Value TVMFFIABIType::load(mlir::OpBuilder &builder, mlir::Location loc,
@@ -144,6 +161,14 @@ mlir::Value TVMFFIABIType::load(mlir::OpBuilder &builder, mlir::Location loc,
       mlir::LLVM::GEPOp::create(builder, loc, ptrTy, anyTy, slot,
                                 llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 2});
   return mlir::LLVM::LoadOp::create(builder, loc, i64Ty, payloadPtr);
+}
+
+bool TVMFFIObjectType::classof(mlir::Type type) {
+  return type && type.hasTrait<mlir::TypeTrait::Object>();
+}
+
+mlir::Type TensorType::getNativeType() const {
+  return ObjectType::get(getContext());
 }
 
 } // namespace trident::tvm_ffi

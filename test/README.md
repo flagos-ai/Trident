@@ -9,7 +9,7 @@ modules for the former flat layout.
 
 | Directory | Contract | Execution prerequisites |
 | --- | --- | --- |
-| `unit` | Guard parsing and expression IR | Installed native extension; no GPU execution |
+| `unit` | Guard parsing, expression IR and importer diagnostics | Installed native extension; no GPU execution |
 | `e2e` | Public JIT capture, guards, compilation and cached execution | CUDA |
 | `support` | Fresh IR contexts and CUDA allocation checks | Helpers, never a discovered test suite |
 
@@ -68,25 +68,27 @@ Run these checks serially in the current process without `empty_cache` or reserv
 memory comparisons. This detects cached-execution leaks in PyTorch-managed CUDA
 allocations, not CPU, native FFI objects or allocations outside that allocator.
 
-## Coverage migration
+## Coverage
 
-The pre-refactor installed build passed 39 Python methods and 32 Lit files.
-The standalone core build had two failures from an older tool binary; rebuild
-it before using it as a validation source. Test counts are inventory, not a
-coverage target. The table below maps retained coverage; unchanged parameter
-tables retain all their former entries.
+`unit/test_guards.py` covers guard parsing, supported expression IR, invalid
+comparisons, tensor metadata and the conservative `_base` fallback.
+`unit/test_importer.py` checks Result binding, payload type registration, parsed
+OpView payload access, shared Result type inference and boundary
+boxing/widening, insertion-point restoration, empty argument construction,
+explicit None positions and diagnostics for unsupported symbolic powers. The
+e2e suites cover public JIT execution, container reconstruction, conditional
+branches, symbolic shapes, specialization reuse, aliases and mutations.
+`e2e/test_kernel_launch.py` covers mutation-only Triton launches and their None
+Result payloads; container tests include empty containers and consecutive None
+outputs. Verifier diagnostics and Result lowering belong to the focused Lit
+tests under `core/test/Dialect/TVMFFI/` and `core/test/Conversion/`.
 
-`unit` now contains only `test_guards.py`: `GuardParsingTest` owns supported
-guard kinds, constant values, tensor metadata and parse failures;
-`GuardExpressionTest` owns expression IR, comparison invariants and the
-conservative `_base` fallback. Equivalent cases use one named parameter table.
-The former importer, scalar IR construction and type-binding unit suites have
-been removed; their dedicated checks are no longer part of the Python suite.
+Repeated calls exercise compiled execution as well as warmup. The unindexed
+CUDA device spelling retains its value check without claiming cache reuse. Use
+a fresh importer for each program and discard failed importers and input
+tables. Test counts describe inventory, not a coverage target.
 
-The direct MLIR execution and isolated CUDA lifetime suites have been removed
-along with their fixtures and dedicated helpers. Repeated calls in e2e tests
-cover compiled execution for ordinary operators; the unindexed CUDA device
-spelling retains its value check without claiming cache reuse.
+The following table maps the former flat test layout to current tests.
 
 | Former test | Replacement | Preserved contract / parameters |
 | --- | --- | --- |

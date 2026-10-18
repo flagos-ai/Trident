@@ -26,10 +26,10 @@ func.func @bool_constant() -> !tvm_ffi.bool {
 
 // CHECK-LABEL: func.func @cast(
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>)
-// CHECK-NOT: tvm_ffi.cast
+// CHECK-NOT: tvm_ffi.upcast
 // CHECK: return %[[VALUE]] : !llvm.struct<(i32, i32, i64)>
 func.func @cast(%value: !tvm_ffi.int) -> !tvm_ffi.any {
-  %result = tvm_ffi.cast %value : !tvm_ffi.int -> !tvm_ffi.any
+  %result = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.any
   return %result : !tvm_ffi.any
 }
 

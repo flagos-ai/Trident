@@ -95,17 +95,62 @@ bool UnionType::contains(mlir::Type type) const {
   return llvm::is_contained(getTypes(), type);
 }
 
-bool CastOp::areCastCompatible(mlir::TypeRange inputs,
-                               mlir::TypeRange outputs) {
+namespace {
+
+bool isTaggedCastType(mlir::Type type) {
+  if (mlir::isa<AnyType>(type)) {
+    return true;
+  }
+  if (UnionType const unionType = mlir::dyn_cast<UnionType>(type)) {
+    return llvm::all_of(unionType.getTypes(), isTaggedCastType);
+  }
+  return !mlir::isa<FunctionType, ObjectType>(type) &&
+         mlir::isa<TVMFFIABIType>(type) &&
+         mlir::isa<TVMFFITypeIndexInterface>(type);
+}
+
+} // namespace
+
+bool DowncastOp::areCastCompatible(mlir::TypeRange inputs,
+                                   mlir::TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1 ||
+      !isTaggedCastType(inputs[0]) || !isTaggedCastType(outputs[0]) ||
+      mlir::isa<AnyType>(outputs[0]) || inputs[0] == outputs[0]) {
+    return false;
+  }
+  if (mlir::isa<AnyType>(inputs[0])) {
+    return true;
+  }
+  UnionType const source = mlir::dyn_cast<UnionType>(inputs[0]);
+  if (!source || !source.contains(outputs[0])) {
+    return false;
+  }
+  UnionType const target = mlir::dyn_cast<UnionType>(outputs[0]);
+  return !target || !target.contains(inputs[0]);
+}
+
+bool UpcastOp::areCastCompatible(mlir::TypeRange inputs,
+                                 mlir::TypeRange outputs) {
   if (inputs.size() != 1 || outputs.size() != 1) {
     return false;
   }
   mlir::Type const input = inputs[0];
   mlir::Type output = outputs[0];
-  return mlir::isa<AnyType, UnionType>(output) &&
-         mlir::isa<TVMFFIABIType>(input) &&
+  return mlir::isa<AnyType, UnionType>(output) && isTaggedCastType(input) &&
+         isTaggedCastType(output) &&
          (mlir::isa<AnyType>(output) ||
           mlir::cast<UnionType>(output).contains(input));
+}
+
+mlir::LogicalResult
+ResultType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                   mlir::Type payload) {
+  if (!payload) {
+    return emitError() << "Result requires one payload type";
+  }
+  return mlir::isa<ResultType>(payload)
+             ? emitError() << "nested Result payloads are unsupported"
+             : mlir::success();
 }
 
 mlir::LogicalResult

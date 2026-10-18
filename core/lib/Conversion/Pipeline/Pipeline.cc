@@ -11,6 +11,8 @@
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/OwnershipDeallocation.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
@@ -18,6 +20,7 @@
 #include <mlir/Conversion/Passes.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
+#include <mlir/Conversion/UBToLLVM/UBToLLVM.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>     // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/SCF/IR/SCF.h>         // NOLINT(misc-include-cleaner)
@@ -36,18 +39,23 @@ class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
   void runOnOperation() final {
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
-    // Pass order follows lowering dependencies: inline before kernel
-    // conversion, deallocate semantic objects before ABI conversion, then lower
-    // to LLVM.
+    // Inline Results before expanding continuations, lower structured regions
+    // before GPU failure exits, then deallocate semantic objects before ABI
+    // and LLVM conversion.
     pm.addPass(mlir::createInlinerPass());
-    pm.addPass(createConvertTVMFFIToGPU());
+    pm.addPass(mlir::createSymbolDCEPass());
+    pm.addPass(tvm_ffi::createDecomposeTVMFFI());
+    pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
     pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(createConvertTVMFFIToGPU());
     pm.addPass(createFinalizeTVMFFI());
     pm.addPass(tvm_ffi::createOwnershipDeallocation());
     pm.addPass(createConvertTVMFFIToFunc());
+    pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
     pm.addPass(createConvertTVMFFIToLLVM());
     pm.addPass(createConvertDLPackToLLVM());
+    pm.addPass(mlir::createUBToLLVMConversionPass());
     pm.addPass(mlir::createArithToLLVMConversionPass());
     pm.addPass(mlir::createConvertControlFlowToLLVMPass());
     pm.addPass(

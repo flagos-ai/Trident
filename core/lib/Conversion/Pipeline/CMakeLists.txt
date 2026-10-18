@@ -14,7 +14,8 @@ add_mlir_conversion_library(
   MLIRPass
   MLIRSCFToControlFlow
   MLIRTransforms
-  OwnershipDeallocation
+  MLIRUBToLLVM
   TVMFFIToFunc
   TVMFFIToGPU
-  TVMFFIToLLVM)
+  TVMFFIToLLVM
+  TVMFFITransforms)
