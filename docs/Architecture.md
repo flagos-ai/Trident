@@ -70,14 +70,38 @@ signedness, or MLIR Type equality, rather than textual spellings. Native scalar
 boxing remains limited to signless i1/i64 and f64. Internal TVM FFI type
 construction uses `.get()`; `UnionType.get()` verifies members and exposes them
 through its read-only `types` tuple. `ffi_type(name)` remains a textual
-compatibility constructor.
+compatibility constructor. Only the native C ABI Array uses the `c.` prefix:
+`!tvm_ffi.c.array`,
+with the `CArrayType` binding. Other ABI types retain their ordinary spellings,
+for example `ffi_type("int")` and `!tvm_ffi.tensor`. Semantic `ArrayType.get(T)`
+and `TupleType.get(types)` construct `!tvm_ffi.array<T>` and
+`!tvm_ffi.tuple<T0, T1, ...>`, including empty tuples. Their read-only
+`element_type` and `types` properties expose the parameters. Both semantic
+container types inherit `TVMFFIABIType`; every Tuple element must be a
+`TVMFFIABIType`, including nested Array and Tuple types.
+Trident extensions retain `!tvm_ffi.exception`, `!tvm_ffi.union` and
+`!tvm_ffi.monad.result<T>`; their payloads use the ordinary ABI types.
 
 ## Guards and containers
 
 Guards are parsed into `GuardCode`, `Guard` and collection objects under
 `python/trident/guards/`. `InputTableBuilder` maps function arguments and nested
-list/tuple paths to semantic values. Containers use `!tvm_ffi.array`; extraction
-calls `ffi.ArrayGetItem` lazily in the block that needs the element.
+list/tuple paths to semantic values. Lists use `!tvm_ffi.array<T>` with a common
+boxed element type, or `!tvm_ffi.any` for empty or heterogeneous lists. Tuples
+retain one type per element. `array_type` infers a common boxed element type;
+`tuple_type` boxes and preserves each element type independently. Nested
+containers preserve this structure.
+The frontend emits `array.create/get/size` and `tuple.construct/unconstruct`.
+Array construction and extraction return their array/element types directly;
+array size returns a boxed integer directly. Tuple construct directly packs elements into a semantic Tuple;
+unconstruct directly returns all elements in order, including zero results for
+an empty Tuple. Tuple indexing selects an unconstruct result, normalizes negative
+indices and checks static bounds; static length comes from the Tuple type.
+Container decomposition checks lookup status, non-null handles and call status with
+runtime assertions that terminate on failure. Array indexing uses a
+native i64; runtime failures terminate through assertions. Extraction is lazy in its consumer block.
+Tuple length guards retain checked runtime `ffi.ArraySize` calls: wrapper inputs
+must validate arity before trusting their static tuple schema.
 A single input-node implementation handles leaves and containers; each fresh
 table owns a scope-checked cache of complete extraction Results. Scalar guards
 use native arithmetic and comparisons; tensor metadata uses existing semantic
@@ -117,16 +141,31 @@ runs first so these failure branches belong to the public guarded wrapper.
 The lowering pipeline is:
 
 1. Inline private graph functions and remove unused helper symbols.
-2. Run the TVM FFI dialect transform `decompose-tvm-ffi` to lower monadic
-   binds to `monad.unpack` and `scf.if`, then run `lower-tvm-ffi-monad` to
-   expand Results to payloads and success bits. Lower SCF to CFG afterward.
+2. Run the TVM FFI dialect transform `decompose-tvm-ffi` to expand container
+   operations into checked `ffi.Array`, `ffi.ArrayGetItem` and `ffi.ArraySize`
+   calls and lower monadic binds to `monad.unpack` and `scf.if` in one dialect
+   conversion. The same conversion erases container types to `!tvm_ffi.c.array`
+   in function signatures, region arguments and Result payloads, using standard
+   function and control-flow patterns plus explicit TVM FFI patterns. Bind
+   continuations move into success branches with converted block arguments;
+   their yields use remapped operands. Unsupported operations carrying container
+   types fail conversion; nested type attributes are erased separately with
+   `AttrTypeReplacer`. Results remain single semantic SSA values. Lower SCF
+   to CFG afterward.
 3. Lower kernel launches to GPU operations and finalize metadata operations.
-4. Insert ownership deallocation while semantic object types are available.
+4. Ownership deallocation is temporarily omitted from the default pipeline
+   pending support for semantic Results. The standalone pass remains available
+   for its existing input contract; object lifetime correctness and CUDA leak
+   checks are deferred until that refactor.
 5. Convert monadic returns to checked functions with output slots and an i32
-   status, and generate packed ABI wrappers. Canonicalization removes unused
-   Result materialization casts. Ordinary returns remain supported.
-6. Lower semantic values, DLPack, arithmetic, control flow, GPU and UB operations
-   to LLVM, followed by canonicalization and cast reconciliation.
+   status, and generate packed ABI wrappers. Read Results through `monad.unpack`
+   and restore typed payloads only in the successful branch before storing them.
+   Native Function/Object payloads can use internal output slots, but packed
+   wrappers require tagged ABI payloads.
+6. Lower semantic values, including Results, to LLVM. A `Result<T>` becomes one
+   LLVM struct containing the converted payload followed by an i1 success bit.
+   Lower DLPack, arithmetic, control flow, GPU and UB operations, followed by
+   canonicalization and cast reconciliation.
 
 `!tvm_ffi.monad.result<T>` always carries one payload and a success bit.
 No-data results use `!tvm_ffi.monad.result<!tvm_ffi.none>` with an explicit
@@ -137,10 +176,11 @@ its body terminates with `monad.yield`. Decomposition moves that body into the
 success branch of `scf.if`, restores typed payloads there with `tvm_ffi.downcast`
 when unpack widens them to Any, and yields failed Results in the failure branch.
 Decomposition handles binds throughout the module, including ordinary helper
-functions. Result expansion runs after inlining and handles `tvm_ffi.func` bodies;
-only function signatures and return materializations retain Result types.
-Unsupported Result uses fail conversion. Redundant unpack selection branches
-and Any round trips are a TODO; they do not change failure propagation.
+functions. LLVM conversion lowers Result types and `monad.pure`, `monad.fail`
+and `monad.unpack` together, preserving SSA value counts through ordinary
+function signatures, calls, returns and CFG arguments. The default pipeline
+still inlines graph helpers first. Unsupported Result uses fail conversion.
+Redundant Any round trips remain a TODO; they do not change failure propagation.
 Independent effects after a checked call are also nested in its continuation,
 so failure suppresses them without requiring a payload dependency.
 
@@ -214,7 +254,7 @@ protocol. Previously constructed checked calls still run and propagate failures;
 fallback suppresses later operands. Guard collections return a short-circuiting
 boolean Result. The backend explicitly binds this result, constructs the guarded
 branch, binds flattened inputs and the graph call, then packs the output into
-the public Result. All `tvm_ffi.func` return types are Results, and
+the public Result. Each `tvm_ffi.func` declares exactly one Result return type, and
 `tvm_ffi.return` must match the signature exactly. No-data functions declare
 `Result<!tvm_ffi.none>`; these results use the ordinary TVM FFI None ABI
 representation and allocate output slots just like other payloads.
@@ -222,22 +262,25 @@ Successful payloads are wrapped with `monad.pure`; the shared Python `pure`
 builder performs boxing and Any/Union widening at declared boundaries. Private
 graph helpers use `func.return` with Result values and are inlined before Result
 lowering. Packed output slots are read and written only on success. Packed
-wrappers forward one ABI payload directly or reuse the implementation output
-slots as the source arguments to `ffi.Array` for multiple payloads, without
-redundant semantic casts or staging copies. Guard rejection and Triton
+wrappers forward the single ABI payload directly. Multiple values must be
+packed into a `!tvm_ffi.tuple` payload before returning; tuple decomposition
+constructs the runtime Array before ABI conversion. Guard rejection and Triton
 specialization failure remain successful `GuardMatch` values, requesting
 another specialization; runtime FFI failures return nonzero status without
 inspecting output payloads.
 
 Failed semantic ABI payloads are zero-initialized. Function handles use null
 native-pointer placeholders; native scalar payloads may be poison and are never
-consumed on failure. The retained ownership pass recognizes these placeholders
-and retains monadic return payloads only when the whole return succeeds.
+consumed on failure. No Result object is allocated at runtime. Result ownership
+analysis is deferred; the default pipeline does not currently insert retains
+or releases for these values.
 
 The TVM FFI dialect distinguishes boxed values, owned runtime objects, borrowed
 objects and native pointers. Its ownership interfaces describe allocations,
-borrows, transfers and aliases; the ownership pass retains escaping borrowed
-values and releases owned values along CFG edges. The importer does not add
+borrows, transfers and aliases. The standalone ownership pass retains escaping
+borrowed values and releases owned values along CFG edges for its legacy input
+contract, which expects materialized Result returns. It is not currently run by
+the default pipeline. The importer does not add
 manual reference counting. Runtime objects use the TVMFFIAny representation
 `!llvm.struct<(i32, i32, i64)>`; function handles are native pointers.
 `ResultType` has C and Python bindings with mandatory payload access and TypeID
@@ -247,7 +290,8 @@ registration.
 `tvm_ffi.downcast` narrows Any/Union to a concrete type or a smaller Union,
 checking the result type against the runtime type tag. Failed checks branch to
 an `abort()` call and LLVM unreachable in every build mode. A shared LLVM assertion helper
-contains a TODO for diagnostic output before aborting. Neither cast supports
+contains a TODO for diagnostic output before aborting. Semantic containers support Any widening/narrowing; after erasure, narrowing
+checks only the Array runtime tag, without validating element types. Neither cast supports
 native Function/Object handles or unions containing them. Both casts borrow
 their source; downcast checks remain observable even when its result is unused.
 `tvm_ffi.get` extracts a native scalar or borrowed object, and `tvm_ffi.to` boxes

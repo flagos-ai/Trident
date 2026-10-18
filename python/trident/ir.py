@@ -143,6 +143,16 @@ _BINARY_ARITHMETIC: dict[
 }
 
 
+def array_type(types: Sequence[ir.Type]) -> tvm_ffi_d.ArrayType:
+    elements = [boxed_type(type_) for type_ in types]
+    element = (
+        elements[0]
+        if elements and all(type_ == elements[0] for type_ in elements)
+        else tvm_ffi_d.AnyType.get()
+    )
+    return tvm_ffi_d.ArrayType.get(element)
+
+
 def binary(operation: Any, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
     lhs, rhs = native(lhs), native(rhs)
     boolean, integer, floating = _BINARY_ARITHMETIC[operation]
@@ -183,6 +193,16 @@ def bind(
 
 def box(value: ir.Value) -> ir.Value:
     return tvm_ffi_d.to(value) if _is_native_scalar(value.type) else value
+
+
+def boxed_type(type_: ir.Type) -> ir.Type:
+    if _is_signless_integer(type_, 1):
+        return tvm_ffi_d.BoolType.get()
+    elif _is_signless_integer(type_, 64):
+        return tvm_ffi_d.IntType.get()
+    elif isinstance(type_, ir.F64Type):
+        return tvm_ffi_d.FloatType.get()
+    return type_
 
 
 def checked_result(value: ir.Value, success: ir.Value) -> ir.Value:
@@ -230,6 +250,22 @@ def constant(value: Any) -> ir.Value:
         raise NotImplementedError(f"unsupported FX constant: {value!r}")
 
 
+def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Value]:
+    elements = [box(value) for value in values]
+    types = (
+        type_.types
+        if isinstance(type_, tvm_ffi_d.TupleType)
+        else [type_.element_type] * len(elements)
+    )
+    elements = [
+        value if value.type == target else tvm_ffi_d.upcast(target, value)
+        for value, target in zip(elements, types, strict=True)
+    ]
+    if isinstance(type_, tvm_ffi_d.TupleType):
+        return pure([tvm_ffi_d.TupleConstructOp(type_, elements).result])
+    return pure([tvm_ffi_d.ArrayCreateOp(type_, elements).result])
+
+
 def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
     if _is_numeric_scalar(lhs.type) and _is_numeric_scalar(rhs.type):
         return binary(operator.eq, lhs, rhs)
@@ -238,7 +274,7 @@ def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
 
 
 def ffi_type(name: str) -> ir.Type:
-    """Compatibility constructor for a textual TVM FFI type description."""
+    """Parse a TVM FFI type description, e.g. ``int`` or ``monad.result<i64>``."""
     return ir.Type.parse(f"!tvm_ffi.{name}")
 
 
@@ -277,13 +313,14 @@ def native(value: ir.Value) -> ir.Value:
     )
 
 
-def native_constant(value: bool | int | float) -> ir.Value:
+def native_constant(value: bool | float) -> ir.Value:
     if isinstance(value, bool):
         type_ = ir.IntegerType.get_signless(1)
     elif isinstance(value, int):
         type_ = ir.IntegerType.get_signless(64)
-        if not -(1 << 63) <= value < (1 << 63):
-            raise OverflowError(f"integer does not fit the i64 runtime ABI: {value}")
+        assert -(1 << 63) <= value < (1 << 63), (
+            f"integer does not fit the i64 runtime ABI: {value}"
+        )
     else:
         type_ = ir.F64Type.get()
     return arith.constant(type_, value)
@@ -332,6 +369,10 @@ def pure(
     return [*tvm_ffi_d.MonadPureOp(result_types, payloads).outputs]
 
 
+def tuple_type(types: Sequence[ir.Type]) -> tvm_ffi_d.TupleType:
+    return tvm_ffi_d.TupleType.get([boxed_type(type_) for type_ in types])
+
+
 def value_type(value: Any) -> ir.Type:
     if isinstance(value, torch.Tensor):
         return tvm_ffi_d.TensorType.get()
@@ -353,8 +394,12 @@ def value_type(value: Any) -> ir.Type:
         return tvm_ffi_d.DeviceType.get()
     elif isinstance(value, torch.dtype):
         return tvm_ffi_d.DTypeType.get()
-    elif isinstance(value, (tuple, list, dict)):
-        return tvm_ffi_d.ArrayType.get()
+    elif isinstance(value, list):
+        return array_type([value_type(item) for item in value])
+    elif isinstance(value, tuple):
+        return tuple_type([value_type(item) for item in value])
+    elif isinstance(value, dict):
+        return tvm_ffi_d.CArrayType.get()
     elif value is None:
         return tvm_ffi_d.NoneType.get()
     else:

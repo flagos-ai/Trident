@@ -62,12 +62,17 @@ class TVMFFIIndexedObject_Type<string name, string typeMnemonic, int typeIndex,
                          "::trident::tvm_ffi::TVMFFIObjectType">;
 
 def TVMFFI_AnyType : TVMFFIABI_Type<"Any", "any">;
-def TVMFFI_ArrayType
-    : TVMFFIIndexedObject_Type<"Array", "array", 71>;
+def TVMFFI_ArrayType : TVMFFIABI_Type<"Array", "array"> {
+  let parameters = (ins "::mlir::Type":$elementType);
+  let assemblyFormat = "`<` $elementType `>`";
+  let genVerifyDecl = 1;
+}
 def TVMFFI_BoolType
     : TVMFFIIndexed_Type<"Bool", "bool", 2,
                          [DeclareTypeInterfaceMethods<
                              TVMFFI_NativeTypeInterface>]>;
+def TVMFFI_C_ArrayType
+    : TVMFFIIndexedObject_Type<"CArray", "c.array", 71>;
 def TVMFFI_DTypeType
     : TVMFFIIndexed_Type<"DType", "dtype", 5, [], [{
     static ::mlir::Value build(::mlir::OpBuilder &builder,
@@ -112,6 +117,12 @@ def TVMFFI_StrType
 def TVMFFI_TensorType
     : TVMFFIIndexedObject_Type<"Tensor", "tensor", 70,
                                []>;
+def TVMFFI_TupleType : TVMFFIABI_Type<"Tuple", "tuple"> {
+  let summary = "A tuple whose elements are TVM FFI ABI types";
+  let parameters = (ins ArrayRefParameter<"::mlir::Type">:$types);
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
 def TVMFFI_UnionType : TVMFFIABI_Type<"Union", "union"> {
   let summary = "A finite set of TVM FFI ABI alternatives";
   let parameters = (ins ArrayRefParameter<"::mlir::Type">:$types);
@@ -123,26 +134,31 @@ def TVMFFI_UnionType : TVMFFIABI_Type<"Union", "union"> {
 }
 
 def AnyTVMFFIAnyABIType : AnyTypeOf<[
-  TVMFFI_AnyType, TVMFFI_ArrayType, TVMFFI_BoolType, TVMFFI_DTypeType,
-  TVMFFI_DeviceType, TVMFFI_ExceptionType, TVMFFI_FloatType,
+  TVMFFI_AnyType, TVMFFI_ArrayType, TVMFFI_BoolType, TVMFFI_C_ArrayType,
+  TVMFFI_DTypeType, TVMFFI_DeviceType, TVMFFI_ExceptionType, TVMFFI_FloatType,
   TVMFFI_FunctionType, TVMFFI_IntType, TVMFFI_NoneType, TVMFFI_ObjectType,
   TVMFFI_RawStrType, TVMFFI_SmallStrType, TVMFFI_StrType, TVMFFI_TensorType,
-  TVMFFI_UnionType
+  TVMFFI_TupleType, TVMFFI_UnionType
 ], "TVM FFI value with a TVMFFIAny ABI representation">;
-def AnyTVMFFICastResultType : AnyTypeOf<[TVMFFI_AnyType, TVMFFI_UnionType], "widened TVM FFI any or union value">;
+def AnyTVMFFICastResultType : AnyTypeOf<[
+  TVMFFI_AnyType, TVMFFI_UnionType
+], "widened TVM FFI any or union value">;
 def AnyTVMFFIGetOperandType : AnyTypeOf<[
-  TVMFFI_ArrayType, TVMFFI_BoolType, TVMFFI_FloatType, TVMFFI_FunctionType,
+  TVMFFI_BoolType, TVMFFI_C_ArrayType, TVMFFI_FloatType, TVMFFI_FunctionType,
   TVMFFI_IntType, TVMFFI_StrType, TVMFFI_TensorType
 ], "TVM FFI value with a native type">;
-def AnyTVMFFIGetResultType : AnyTypeOf<[AnyType, TVMFFI_ObjectType], "TVM FFI get result">;
+def AnyTVMFFIGetResultType : AnyTypeOf<[
+  AnyType, TVMFFI_ObjectType
+], "TVM FFI get result">;
 def AnyTVMFFIObjectOrAnyType : AnyTypeOf<[
-  TVMFFI_AnyType, TVMFFI_ArrayType, TVMFFI_ExceptionType, TVMFFI_FunctionType,
-  TVMFFI_StrType, TVMFFI_TensorType, TVMFFI_UnionType
+  TVMFFI_AnyType, TVMFFI_C_ArrayType, TVMFFI_ExceptionType,
+  TVMFFI_FunctionType, TVMFFI_StrType, TVMFFI_TensorType, TVMFFI_UnionType
 ], "TVM FFI object value or !tvm_ffi.any">;
 def AnyTVMFFISemanticType : AnyTypeOf<[
-  TVMFFI_ArrayType, TVMFFI_BoolType, TVMFFI_DTypeType, TVMFFI_DeviceType,
-  TVMFFI_FloatType, TVMFFI_IntType, TVMFFI_NoneType, TVMFFI_RawStrType,
-  TVMFFI_SmallStrType, TVMFFI_StrType, TVMFFI_TensorType, TVMFFI_UnionType
+  TVMFFI_AnyType, TVMFFI_ArrayType, TVMFFI_BoolType, TVMFFI_C_ArrayType,
+  TVMFFI_DTypeType, TVMFFI_DeviceType, TVMFFI_ExceptionType, TVMFFI_FloatType,
+  TVMFFI_IntType, TVMFFI_NoneType, TVMFFI_RawStrType, TVMFFI_SmallStrType,
+  TVMFFI_StrType, TVMFFI_TensorType, TVMFFI_TupleType, TVMFFI_UnionType
 ], "TVM FFI semantic value">;
 
 #endif

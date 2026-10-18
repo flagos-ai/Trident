@@ -23,7 +23,9 @@ MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIAnyType(MlirType type);
 
 // ArrayType
 
-MLIR_CAPI_EXPORTED MlirType mlirTVMFFIArrayTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFIArrayTypeGetChecked(MlirLocation location,
+                                                          MlirType element);
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFIArrayTypeGetElementType(MlirType type);
 MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFIArrayTypeGetName(void);
 MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIArrayTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIArrayType(MlirType type);
@@ -34,6 +36,13 @@ MLIR_CAPI_EXPORTED MlirType mlirTVMFFIBoolTypeGet(MlirContext context);
 MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFIBoolTypeGetName(void);
 MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIBoolTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIBoolType(MlirType type);
+
+// CArrayType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFICArrayTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFICArrayTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFICArrayTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFICArrayType(MlirType type);
 
 // DTypeType
 
@@ -128,6 +137,17 @@ MLIR_CAPI_EXPORTED MlirType mlirTVMFFITensorTypeGet(MlirContext context);
 MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFITensorTypeGetName(void);
 MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFITensorTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFITensorType(MlirType type);
+
+// TupleType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFITupleTypeGetChecked(
+    MlirLocation location, intptr_t numTypes, const MlirType *types);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFITupleTypeGetName(void);
+MLIR_CAPI_EXPORTED intptr_t mlirTVMFFITupleTypeGetNumTypes(MlirType type);
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFITupleTypeGetType(MlirType type,
+                                                       intptr_t index);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFITupleTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFITupleType(MlirType type);
 
 // UnionType
 

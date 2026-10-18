@@ -52,8 +52,8 @@ template <typename DerivedTy> struct SimpleType : PyConcreteType<DerivedTy> {
   };
 
 DEFINE_GENERIC_TYPE(Any)
-DEFINE_GENERIC_TYPE(Array)
 DEFINE_GENERIC_TYPE(Bool)
+DEFINE_GENERIC_TYPE(CArray)
 DEFINE_GENERIC_TYPE(DType)
 DEFINE_GENERIC_TYPE(Device)
 DEFINE_GENERIC_TYPE(Exception)
@@ -69,13 +69,44 @@ DEFINE_GENERIC_TYPE(Tensor)
 
 #undef DEFINE_GENERIC_TYPE
 
+struct ArrayType final : PyConcreteType<ArrayType> {
+  using Base::Base;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirTVMFFIArrayTypeGetTypeID;
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsATVMFFIArrayType;
+  static inline const MlirStringRef name = mlirTVMFFIArrayTypeGetName();
+  static constexpr const char *pyClassName = "ArrayType";
+
+  static void bindDerived(ClassTy &typeClass) {
+    typeClass.def_static(
+        "get",
+        [](const PyType &element,
+           DefaultingPyMlirContext context) -> ArrayType {
+          CollectDiagnosticsToStringScope diagnostics(context.get()->get());
+          const MlirType type = mlirTVMFFIArrayTypeGetChecked(
+              mlirLocationUnknownGet(context.get()->get()),
+              static_cast<MlirType>(element));
+          if (mlirTypeIsNull(type)) {
+            throw nb::value_error(diagnostics.takeMessage().c_str());
+          }
+          return ArrayType(context->getRef(), type);
+        },
+        nb::arg("element_type"), nb::kw_only(),
+        nb::arg("context").none() = nb::none());
+    typeClass.def_prop_ro("element_type", [](ArrayType &type) -> nb::object {
+      const MlirType element = mlirTVMFFIArrayTypeGetElementType(type);
+      return nb::cast(PyType(type.getContext(), element).maybeDownCast());
+    });
+  }
+};
+
 struct ResultType final : PyConcreteType<ResultType> {
   using Base::Base;
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsATVMFFIResultType;
   static constexpr GetTypeIDFunctionTy getTypeIdFunction =
       mlirTVMFFIResultTypeGetTypeID;
-  static constexpr const char *pyClassName = "ResultType";
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsATVMFFIResultType;
   static inline const MlirStringRef name = mlirTVMFFIResultTypeGetName();
+  static constexpr const char *pyClassName = "ResultType";
 
   static void bindDerived(ClassTy &typeClass) {
     typeClass.def_static(
@@ -100,13 +131,55 @@ struct ResultType final : PyConcreteType<ResultType> {
   }
 };
 
+struct TupleType final : PyConcreteType<TupleType> {
+  using Base::Base;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirTVMFFITupleTypeGetTypeID;
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsATVMFFITupleType;
+  static inline const MlirStringRef name = mlirTVMFFITupleTypeGetName();
+  static constexpr const char *pyClassName = "TupleType";
+
+  static void bindDerived(ClassTy &typeClass) {
+    typeClass.def_static(
+        "get",
+        [](const std::vector<PyType> &types,
+           DefaultingPyMlirContext context) -> TupleType {
+          std::vector<MlirType> members(types.begin(), types.end());
+          CollectDiagnosticsToStringScope diagnostics(context.get()->get());
+          const MlirType type = mlirTVMFFITupleTypeGetChecked(
+              mlirLocationUnknownGet(context.get()->get()),
+              static_cast<intptr_t>(members.size()), members.data());
+          if (mlirTypeIsNull(type)) {
+            throw nb::value_error(diagnostics.takeMessage().c_str());
+          }
+          return TupleType(context->getRef(), type);
+        },
+        nb::arg("types"), nb::kw_only(),
+        nb::arg("context").none() = nb::none());
+    typeClass.def_static(
+        "isinstance",
+        [](const PyType &type) -> bool { return isaFunction(type); },
+        nb::arg("other_type"));
+    typeClass.def_prop_ro("types", [](TupleType &type) -> nb::tuple {
+      nb::list members;
+      const intptr_t size = mlirTVMFFITupleTypeGetNumTypes(type);
+      for (intptr_t index = 0; index < size; ++index) {
+        members.append(
+            PyType(type.getContext(), mlirTVMFFITupleTypeGetType(type, index))
+                .maybeDownCast());
+      }
+      return nb::tuple(members);
+    });
+  }
+};
+
 struct UnionType final : PyConcreteType<UnionType> {
   using Base::Base;
-  static constexpr IsAFunctionTy isaFunction = mlirTypeIsATVMFFIUnionType;
   static constexpr GetTypeIDFunctionTy getTypeIdFunction =
       mlirTVMFFIUnionTypeGetTypeID;
-  static constexpr const char *pyClassName = "UnionType";
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsATVMFFIUnionType;
   static inline const MlirStringRef name = mlirTVMFFIUnionTypeGetName();
+  static constexpr const char *pyClassName = "UnionType";
 
   static void bindDerived(ClassTy &typeClass) {
     typeClass.def_static(
@@ -150,6 +223,7 @@ NB_MODULE(_tvm_ffi, module) {
   AnyType::bind(module);
   ArrayType::bind(module);
   BoolType::bind(module);
+  CArrayType::bind(module);
   DTypeType::bind(module);
   DeviceType::bind(module);
   ExceptionType::bind(module);
@@ -163,5 +237,6 @@ NB_MODULE(_tvm_ffi, module) {
   SmallStrType::bind(module);
   StrType::bind(module);
   TensorType::bind(module);
+  TupleType::bind(module);
   UnionType::bind(module);
 }

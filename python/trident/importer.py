@@ -26,16 +26,18 @@ from torch.export.graph_signature import (
 from torch.utils import _pytree as pytree
 
 from trident.core import ir
-from trident.core.dialects import arith, builtin, cf, func, gpu, llvm, scf
+from trident.core.dialects import arith, cf, func, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
 from .input import InputPath, InputTable
 from .ir import (
+    array_type,
     binary,
     bind,
     box,
-    checked_result,
+    boxed_type,
     constant,
+    container_create,
     is_binary_operation,
     is_value_in_scope,
     make_result_types,
@@ -43,6 +45,7 @@ from .ir import (
     native_constant,
     native_type,
     pure,
+    tuple_type,
     value_type,
 )
 
@@ -462,9 +465,7 @@ class TridentFxImporter:
             if index == len(types):
                 return pure(values, result_types=result_types)
             with bind(
-                self.build_call(
-                    "ffi.ArrayGetItem", [array, native_constant(index)], types[index]
-                ),
+                self.build_container_get(array, index, types[index]),
                 result_types=result_types,
             ) as operation:
                 tvm_ffi_d.MonadYieldOp(build([*values, *operation.arguments]))
@@ -516,10 +517,8 @@ class TridentFxImporter:
             if not isinstance(imported, ir.Value):
                 return imported[index]
             else:
-                [result] = self.build_call(
-                    "ffi.ArrayGetItem",
-                    [imported, native_constant(index)],
-                    value_type(node.meta["val"]),
+                [result] = self.build_container_get(
+                    imported, index, value_type(node.meta["val"])
                 )
                 return result
         elif isinstance(target, torch._ops.OpOverload):
@@ -660,6 +659,17 @@ class TridentFxImporter:
     def argument_type(self, value: Any) -> ir.Type:
         if isinstance(value, torch.fx.Node):
             value = self.values[value]
+        if isinstance(value, (list, tuple)):
+            types = [
+                tvm_ffi_d.IntType.get()
+                if isinstance(item, torch.dtype)
+                else self.argument_type(item)
+                for item in (
+                    self.values[item] if isinstance(item, torch.fx.Node) else item
+                    for item in value
+                )
+            ]
+            return tuple_type(types) if isinstance(value, tuple) else array_type(types)
         return (
             value.type
             if isinstance(value, ir.Value)
@@ -693,18 +703,13 @@ class TridentFxImporter:
                         tvm_ffi_d.IntType.get(),
                     )
                 elif isinstance(argument, (tuple, list)):
-                    element_types = [
-                        tvm_ffi_d.ResultType.get(tvm_ffi_d.ArrayType.get())
-                    ]
+                    type_ = self.argument_type(argument)
+                    element_types = [tvm_ffi_d.ResultType.get(type_)]
                     with bind(
                         self.build_arguments(argument), result_types=element_types
                     ) as elements:
                         tvm_ffi_d.MonadYieldOp(
-                            self.build_call(
-                                "ffi.Array",
-                                elements.arguments[: len(argument)],
-                                tvm_ffi_d.ArrayType.get(),
-                            )
+                            container_create(elements.arguments[: len(argument)], type_)
                         )
                     current = elements.outputs
                 else:
@@ -722,31 +727,61 @@ class TridentFxImporter:
     def build_call(
         self, name: str, arguments: Sequence[ir.Value], result: ir.Type
     ) -> list[ir.Value]:
-        """Return a checked lookup and invocation as a complete Result."""
+        """Return an asserting invocation wrapped as a successful Result."""
         assert all(is_value_in_scope(value) for value in arguments), (
             "call argument payload is outside its defining block"
         )
-        result_types = [tvm_ffi_d.ResultType.get(result)]
         handle = tvm_ffi_d.FunctionGetGlobalOp(name)
-        pointer = builtin.unrealized_conversion_cast(
-            [llvm.PointerType.get()], [handle.result]
+        call = tvm_ffi_d.FunctionCallOp(
+            result, handle.result, [box(value) for value in arguments]
         )
-        nonnull = llvm.icmp(
-            llvm.ICmpPredicate.ne, pointer, llvm.mlir_zero(llvm.PointerType.get())
-        )
-        ready = arith.andi(handle.success, nonnull)
-        with bind(
-            [checked_result(handle.result, ready)], result_types=result_types
-        ) as lookup:
-            [function] = lookup.arguments
-            call = tvm_ffi_d.FunctionCallOp(
-                result,
-                ir.IntegerType.get_signless(1),
-                function,
-                [box(value) for value in arguments],
+        return pure([call.result])
+
+    def build_container_get(
+        self, container: ir.Value, index: int | ir.Value, target: ir.Type
+    ) -> list[ir.Value]:
+        type_ = container.type
+        if isinstance(type_, tvm_ffi_d.TupleType):
+            assert isinstance(index, int)
+            assert -len(type_.types) <= index < len(type_.types), (
+                "tuple index out of range"
             )
-            tvm_ffi_d.MonadYieldOp([checked_result(call.result, call.success)])
-        return [*lookup.outputs]
+            payload = type_.types[index]
+            values = tvm_ffi_d.TupleUnconstructOp(type_.types, container).elements
+            [result] = pure([values[index]])
+        elif isinstance(type_, tvm_ffi_d.ArrayType):
+            payload = type_.element_type
+            [result] = pure(
+                [
+                    tvm_ffi_d.ArrayGetOp(
+                        container,
+                        native_constant(index) if isinstance(index, int) else index,
+                    ).result
+                ]
+            )
+        else:
+            return self.build_call(
+                "ffi.ArrayGetItem", [container, native_constant(index)], target
+            )
+        if payload == target:
+            return [result]
+        result_types = [tvm_ffi_d.ResultType.get(target)]
+        with bind([result], result_types=result_types) as extracted:
+            [value] = extracted.arguments
+            boxed = boxed_type(target)
+            if value.type != boxed:
+                if isinstance(
+                    boxed, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+                ) and not isinstance(
+                    value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+                ):
+                    value = tvm_ffi_d.upcast(boxed, value)
+                else:
+                    value = tvm_ffi_d.downcast(boxed, value)
+            if target != boxed:
+                value = native(value)
+            tvm_ffi_d.MonadYieldOp(pure([value], result_types=result_types))
+        return [*extracted.outputs]
 
     def build_input(self, table: InputTable, path: InputPath) -> list[ir.Value]:
         """Extract one structural path, caching only complete Results."""
@@ -769,11 +804,7 @@ class TridentFxImporter:
             ) as operation:
                 [array] = operation.arguments
                 tvm_ffi_d.MonadYieldOp(
-                    self.build_call(
-                        "ffi.ArrayGetItem",
-                        [array, native_constant(index)],
-                        node.type,
-                    )
+                    self.build_container_get(array, index, node.type)
                 )
             node.result = [*operation.outputs]
             return node.result

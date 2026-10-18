@@ -34,6 +34,28 @@ class TVMFFI_TensorIndexedMetadataOp<string mnemonic>
   let assemblyFormat = "$tensor `[` $index `]` attr-dict `:` type($tensor)";
 }
 
+def TVMFFI_ArrayCreateOp : TVMFFI_Op<"array.create"> {
+  let arguments = (ins Variadic<AnyTVMFFISemanticType>:$elements);
+  let results = (outs TVMFFI_ArrayType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "`(` $elements `)` attr-dict `:` functional-type($elements, $result)";
+}
+
+def TVMFFI_ArrayGetOp : TVMFFI_Op<"array.get", [
+    TypesMatchWith<"result must match array element type", "container", "result",
+      "::llvm::cast<::trident::tvm_ffi::ArrayType>($_self).getElementType()">
+]> {
+  let arguments = (ins TVMFFI_ArrayType:$container, I64:$index);
+  let assemblyFormat = "$container `[` $index `]` attr-dict `:` type($container) `->` type($result)";
+  let results = (outs AnyTVMFFISemanticType:$result);
+}
+
+def TVMFFI_ArraySizeOp : TVMFFI_Op<"array.size"> {
+  let arguments = (ins TVMFFI_ArrayType:$container);
+  let results = (outs TVMFFI_IntType:$result);
+  let assemblyFormat = "$container attr-dict `:` type($container) `->` type($result)";
+}
+
 def TVMFFI_AsOp : TVMFFI_Op<"as", [Pure]> {
   let summary = "View the payload of a TVM FFI object as a native type";
   let arguments = (ins TVMFFI_ObjectType:$object);
@@ -48,10 +70,9 @@ def TVMFFI_CallOp : TVMFFI_Op<"call", [TVMFFI_ObjectOwnershipOpInterface]> {
                        Variadic<AnyTVMFFIAnyABIType>:$operands,
                        OptionalAttr<DictArrayAttr>:$arg_attrs,
                        OptionalAttr<DictArrayAttr>:$res_attrs);
-  let results = (outs Variadic<AnyTVMFFIAnyABIType> : $results,
-                      I1:$success);
+  let results = (outs AnyTVMFFIAnyABIType:$result);
   let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` "
-                       "functional-type($operands, $results) `,` type($success)";
+                       "functional-type($operands, $result)";
 }
 
 class TVMFFI_ConstantOp<string mnemonic, Type resultType, Attr valueType>
@@ -137,11 +158,11 @@ def TVMFFI_FuncOp : TVMFFI_Op<"func", [
   AffineScope, AutomaticAllocationScope, FunctionOpInterface, IsolatedFromAbove,
   OpAsmOpInterface
 ]> {
-  let summary = "A TVM FFI function with monadic Result returns";
+  let summary = "A TVM FFI function with one monadic Result return";
   let description = [{
     Defines a function that can be called through the TVM FFI interface.
-    Return types must be nonempty monadic Results; use a unit Result for
-    functions with no payload.
+    The function must return exactly one monadic Result. Pack multiple values
+    into a tuple payload and use a None payload for functions with no value.
 
     Example:
 
@@ -179,10 +200,10 @@ def TVMFFI_FuncOp : TVMFFI_Op<"func", [
 def TVMFFI_FunctionCallOp
     : TVMFFI_Op<"FunctionCall", [TVMFFI_ObjectOwnershipOpInterface]> {
   let summary = "Call a TVM FFI function handle";
-  let arguments = (ins TVMFFI_FunctionType:$callee,
+  let arguments = (ins TVMFFI_ObjectType:$callee,
                        Variadic<AnyTVMFFISemanticType>:$arguments);
-  let results = (outs AnyTVMFFISemanticType:$result, I1:$success);
-  let assemblyFormat = "$callee `(` $arguments `)` attr-dict `:` functional-type($arguments, $result) `,` type($success)";
+  let results = (outs AnyTVMFFISemanticType:$result);
+  let assemblyFormat = "$callee `(` $arguments `)` attr-dict `:` functional-type($arguments, $result)";
 }
 
 def TVMFFI_FunctionGetGlobalOp
@@ -191,8 +212,8 @@ def TVMFFI_FunctionGetGlobalOp
         TVMFFI_ObjectOwnershipOpInterface]> {
   let summary = "Get a TVM FFI global function by name";
   let arguments = (ins StrAttr:$name);
-  let results = (outs TVMFFI_FunctionType:$result, I1:$success);
-  let assemblyFormat = "$name attr-dict `:` type($result) `,` type($success)";
+  let results = (outs TVMFFI_ObjectType:$result);
+  let assemblyFormat = "$name attr-dict `:` type($result)";
 }
 
 def TVMFFI_GetOp : TVMFFI_Op<"get", [Pure,
@@ -434,6 +455,26 @@ def TVMFFI_ToOp
   let results = (outs AnyTypeOf<[TVMFFI_BoolType, TVMFFI_FloatType, TVMFFI_IntType]> : $result);
   let hasVerifier = 1;
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
+}
+
+def TVMFFI_TupleConstructOp : TVMFFI_Op<"tuple.construct", [
+    RangedTypesMatchWith<"elements must match the tuple types", "result", "elements",
+      "::llvm::cast<::trident::tvm_ffi::TupleType>($_self).getTypes()">
+]> {
+  let summary = "Pack elements into a semantic tuple";
+  let arguments = (ins Variadic<AnyTVMFFISemanticType>:$elements);
+  let results = (outs TVMFFI_TupleType:$result);
+  let assemblyFormat = "`(` $elements `)` attr-dict `:` functional-type($elements, $result)";
+}
+
+def TVMFFI_TupleUnconstructOp : TVMFFI_Op<"tuple.unconstruct", [
+    RangedTypesMatchWith<"results must match the tuple types", "container", "elements",
+      "::llvm::cast<::trident::tvm_ffi::TupleType>($_self).getTypes()">
+]> {
+  let summary = "Unpack all semantic tuple elements in order";
+  let arguments = (ins TVMFFI_TupleType:$container);
+  let results = (outs Variadic<AnyTVMFFISemanticType>:$elements);
+  let assemblyFormat = "$container attr-dict `:` functional-type($container, $elements)";
 }
 
 def TVMFFI_UpcastOp

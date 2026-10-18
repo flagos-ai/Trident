@@ -5,7 +5,85 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -split-input-file -lower-tvm-ffi-monad -convert-tvm-ffi-to-func | FileCheck %s --check-prefixes=INTERMEDIATE,FUNC
+// RUN: trident-core-opt %s -split-input-file -decompose-tvm-ffi -convert-tvm-ffi-to-func | FileCheck %s --check-prefixes=INTERMEDIATE,FUNC
+
+// TVMFFIToFunc preserves CFG block argument types and forwards values directly.
+// The unified LLVM conversion later converts both the branch and block.
+// INTERMEDIATE-LABEL: func.func @branch_argument(
+// INTERMEDIATE: [[BRANCH_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 7
+// INTERMEDIATE-NEXT: cf.br [[BRANCH_DEST:\^bb[0-9]+]]([[BRANCH_VALUE]] : !tvm_ffi.int)
+// INTERMEDIATE: [[BRANCH_DEST]]([[BRANCH_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
+// INTERMEDIATE: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ANY:[a-zA-Z0-9_]+]] : !tvm_ffi.any -> !tvm_ffi.int
+// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[TYPED]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// INTERMEDIATE: llvm.store %[[BOXED]], %[[SLOT:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
+// INTERMEDIATE: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
+tvm_ffi.func @branch_argument() -> !tvm_ffi.monad.result<!tvm_ffi.int> attributes {emit_tvm_ffi_abi} {
+  %value = tvm_ffi.constant.int 7
+  cf.br ^bb1(%value : !tvm_ffi.int)
+
+^bb1(%arg: !tvm_ffi.int):
+
+  %returned = tvm_ffi.monad.pure %arg : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.int>
+}
+
+// -----
+
+// Both edges of a conditional branch carry their own destination operands.
+// INTERMEDIATE-LABEL: func.func @cond_branch_arguments(
+// INTERMEDIATE: [[COND:%[a-zA-Z0-9_]+]] = arith.constant true
+// INTERMEDIATE-NEXT: [[TRUE_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
+// INTERMEDIATE-NEXT: [[FALSE_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 2
+// INTERMEDIATE-NEXT: cf.cond_br [[COND]] weights([90, 10]), [[TRUE_DEST:\^bb[0-9]+]]([[TRUE_VALUE]] : !tvm_ffi.int), [[FALSE_DEST:\^bb[0-9]+]]([[FALSE_VALUE]] : !tvm_ffi.int)
+// INTERMEDIATE: [[TRUE_DEST]]([[TRUE_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
+// INTERMEDIATE: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ANY:[a-zA-Z0-9_]+]] : !tvm_ffi.any -> !tvm_ffi.int
+// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[TYPED]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// INTERMEDIATE: llvm.store %[[BOXED]], %[[SLOT:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
+// INTERMEDIATE: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
+// INTERMEDIATE: [[FALSE_DEST]]([[FALSE_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
+// INTERMEDIATE: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ANY:[a-zA-Z0-9_]+]] : !tvm_ffi.any -> !tvm_ffi.int
+// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[TYPED]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// INTERMEDIATE: llvm.store %[[BOXED]], %[[SLOT:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
+// INTERMEDIATE: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
+tvm_ffi.func @cond_branch_arguments() -> !tvm_ffi.monad.result<!tvm_ffi.int> attributes {emit_tvm_ffi_abi} {
+  %cond = arith.constant true
+  %true_value = tvm_ffi.constant.int 1
+  %false_value = tvm_ffi.constant.int 2
+  cf.cond_br %cond, ^true(%true_value : !tvm_ffi.int),
+                         ^false(%false_value : !tvm_ffi.int) {branch_weights = array<i32: 90, 10>}
+
+^true(%true_arg: !tvm_ffi.int):
+
+  %returned = tvm_ffi.monad.pure %true_arg : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.int>
+^false(%false_arg: !tvm_ffi.int):
+
+  %return_pure_1 = tvm_ffi.monad.pure %false_arg : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+  tvm_ffi.return %return_pure_1 : !tvm_ffi.monad.result<!tvm_ffi.int>
+}
+
+// -----
+
+// Values defined in a textually later block must be remapped before an earlier
+// cleanup block is cloned.
+// INTERMEDIATE-LABEL: func.func @forward_block_use(
+// INTERMEDIATE: tvm_ffi.ObjectDecRef [[ARRAY:%[a-zA-Z0-9_]+]] : !tvm_ffi.c.array
+// INTERMEDIATE: [[ARRAY:%[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall
+tvm_ffi.func @forward_block_use() -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  cf.br ^definition
+^cleanup:
+  tvm_ffi.ObjectDecRef %array : !tvm_ffi.c.array
+  %unit_none = tvm_ffi.constant.none
+  %unit = tvm_ffi.monad.pure %unit_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %unit : !tvm_ffi.monad.result<!tvm_ffi.none>
+^definition:
+  %one = tvm_ffi.constant.int 1
+  %function = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
+  %array = tvm_ffi.FunctionCall %function(%one) : (!tvm_ffi.int) -> !tvm_ffi.c.array
+  cf.br ^cleanup
+}
+
+// -----
 
 // Guard failures are represented as nested SCF regions.  The final pipeline
 // lowers those regions to CFG before converting to LLVM.
@@ -52,81 +130,6 @@ tvm_ffi.func @guarded(%arg0: !tvm_ffi.int, %arg1: !tvm_ffi.bool) -> !tvm_ffi.mon
 
 // -----
 
-// TVMFFIToFunc preserves CFG block argument types and forwards values directly.
-// The unified LLVM conversion later converts both the branch and block.
-// INTERMEDIATE-LABEL: func.func @branch_argument(
-// INTERMEDIATE: [[BRANCH_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 7
-// INTERMEDIATE-NEXT: cf.br [[BRANCH_DEST:\^bb[0-9]+]]([[BRANCH_VALUE]] : !tvm_ffi.int)
-// INTERMEDIATE: [[BRANCH_DEST]]([[BRANCH_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[BRANCH_BLOCK_ARG]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE: llvm.store %[[BOXED]], %[[SLOT:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
-// INTERMEDIATE: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
-tvm_ffi.func @branch_argument() -> !tvm_ffi.monad.result<!tvm_ffi.int> attributes {emit_tvm_ffi_abi} {
-  %value = tvm_ffi.constant.int 7
-  cf.br ^bb1(%value : !tvm_ffi.int)
-
-^bb1(%arg: !tvm_ffi.int):
-
-  %returned = tvm_ffi.monad.pure %arg : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
-  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.int>
-}
-
-// -----
-
-// Both edges of a conditional branch carry their own destination operands.
-// INTERMEDIATE-LABEL: func.func @cond_branch_arguments(
-// INTERMEDIATE: [[COND:%[a-zA-Z0-9_]+]] = arith.constant true
-// INTERMEDIATE-NEXT: [[TRUE_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
-// INTERMEDIATE-NEXT: [[FALSE_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 2
-// INTERMEDIATE-NEXT: cf.cond_br [[COND]] weights([90, 10]), [[TRUE_DEST:\^bb[0-9]+]]([[TRUE_VALUE]] : !tvm_ffi.int), [[FALSE_DEST:\^bb[0-9]+]]([[FALSE_VALUE]] : !tvm_ffi.int)
-// INTERMEDIATE: [[TRUE_DEST]]([[TRUE_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[TRUE_BLOCK_ARG]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE: llvm.store %[[BOXED]], %[[SLOT:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
-// INTERMEDIATE: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
-// INTERMEDIATE: [[FALSE_DEST]]([[FALSE_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[FALSE_BLOCK_ARG]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE: llvm.store %[[BOXED]], %[[SLOT:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
-// INTERMEDIATE: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
-tvm_ffi.func @cond_branch_arguments() -> !tvm_ffi.monad.result<!tvm_ffi.int> attributes {emit_tvm_ffi_abi} {
-  %cond = arith.constant true
-  %true_value = tvm_ffi.constant.int 1
-  %false_value = tvm_ffi.constant.int 2
-  cf.cond_br %cond, ^true(%true_value : !tvm_ffi.int),
-                         ^false(%false_value : !tvm_ffi.int) {branch_weights = array<i32: 90, 10>}
-
-^true(%true_arg: !tvm_ffi.int):
-
-  %returned = tvm_ffi.monad.pure %true_arg : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
-  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.int>
-^false(%false_arg: !tvm_ffi.int):
-
-  %return_pure_1 = tvm_ffi.monad.pure %false_arg : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
-  tvm_ffi.return %return_pure_1 : !tvm_ffi.monad.result<!tvm_ffi.int>
-}
-
-// -----
-
-// Values defined in a textually later block must be remapped before an earlier
-// cleanup block is cloned.
-// INTERMEDIATE-LABEL: func.func @forward_block_use(
-// INTERMEDIATE: tvm_ffi.ObjectDecRef [[ARRAY:%[a-zA-Z0-9_]+]] : !tvm_ffi.array
-// INTERMEDIATE: [[ARRAY:%[a-zA-Z0-9_]+]], [[CALL_SUCCESS:%[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall
-tvm_ffi.func @forward_block_use() -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  cf.br ^definition
-^cleanup:
-  tvm_ffi.ObjectDecRef %array : !tvm_ffi.array
-  %unit_none = tvm_ffi.constant.none
-  %unit = tvm_ffi.monad.pure %unit_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
-  tvm_ffi.return %unit : !tvm_ffi.monad.result<!tvm_ffi.none>
-^definition:
-  %one = tvm_ffi.constant.int 1
-  %function, %get_success = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.function, i1
-  %array, %call_success = tvm_ffi.FunctionCall %function(%one) : (!tvm_ffi.int) -> !tvm_ffi.array, i1
-  cf.br ^cleanup
-}
-
-// -----
-
 // INTERMEDIATE-LABEL: func.func @make_int(
 // INTERMEDIATE: return %[[SCALAR_STATUS:[a-zA-Z0-9_]+]] : i32
 // INTERMEDIATE-LABEL: func.func @__tvm_ffi_make_int(
@@ -143,33 +146,13 @@ tvm_ffi.func @make_int() -> !tvm_ffi.monad.result<!tvm_ffi.int> attributes {emit
 
 // -----
 
-// INTERMEDIATE-LABEL: func.func @multi_return_three_tensors(
-// INTERMEDIATE-SAME: %[[X:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Y:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Z:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
-// INTERMEDIATE: %[[BOX_X:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[X]] : !tvm_ffi.tensor to !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE: llvm.store %[[BOX_X]], %[[SLOT_X:[a-zA-Z0-9_]+]]
-// INTERMEDIATE: %[[BOX_Y:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[Y]] : !tvm_ffi.tensor to !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE: llvm.store %[[BOX_Y]], %[[SLOT_Y:[a-zA-Z0-9_]+]]
-// INTERMEDIATE: %[[BOX_Z:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[Z]] : !tvm_ffi.tensor to !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE: llvm.store %[[BOX_Z]], %[[SLOT_Z:[a-zA-Z0-9_]+]]
-// INTERMEDIATE-LABEL: func.func @__tvm_ffi_multi_return_three_tensors(
-// INTERMEDIATE: func.call @multi_return_three_tensors
-// Multi-results are packed into an FFI Array and stored into the result slot.
-// The input tensors are borrowed from the caller, so only the temporary
-// ffi.Array function handle is released here; no element DecRef is emitted.
-tvm_ffi.func @multi_return_three_tensors(%arg0: !tvm_ffi.tensor, %arg1: !tvm_ffi.tensor, %arg2: !tvm_ffi.tensor) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>) attributes {emit_tvm_ffi_abi} {
-
-  %returned:3 = tvm_ffi.monad.pure %arg0, %arg1, %arg2 : (!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>)
-  tvm_ffi.return %returned#0, %returned#1, %returned#2 : !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>
-}
-
-// -----
-
 // A wrapper is opt-in. Without the attribute, only the original function
 // converted to func.func is generated.
 // FUNC-LABEL: func.func @no_wrapper
 // FUNC-NOT: func.func @__tvm_ffi_no_wrapper
 // FUNC: [[NO_WRAPPER_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 3
-// FUNC: %[[BOX:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[NO_WRAPPER_VALUE]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// FUNC: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ANY:[a-zA-Z0-9_]+]] : !tvm_ffi.any -> !tvm_ffi.int
+// FUNC: %[[BOX:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[TYPED]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
 // FUNC: llvm.store %[[BOX]], %[[SLOT:[a-zA-Z0-9_]+]]
 // FUNC: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 tvm_ffi.func @no_wrapper() -> !tvm_ffi.monad.result<!tvm_ffi.int> {
@@ -191,7 +174,8 @@ tvm_ffi.func @no_wrapper() -> !tvm_ffi.monad.result<!tvm_ffi.int> {
 // INTERMEDIATE-NEXT: 1: [[SWITCH_MERGE]]([[CASE_VALUE]] : !tvm_ffi.int)
 // INTERMEDIATE-NEXT: ]
 // INTERMEDIATE: [[SWITCH_MERGE]]([[SWITCH_RESULT:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[SWITCH_RESULT]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// INTERMEDIATE: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ANY:[a-zA-Z0-9_]+]] : !tvm_ffi.any -> !tvm_ffi.int
+// INTERMEDIATE: %[[BOXED:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[TYPED]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
 // INTERMEDIATE: llvm.store %[[BOXED]], %[[SLOT:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // INTERMEDIATE: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 tvm_ffi.func @switch_argument(
@@ -208,4 +192,26 @@ tvm_ffi.func @switch_argument(
 
   %returned = tvm_ffi.monad.pure %value : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
   tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.int>
+}
+
+// -----
+
+// INTERMEDIATE-LABEL: func.func @tuple_return(
+// INTERMEDIATE-SAME: %[[X:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Y:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Z:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
+// INTERMEDIATE: %[[TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE:[a-zA-Z0-9_]+]](%[[X]], %[[Y]], %[[Z]])
+// INTERMEDIATE: %[[PURE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[TUPLE]]
+// INTERMEDIATE: %[[OK:[a-zA-Z0-9_]+]], %[[ANY:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[PURE]]
+// INTERMEDIATE: scf.if %[[OK]]
+// INTERMEDIATE: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ANY]] : !tvm_ffi.any -> !tvm_ffi.c.array
+// INTERMEDIATE: %[[BOX:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[TYPED]] : !tvm_ffi.c.array to !llvm.struct<(i32, i32, i64)>
+// INTERMEDIATE: llvm.store %[[BOX]], %[[SLOT]]
+// INTERMEDIATE-LABEL: func.func @__tvm_ffi_tuple_return(
+// INTERMEDIATE-SAME: %[[CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[NARGS:[a-zA-Z0-9_]+]]: i32, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr
+// INTERMEDIATE: func.call @tuple_return(%[[X:[a-zA-Z0-9_]+]], %[[Y:[a-zA-Z0-9_]+]], %[[Z:[a-zA-Z0-9_]+]], %[[SLOT:[a-zA-Z0-9_]+]])
+// INTERMEDIATE: %[[PACKED:[a-zA-Z0-9_]+]] = llvm.load %[[SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
+// INTERMEDIATE-NEXT: llvm.store %[[PACKED]], %[[OUT]]
+tvm_ffi.func @tuple_return(%arg0: !tvm_ffi.tensor, %arg1: !tvm_ffi.tensor, %arg2: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>> attributes {emit_tvm_ffi_abi} {
+  %tuple = tvm_ffi.tuple.construct(%arg0, %arg1, %arg2) : (!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor) -> !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>
+  %returned = tvm_ffi.monad.pure %tuple : (!tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>>
 }

@@ -27,7 +27,8 @@
 // CHECK: llvm.store %[[DIMS]], %[[DIMS_SLOT]]
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[ARGS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RET_SLOT:[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: %[[RET:[a-zA-Z0-9_]+]] = llvm.load %[[RET_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = llvm.select %[[SUCCESS:[a-zA-Z0-9_]+]], %[[RET]], %[[NONE:[a-zA-Z0-9_]+]]
+// CHECK: llvm.store %[[PAYLOAD]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 // CHECK-LABEL: llvm.func @__tvm_ffi_all_dims(
 // CHECK-SAME: %[[WRAPPER_CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAPPER_ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAPPER_NARGS:[a-zA-Z0-9_]+]]: i32, %[[WRAPPER_RESULT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 {
@@ -39,15 +40,11 @@
 tvm_ffi.func @all_dims(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> attributes {emit_tvm_ffi_abi} {
   %int1 = tvm_ffi.constant.int 1
   %int0 = tvm_ffi.constant.int 0
-  %call_dims_handle, %call_dims_lookup = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.function, i1
-  cf.assert %call_dims_lookup, "lookup failed"
-  %dims, %call_dims_status = tvm_ffi.FunctionCall %call_dims_handle(%int1, %int0) : (!tvm_ffi.int, !tvm_ffi.int) -> !tvm_ffi.array, i1
-  cf.assert %call_dims_status, "call failed"
+  %call_dims_handle = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
+  %dims = tvm_ffi.FunctionCall %call_dims_handle(%int1, %int0) : (!tvm_ffi.int, !tvm_ffi.int) -> !tvm_ffi.c.array
   %false = tvm_ffi.constant.bool false
-  %call_result_handle, %call_result_lookup = tvm_ffi.FunctionGetGlobal "trident.aten.all.dims" : !tvm_ffi.function, i1
-  cf.assert %call_result_lookup, "lookup failed"
-  %result, %call_result_status = tvm_ffi.FunctionCall %call_result_handle(%arg0, %dims, %false) : (!tvm_ffi.tensor, !tvm_ffi.array, !tvm_ffi.bool) -> !tvm_ffi.tensor, i1
-  cf.assert %call_result_status, "call failed"
+  %call_result_handle = tvm_ffi.FunctionGetGlobal "trident.aten.all.dims" : !tvm_ffi.object
+  %result = tvm_ffi.FunctionCall %call_result_handle(%arg0, %dims, %false) : (!tvm_ffi.tensor, !tvm_ffi.c.array, !tvm_ffi.bool) -> !tvm_ffi.tensor
 
   %returned = tvm_ffi.monad.pure %result : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
   tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.tensor>

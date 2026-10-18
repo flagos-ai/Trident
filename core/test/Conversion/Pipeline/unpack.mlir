@@ -4,8 +4,10 @@
 // RUN: trident-core-opt %s -trident-lowering-pipeline | FileCheck %s
 
 // CHECK-LABEL: llvm.func @unpack(
-// CHECK-SAME: %[[PAYLOAD:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[SUCCESS:[a-zA-Z0-9_]+]]: i1,
-// CHECK: llvm.cond_br %[[SUCCESS]],
+// CHECK-SAME: %[[RESULT:[a-zA-Z0-9_]+]]: !llvm.struct<(struct<(i32, i32, i64)>, i1)>,
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[RESULT]][1]
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[RESULT]][0]
+// CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = llvm.select %[[SUCCESS]], %[[PAYLOAD]], %[[NONE:[a-zA-Z0-9_]+]]
 // CHECK: llvm.store
 // CHECK-NOT: tvm_ffi.monad.unpack
 // CHECK: llvm.return

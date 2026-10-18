@@ -132,12 +132,11 @@ public:
           "GuardMatch");
       mlir::Value const failureResult =
           tvm_ffi::UpcastOp::create(rewriter, loc, resultType, exception);
-      mlir::Value const ready =
-          mlir::arith::ConstantIntOp::create(rewriter, loc, 1, 1);
-      mlir::Value const result = mlir::UnrealizedConversionCastOp::create(
-                                     rewriter, loc, functionType.getResult(0),
-                                     mlir::ValueRange{failureResult, ready})
-                                     .getResult(0);
+      mlir::Value const result =
+          tvm_ffi::MonadPureOp::create(
+              rewriter, loc, mlir::TypeRange{functionType.getResult(0)},
+              mlir::ValueRange{failureResult})
+              .getResult(0);
       tvm_ffi::ReturnOp::create(rewriter, loc, result);
       rewriter.setInsertionPoint(op);
     }

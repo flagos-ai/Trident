@@ -12,8 +12,6 @@
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/OwnershipDeallocation.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
@@ -39,17 +37,15 @@ class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
   void runOnOperation() final {
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
-    // Inline Results before expanding continuations, lower structured regions
-    // before GPU failure exits, then deallocate semantic objects before ABI
-    // and LLVM conversion.
+    // Inline helpers and expand continuations before GPU failure exits.
+    // Preserve semantic Results until LLVM conversion.
     pm.addPass(mlir::createInlinerPass());
     pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(tvm_ffi::createDecomposeTVMFFI());
-    pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
     pm.addPass(mlir::createSCFToControlFlowPass());
     pm.addPass(createConvertTVMFFIToGPU());
     pm.addPass(createFinalizeTVMFFI());
-    pm.addPass(tvm_ffi::createOwnershipDeallocation());
+    // TODO: Restore ownership deallocation after it supports semantic Results.
     pm.addPass(createConvertTVMFFIToFunc());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());

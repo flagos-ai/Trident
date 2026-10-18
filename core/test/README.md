@@ -22,12 +22,10 @@ Test directories mirror their owning implementation directories under `core/lib`
 `Dialect/TVMFFI/Transforms/` covers `decompose-tvm-ffi`, which expands
 binds throughout the module into unpack and SCF branches while retaining Result
 types.
-The `lower-tvm-ffi-monad-` tests in the same Transforms directory cover
-`lower-tvm-ffi-monad`, which lowers
-decomposed Results to payloads and success bits, including SCF/CFG structural
-type conversions and return materializations.
-Tests consuming binds run decomposition before conversion; the Result fixtures
-cover payload/status expansion, failure and unsupported-op diagnostics.
+`Conversion/TVMFFIToLLVM/result.mlir` covers lowering Results to single LLVM
+structs, construction, unpacking, failures, function boundaries and CFG values.
+Both the dedicated conversion pass and the generic ConvertToLLVM interface
+share this implementation. Tests consuming binds run decomposition first.
 `Conversion/Pipeline/checked-continuation.mlir` covers their integration with
 checked calls and the full lowering pipeline.
 
@@ -52,12 +50,16 @@ memory formats and view aliases are checked through the public Python JIT;
 they do not each need a copy of the same ABI fixture. Dimension arrays,
 semantic copy, tensor literals and control flow retain their own integration
 regressions. Ownership edge transfers and ABI zero initialization remain
-explicit pass-local contracts. Monadic Result expansion, checked returns and
-success-only return retains have focused conversion and ownership regressions.
+explicit pass-local contracts. Result conversion and checked returns have focused conversion regressions.
+Ownership deallocation is temporarily omitted from the default pipeline.
+Legacy pass-local ownership cases remain; semantic Result ownership, including
+success-only return retains and unpack ownership, must regain coverage when
+ownership analysis is refactored. CUDA leak checks are not an acceptance
+criterion during this transition.
 
 Python tests never load these files as executable fixtures. Lit regressions
 can be minimized or renamed independently of Python test setup.
 
-TVM FFI functions declare Result signatures and return matching Results through
-`tvm_ffi.return`. Return coverage includes unit and mixed Results, output-slot
-status gating, packed payloads, and conditional ownership transfer.
+TVM FFI functions declare exactly one Result and return that Result through
+`tvm_ffi.return`. Return coverage includes None and tuple payloads, output-slot
+status gating. Conditional Result ownership transfer coverage is deferred.

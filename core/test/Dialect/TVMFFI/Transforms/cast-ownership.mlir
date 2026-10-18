@@ -4,16 +4,16 @@
 // RUN: trident-core-opt %s --ownership-deallocation --verify-each | FileCheck %s
 
 // CHECK-LABEL: func.func @array(
-// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.array
+// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array
 // CHECK: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[INPUT]]
 // CHECK: %[[NARROW:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[WIDE]]
-// CHECK: tvm_ffi.ObjectIncRef %[[NARROW]] : !tvm_ffi.array
+// CHECK: tvm_ffi.ObjectIncRef %[[NARROW]] : !tvm_ffi.c.array
 // CHECK-NOT: tvm_ffi.ObjectDecRef
 // CHECK: return %[[NARROW]]
-func.func @array(%input: !tvm_ffi.array) -> !tvm_ffi.array {
-  %wide = tvm_ffi.upcast %input : !tvm_ffi.array -> !tvm_ffi.any
-  %narrow = tvm_ffi.downcast %wide : !tvm_ffi.any -> !tvm_ffi.array
-  return %narrow : !tvm_ffi.array
+func.func @array(%input: !tvm_ffi.c.array) -> !tvm_ffi.c.array {
+  %wide = tvm_ffi.upcast %input : !tvm_ffi.c.array -> !tvm_ffi.any
+  %narrow = tvm_ffi.downcast %wide : !tvm_ffi.any -> !tvm_ffi.c.array
+  return %narrow : !tvm_ffi.c.array
 }
 
 // CHECK-LABEL: func.func @exception(
