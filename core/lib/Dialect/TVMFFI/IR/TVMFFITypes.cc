@@ -23,12 +23,12 @@
 
 namespace trident::tvm_ffi {
 
-mlir::Type ArrayType::getNativeType() const {
-  return ObjectType::get(getContext());
-}
-
 mlir::Type BoolType::getNativeType() const {
   return mlir::IntegerType::get(getContext(), 1);
+}
+
+mlir::Type CArrayType::getNativeType() const {
+  return ObjectType::get(getContext());
 }
 
 mlir::Value DTypeType::build(mlir::OpBuilder &builder, mlir::Location loc,

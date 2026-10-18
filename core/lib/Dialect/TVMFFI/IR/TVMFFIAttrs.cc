@@ -15,7 +15,6 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/SmallVectorExtras.h>
 #include <llvm/ADT/TypeSwitch.h>
-#include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
@@ -45,30 +44,10 @@ mlir::Value buildConstantValue(mlir::OpBuilder &builder, mlir::Location loc,
               return buildConstantValue(builder, loc, element);
             });
         tvm_ffi::FunctionGetGlobalOp handle =
-            tvm_ffi::FunctionGetGlobalOp::create(
-                builder, loc, tvm_ffi::FunctionType::get(builder.getContext()),
-                builder.getI1Type(), "ffi.Array");
-        mlir::cf::AssertOp::create(
-            builder, loc, handle.getSuccess(),
-            "TVMFFIFunctionGetGlobal failed for ffi.Array");
-        mlir::Type const pointerType =
-            mlir::LLVM::LLVMPointerType::get(builder.getContext());
-        mlir::Value const pointer =
-            mlir::UnrealizedConversionCastOp::create(builder, loc, pointerType,
-                                                     handle.getResult())
-                .getResult(0);
-        mlir::Value const null =
-            mlir::LLVM::ZeroOp::create(builder, loc, pointerType);
-        mlir::Value const nonNull = mlir::LLVM::ICmpOp::create(
-            builder, loc, mlir::LLVM::ICmpPredicate::ne, pointer, null);
-        mlir::cf::AssertOp::create(
-            builder, loc, nonNull,
-            "TVMFFIFunctionGetGlobal returned null for ffi.Array");
+            tvm_ffi::FunctionGetGlobalOp::create(builder, loc, "ffi.Array");
         tvm_ffi::FunctionCallOp call = tvm_ffi::FunctionCallOp::create(
-            builder, loc, tvm_ffi::ArrayType::get(builder.getContext()),
-            builder.getI1Type(), handle.getResult(), elements);
-        mlir::cf::AssertOp::create(builder, loc, call.getSuccess(),
-                                   "TVMFFIFunctionCall failed for ffi.Array");
+            builder, loc, tvm_ffi::CArrayType::get(builder.getContext()),
+            handle.getResult(), elements);
         return call.getResult();
       })
       .Case<mlir::FloatAttr>([&](mlir::FloatAttr floating) -> mlir::Value {
@@ -90,7 +69,7 @@ mlir::Type getConstantValueType(mlir::Attribute value,
                                 mlir::MLIRContext *context) {
   return llvm::TypeSwitch<mlir::Attribute, mlir::Type>(value)
       .Case<mlir::ArrayAttr>([&](mlir::ArrayAttr) -> mlir::Type {
-        return tvm_ffi::ArrayType::get(context);
+        return tvm_ffi::CArrayType::get(context);
       })
       .Case<mlir::FloatAttr>([&](mlir::FloatAttr) -> mlir::Type {
         return tvm_ffi::FloatType::get(context);

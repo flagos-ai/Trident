@@ -22,7 +22,7 @@ def ConvertTVMFFIToFunc : Pass<"convert-tvm-ffi-to-func", "mlir::ModuleOp"> {
   let dependentDialects = [
     "mlir::LLVM::LLVMDialect", "mlir::arith::ArithDialect",
     "mlir::cf::ControlFlowDialect", "mlir::func::FuncDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::scf::SCFDialect", "trident::tvm_ffi::TVMFFIDialect"
   ];
 }
 

@@ -5,131 +5,42 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -split-input-file -lower-tvm-ffi-monad -ownership-deallocation | FileCheck %s
+// RUN: trident-core-opt %s -split-input-file -ownership-deallocation | FileCheck %s
 
 module {
   func.func private @make_tensor() -> !tvm_ffi.tensor
 
-  // Each conditional edge retains exactly the value needed by that path and
-  // releases the owned value created in the entry block.
-  // CHECK-LABEL: func.func @diamond(
-  // CHECK-SAME: %[[COND:[a-zA-Z0-9_]+]]: i1, %[[BORROWED:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
-  // CHECK: %[[OWNED:[a-zA-Z0-9_]+]] = call @make_tensor() : () -> !tvm_ffi.tensor
-  // CHECK-NEXT: cf.cond_br %[[COND]], [[OWNED_EDGE:\^bb[0-9]+]], [[BORROWED_EDGE:\^bb[0-9]+]]
-  // CHECK: [[OWNED_EDGE]]:
-  // CHECK: tvm_ffi.ObjectIncRef %[[OWNED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OWNED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[OWNED_PATH:\^bb[0-9]+]]
-  // CHECK: [[OWNED_PATH]]:
-  // CHECK-NEXT: cf.br [[OWNED_TRANSFER:\^bb[0-9]+]](%[[OWNED]] : !tvm_ffi.tensor)
-  // CHECK: [[BORROWED_EDGE]]:
-  // CHECK: tvm_ffi.ObjectIncRef %[[BORROWED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OWNED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[BORROWED_PATH:\^bb[0-9]+]]
-  // CHECK: [[BORROWED_PATH]]:
-  // CHECK-NEXT: cf.br [[BORROWED_TRANSFER:\^bb[0-9]+]](%[[BORROWED]] : !tvm_ffi.tensor)
-  // CHECK: [[OWNED_TRANSFER]](%[[OWNED_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[OWNED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OWNED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[MERGE:\^bb[0-9]+]](%[[OWNED_ARG]] : !tvm_ffi.tensor)
-  // CHECK: [[BORROWED_TRANSFER]](%[[BORROWED_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[BORROWED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[BORROWED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[MERGE]](%[[BORROWED_ARG]] : !tvm_ffi.tensor)
-  // CHECK: [[MERGE]](%[[RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[RESULT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: return %[[RESULT]] : !tvm_ffi.tensor
-  func.func @diamond(%cond: i1, %borrowed: !tvm_ffi.tensor)
-      -> !tvm_ffi.tensor {
-    %owned = func.call @make_tensor() : () -> !tvm_ffi.tensor
-    cf.cond_br %cond, ^owned_path, ^borrowed_path
-
-  ^owned_path:
-    cf.br ^merge(%owned : !tvm_ffi.tensor)
-
-  ^borrowed_path:
-    cf.br ^merge(%borrowed : !tvm_ffi.tensor)
-
-  ^merge(%result: !tvm_ffi.tensor):
-    return %result : !tvm_ffi.tensor
+  // A borrowed function block argument can be called without an ownership
+  // credit or cleanup.
+  // CHECK-LABEL: func.func @borrowed_function_argument(
+  // CHECK-SAME: %[[FUNCTION:[a-zA-Z0-9_]+]]: !tvm_ffi.object)
+  // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[FUNCTION]]() : () -> !tvm_ffi.none
+  // CHECK-NEXT: return
+  func.func @borrowed_function_argument(%function: !tvm_ffi.object) {
+    %result = tvm_ffi.FunctionCall %function()
+        : () -> !tvm_ffi.none
+    return
   }
 
-  // A backedge follows the same edge-local transfer protocol as a forward
-  // edge, so every loop iteration has one incoming and one outgoing credit.
-  // CHECK-LABEL: func.func @loop(
-  // CHECK-SAME: %[[LOOP_COND:[a-zA-Z0-9_]+]]: i1, %[[LOOP_INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
-  // CHECK-NEXT: cf.br [[ENTRY_EDGE:\^bb[0-9]+]](%[[LOOP_INPUT]] : !tvm_ffi.tensor)
-  // CHECK: [[ENTRY_EDGE]](%[[ENTRY_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[LOOP_INPUT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[HEADER:\^bb[0-9]+]](%[[ENTRY_ARG]] : !tvm_ffi.tensor)
-  // CHECK: [[BACKEDGE:\^bb[0-9]+]](%[[BACK_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[ITER:[a-zA-Z0-9_]+]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[ITER]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[HEADER]](%[[BACK_ARG]] : !tvm_ffi.tensor)
-  // CHECK: [[HEADER]](%[[ITER]]: !tvm_ffi.tensor):
-  // CHECK-NEXT: cf.cond_br %[[LOOP_COND]], [[BACKEDGE]](%[[ITER]] : !tvm_ffi.tensor), [[EXIT_EDGE:\^bb[0-9]+]](%[[ITER]] : !tvm_ffi.tensor)
-  // CHECK: [[EXIT_EDGE]](%[[EXIT_VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[ITER]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[ITER]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[EXIT:\^bb[0-9]+]](%[[EXIT_VALUE]] : !tvm_ffi.tensor)
-  // CHECK: [[EXIT]](%[[RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[RESULT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: return %[[RESULT]] : !tvm_ffi.tensor
-  func.func @loop(%cond: i1, %input: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
-    cf.br ^header(%input : !tvm_ffi.tensor)
-
-  ^header(%value: !tvm_ffi.tensor):
-    cf.cond_br %cond, ^header(%value : !tvm_ffi.tensor),
-                         ^exit(%value : !tvm_ffi.tensor)
-
-  ^exit(%result: !tvm_ffi.tensor):
-    return %result : !tvm_ffi.tensor
-  }
-
-  // Forwarding an object and keeping its original SSA value live represent
-  // two ownership credits, even when both values alias the same object.
-  // CHECK-LABEL: func.func @forwarded_and_live_through(
-  // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
-  // CHECK-NEXT: cf.br [[ENTRY_EDGE:\^bb[0-9]+]](%[[INPUT]] : !tvm_ffi.tensor)
-  // CHECK: [[ENTRY_EDGE]](%[[FORWARDED:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
-  // CHECK: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: cf.br [[NEXT:\^bb[0-9]+]](%[[FORWARDED]] : !tvm_ffi.tensor)
-  // CHECK: [[NEXT]](%[[RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[INPUT]] : !tvm_ffi.tensor
-  // CHECK-NEXT: return %[[INPUT]] : !tvm_ffi.tensor
-  func.func @forwarded_and_live_through(%input: !tvm_ffi.tensor)
-      -> !tvm_ffi.tensor {
-    cf.br ^next(%input : !tvm_ffi.tensor)
-
-  ^next(%forwarded: !tvm_ffi.tensor):
-    return %input : !tvm_ffi.tensor
-  }
-
-  // Generic multi-successor BranchOpInterface operations use one trampoline
-  // per successor, including multiple edges that target the same merge block.
-  // CHECK-LABEL: func.func @switch(
-  // CHECK-SAME: %[[SELECTOR:[a-zA-Z0-9_]+]]: i32, %[[DEFAULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[CASE:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
-  // CHECK: cf.switch %[[SELECTOR]] : i32, [
-  // CHECK: default: [[DEFAULT_EDGE:\^bb[0-9]+]](%[[DEFAULT]] : !tvm_ffi.tensor),
-  // CHECK: 1: [[CASE_EDGE:\^bb[0-9]+]](%[[CASE]] : !tvm_ffi.tensor)
-  // CHECK: [[DEFAULT_EDGE]](%[[DEFAULT_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[DEFAULT]] : !tvm_ffi.tensor
-  // CHECK: [[CASE_EDGE]](%[[CASE_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-  // CHECK: tvm_ffi.ObjectIncRef %[[CASE]] : !tvm_ffi.tensor
-  func.func @switch(%selector: i32, %default: !tvm_ffi.tensor,
-                    %case: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
-    cf.switch %selector : i32, [
-      default: ^merge(%default : !tvm_ffi.tensor),
-      1: ^merge(%case : !tvm_ffi.tensor)
-    ]
-
-  ^merge(%result: !tvm_ffi.tensor):
-    return %result : !tvm_ffi.tensor
+  // FunctionCall borrows its global-function handle. The owned handle returned
+  // by FunctionGetGlobal remains valid for repeated calls. Native Object
+  // handles are outside the legacy ownership pass contract.
+  // CHECK-LABEL: func.func @borrowed_function_handle()
+  // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "test.make_tensor" : !tvm_ffi.object
+  // CHECK-NEXT: %[[DISCARDED:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]]() : () -> !tvm_ffi.tensor
+  // CHECK-NEXT: %[[RETURNED:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]]() : () -> !tvm_ffi.tensor
+  // CHECK: tvm_ffi.ObjectIncRef %[[RETURNED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[DISCARDED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RETURNED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: return %[[RETURNED]] : !tvm_ffi.tensor
+  func.func @borrowed_function_handle() -> !tvm_ffi.tensor {
+    %function = tvm_ffi.FunctionGetGlobal "test.make_tensor"
+        : !tvm_ffi.object
+    %discarded = tvm_ffi.FunctionCall %function()
+        : () -> !tvm_ffi.tensor
+    %returned = tvm_ffi.FunctionCall %function()
+        : () -> !tvm_ffi.tensor
+    return %returned : !tvm_ffi.tensor
   }
 
   // Alias casts do not create a new credit. Each branch transfers its owned
@@ -178,6 +89,51 @@ module {
     return %result : !tvm_ffi.any
   }
 
+  // Each conditional edge retains exactly the value needed by that path and
+  // releases the owned value created in the entry block.
+  // CHECK-LABEL: func.func @diamond(
+  // CHECK-SAME: %[[COND:[a-zA-Z0-9_]+]]: i1, %[[BORROWED:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
+  // CHECK: %[[OWNED:[a-zA-Z0-9_]+]] = call @make_tensor() : () -> !tvm_ffi.tensor
+  // CHECK-NEXT: cf.cond_br %[[COND]], [[OWNED_EDGE:\^bb[0-9]+]], [[BORROWED_EDGE:\^bb[0-9]+]]
+  // CHECK: [[OWNED_EDGE]]:
+  // CHECK: tvm_ffi.ObjectIncRef %[[OWNED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OWNED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[OWNED_PATH:\^bb[0-9]+]]
+  // CHECK: [[OWNED_PATH]]:
+  // CHECK-NEXT: cf.br [[OWNED_TRANSFER:\^bb[0-9]+]](%[[OWNED]] : !tvm_ffi.tensor)
+  // CHECK: [[BORROWED_EDGE]]:
+  // CHECK: tvm_ffi.ObjectIncRef %[[BORROWED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OWNED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[BORROWED_PATH:\^bb[0-9]+]]
+  // CHECK: [[BORROWED_PATH]]:
+  // CHECK-NEXT: cf.br [[BORROWED_TRANSFER:\^bb[0-9]+]](%[[BORROWED]] : !tvm_ffi.tensor)
+  // CHECK: [[OWNED_TRANSFER]](%[[OWNED_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[OWNED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OWNED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[MERGE:\^bb[0-9]+]](%[[OWNED_ARG]] : !tvm_ffi.tensor)
+  // CHECK: [[BORROWED_TRANSFER]](%[[BORROWED_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[BORROWED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[BORROWED]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[MERGE]](%[[BORROWED_ARG]] : !tvm_ffi.tensor)
+  // CHECK: [[MERGE]](%[[RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[RESULT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: return %[[RESULT]] : !tvm_ffi.tensor
+  func.func @diamond(%cond: i1, %borrowed: !tvm_ffi.tensor)
+      -> !tvm_ffi.tensor {
+    %owned = func.call @make_tensor() : () -> !tvm_ffi.tensor
+    cf.cond_br %cond, ^owned_path, ^borrowed_path
+
+  ^owned_path:
+    cf.br ^merge(%owned : !tvm_ffi.tensor)
+
+  ^borrowed_path:
+    cf.br ^merge(%borrowed : !tvm_ffi.tensor)
+
+  ^merge(%result: !tvm_ffi.tensor):
+    return %result : !tvm_ffi.tensor
+  }
+
   // Existing explicit reference operations participate in the same ledger.
   // CHECK-LABEL: func.func @explicit_balance()
   // CHECK: %[[BALANCED:[a-zA-Z0-9_]+]] = call @make_tensor() : () -> !tvm_ffi.tensor
@@ -203,58 +159,102 @@ module {
     return
   }
 
-  // FunctionCall borrows its global-function handle. The owned handle returned
-  // by FunctionGetGlobal remains valid for repeated calls and is released once
-  // at function exit.
-  // CHECK-LABEL: func.func @borrowed_function_handle()
-  // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]], %[[GET_SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "test.make_tensor" : !tvm_ffi.function, i1
-  // CHECK-NEXT: %[[DISCARDED:[a-zA-Z0-9_]+]], %[[FIRST_SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]]() : () -> !tvm_ffi.tensor, i1
-  // CHECK-NEXT: %[[RETURNED:[a-zA-Z0-9_]+]], %[[SECOND_SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]]() : () -> !tvm_ffi.tensor, i1
-  // CHECK: tvm_ffi.ObjectIncRef %[[RETURNED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[HANDLE]] : !tvm_ffi.function
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[DISCARDED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RETURNED]] : !tvm_ffi.tensor
-  // CHECK-NEXT: return %[[RETURNED]] : !tvm_ffi.tensor
-  func.func @borrowed_function_handle() -> !tvm_ffi.tensor {
-    %function, %get_success = tvm_ffi.FunctionGetGlobal "test.make_tensor"
-        : !tvm_ffi.function, i1
-    %discarded, %first_success = tvm_ffi.FunctionCall %function()
-        : () -> !tvm_ffi.tensor, i1
-    %returned, %second_success = tvm_ffi.FunctionCall %function()
-        : () -> !tvm_ffi.tensor, i1
-    return %returned : !tvm_ffi.tensor
-  }
-
-  // A borrowed function block argument can be called without an ownership
-  // credit or cleanup.
-  // CHECK-LABEL: func.func @borrowed_function_argument(
-  // CHECK-SAME: %[[FUNCTION:[a-zA-Z0-9_]+]]: !tvm_ffi.function)
-  // CHECK: %[[RESULT:[a-zA-Z0-9_]+]], %[[SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[FUNCTION]]() : () -> !tvm_ffi.none, i1
-  // CHECK-NEXT: return
-  func.func @borrowed_function_argument(%function: !tvm_ffi.function) {
-    %result, %success = tvm_ffi.FunctionCall %function()
-        : () -> !tvm_ffi.none, i1
-    return
-  }
-
   // TVMFFI functions are FunctionOpInterface roots and follow the same return
   // transfer rule as func.func.
   // CHECK-LABEL: tvm_ffi.func @ffi_return(
   // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
-  // CHECK: %[[FUNCTION:[a-zA-Z0-9_]+]], %[[GET_SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "trident.aten.t" : !tvm_ffi.function, i1
-  // CHECK: %[[RESULT:[a-zA-Z0-9_]+]], %[[CALL_SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[FUNCTION]](%[[INPUT]]) : (!tvm_ffi.tensor) -> !tvm_ffi.tensor, i1
+  // CHECK: %[[FUNCTION:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "trident.aten.t" : !tvm_ffi.object
+  // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[FUNCTION]](%[[INPUT]]) : (!tvm_ffi.tensor) -> !tvm_ffi.tensor
   // CHECK: tvm_ffi.ObjectIncRef %[[RESULT]] : !tvm_ffi.tensor
-  // CHECK: tvm_ffi.ObjectDecRef %[[FUNCTION]] : !tvm_ffi.function
-  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
+  // CHECK: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
   // CHECK: tvm_ffi.return %[[RETURN:[a-zA-Z0-9_]+]] : !tvm_ffi.monad.result<!tvm_ffi.tensor>
   tvm_ffi.func @ffi_return(%input: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
-    %function, %get_success = tvm_ffi.FunctionGetGlobal "trident.aten.t"
-        : !tvm_ffi.function, i1
-    %result, %call_success = tvm_ffi.FunctionCall %function(%input)
-        : (!tvm_ffi.tensor) -> !tvm_ffi.tensor, i1
+    %function = tvm_ffi.FunctionGetGlobal "trident.aten.t"
+        : !tvm_ffi.object
+    %result = tvm_ffi.FunctionCall %function(%input)
+        : (!tvm_ffi.tensor) -> !tvm_ffi.tensor
 
-    %return_result = tvm_ffi.monad.pure %result : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+    %return_ready = arith.constant true
+
+    %return_result = builtin.unrealized_conversion_cast %result, %return_ready : !tvm_ffi.tensor, i1 to !tvm_ffi.monad.result<!tvm_ffi.tensor>
     tvm_ffi.return %return_result : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  }
+
+  // Forwarding an object and keeping its original SSA value live represent
+  // two ownership credits, even when both values alias the same object.
+  // CHECK-LABEL: func.func @forwarded_and_live_through(
+  // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
+  // CHECK-NEXT: cf.br [[ENTRY_EDGE:\^bb[0-9]+]](%[[INPUT]] : !tvm_ffi.tensor)
+  // CHECK: [[ENTRY_EDGE]](%[[FORWARDED:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
+  // CHECK: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[NEXT:\^bb[0-9]+]](%[[FORWARDED]] : !tvm_ffi.tensor)
+  // CHECK: [[NEXT]](%[[RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[INPUT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: return %[[INPUT]] : !tvm_ffi.tensor
+  func.func @forwarded_and_live_through(%input: !tvm_ffi.tensor)
+      -> !tvm_ffi.tensor {
+    cf.br ^next(%input : !tvm_ffi.tensor)
+
+  ^next(%forwarded: !tvm_ffi.tensor):
+    return %input : !tvm_ffi.tensor
+  }
+
+  // A backedge follows the same edge-local transfer protocol as a forward
+  // edge, so every loop iteration has one incoming and one outgoing credit.
+  // CHECK-LABEL: func.func @loop(
+  // CHECK-SAME: %[[LOOP_COND:[a-zA-Z0-9_]+]]: i1, %[[LOOP_INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
+  // CHECK-NEXT: cf.br [[ENTRY_EDGE:\^bb[0-9]+]](%[[LOOP_INPUT]] : !tvm_ffi.tensor)
+  // CHECK: [[ENTRY_EDGE]](%[[ENTRY_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[LOOP_INPUT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[HEADER:\^bb[0-9]+]](%[[ENTRY_ARG]] : !tvm_ffi.tensor)
+  // CHECK: [[BACKEDGE:\^bb[0-9]+]](%[[BACK_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[ITER:[a-zA-Z0-9_]+]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[ITER]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[HEADER]](%[[BACK_ARG]] : !tvm_ffi.tensor)
+  // CHECK: [[HEADER]](%[[ITER]]: !tvm_ffi.tensor):
+  // CHECK-NEXT: cf.cond_br %[[LOOP_COND]], [[BACKEDGE]](%[[ITER]] : !tvm_ffi.tensor), [[EXIT_EDGE:\^bb[0-9]+]](%[[ITER]] : !tvm_ffi.tensor)
+  // CHECK: [[EXIT_EDGE]](%[[EXIT_VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[ITER]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[ITER]] : !tvm_ffi.tensor
+  // CHECK-NEXT: cf.br [[EXIT:\^bb[0-9]+]](%[[EXIT_VALUE]] : !tvm_ffi.tensor)
+  // CHECK: [[EXIT]](%[[RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[RESULT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULT]] : !tvm_ffi.tensor
+  // CHECK-NEXT: return %[[RESULT]] : !tvm_ffi.tensor
+  func.func @loop(%cond: i1, %input: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
+    cf.br ^header(%input : !tvm_ffi.tensor)
+
+  ^header(%value: !tvm_ffi.tensor):
+    cf.cond_br %cond, ^header(%value : !tvm_ffi.tensor),
+                         ^exit(%value : !tvm_ffi.tensor)
+
+  ^exit(%result: !tvm_ffi.tensor):
+    return %result : !tvm_ffi.tensor
+  }
+
+  // Generic multi-successor BranchOpInterface operations use one trampoline
+  // per successor, including multiple edges that target the same merge block.
+  // CHECK-LABEL: func.func @switch(
+  // CHECK-SAME: %[[SELECTOR:[a-zA-Z0-9_]+]]: i32, %[[DEFAULT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[CASE:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
+  // CHECK: cf.switch %[[SELECTOR]] : i32, [
+  // CHECK: default: [[DEFAULT_EDGE:\^bb[0-9]+]](%[[DEFAULT]] : !tvm_ffi.tensor),
+  // CHECK: 1: [[CASE_EDGE:\^bb[0-9]+]](%[[CASE]] : !tvm_ffi.tensor)
+  // CHECK: [[DEFAULT_EDGE]](%[[DEFAULT_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[DEFAULT]] : !tvm_ffi.tensor
+  // CHECK: [[CASE_EDGE]](%[[CASE_ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
+  // CHECK: tvm_ffi.ObjectIncRef %[[CASE]] : !tvm_ffi.tensor
+  func.func @switch(%selector: i32, %default: !tvm_ffi.tensor,
+                    %case: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
+    cf.switch %selector : i32, [
+      default: ^merge(%default : !tvm_ffi.tensor),
+      1: ^merge(%case : !tvm_ffi.tensor)
+    ]
+
+  ^merge(%result: !tvm_ffi.tensor):
+    return %result : !tvm_ffi.tensor
   }
 }
 
@@ -269,7 +269,9 @@ module {
 tvm_ffi.func @get_object(%arg: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.object> {
   %object = tvm_ffi.get %arg : !tvm_ffi.tensor -> !tvm_ffi.object
 
-  %return_result = tvm_ffi.monad.pure %object : (!tvm_ffi.object) -> !tvm_ffi.monad.result<!tvm_ffi.object>
+  %return_ready = arith.constant true
+
+  %return_result = builtin.unrealized_conversion_cast %object, %return_ready : !tvm_ffi.object, i1 to !tvm_ffi.monad.result<!tvm_ffi.object>
   tvm_ffi.return %return_result : !tvm_ffi.monad.result<!tvm_ffi.object>
 }
 
@@ -281,6 +283,8 @@ tvm_ffi.func @get_object(%arg: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ff
 // CHECK: tvm_ffi.return %[[RETURN:[a-zA-Z0-9_]+]] : !tvm_ffi.monad.result<!tvm_ffi.tensor>
 tvm_ffi.func @return_tensor(%arg: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
 
-  %return_result = tvm_ffi.monad.pure %arg : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  %return_ready = arith.constant true
+
+  %return_result = builtin.unrealized_conversion_cast %arg, %return_ready : !tvm_ffi.tensor, i1 to !tvm_ffi.monad.result<!tvm_ffi.tensor>
   tvm_ffi.return %return_result : !tvm_ffi.monad.result<!tvm_ffi.tensor>
 }

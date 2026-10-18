@@ -3,12 +3,15 @@
 
 // RUN: trident-core-opt %s | trident-core-opt | FileCheck %s
 
-// CHECK-LABEL: tvm_ffi.func @payloads(
-// CHECK-SAME: %[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<i64>, %[[UNIT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.none>, %[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<i32>) -> (!tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<i32>)
-// CHECK: tvm_ffi.return %[[FIRST]], %[[UNIT]], %[[SECOND]] : !tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<i32>
-tvm_ffi.func @payloads(%first: !tvm_ffi.monad.result<i64>, %unit: !tvm_ffi.monad.result<!tvm_ffi.none>, %second: !tvm_ffi.monad.result<i32>) -> (!tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<i32>) {
-
-  tvm_ffi.return %first, %unit, %second : !tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<i32>
+// CHECK-LABEL: tvm_ffi.func @tuple(
+// CHECK-SAME: %[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.int, %[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor)
+// CHECK: %[[TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.tuple.construct(%[[FIRST]], %[[SECOND]])
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[TUPLE]]
+// CHECK: tvm_ffi.return %[[RESULT]] : !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.tensor>>
+tvm_ffi.func @tuple(%first: !tvm_ffi.int, %second: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.tensor>> {
+  %tuple = tvm_ffi.tuple.construct(%first, %second) : (!tvm_ffi.int, !tvm_ffi.tensor) -> !tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.tensor>
+  %result = tvm_ffi.monad.pure %tuple : (!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.tensor>>
+  tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.tensor>>
 }
 
 // CHECK-LABEL: tvm_ffi.func @unit(

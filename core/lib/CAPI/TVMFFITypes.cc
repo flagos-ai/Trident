@@ -33,8 +33,8 @@
   }
 
 DEFINE_GENERIC_TYPE(Any)
-DEFINE_GENERIC_TYPE(Array)
 DEFINE_GENERIC_TYPE(Bool)
+DEFINE_GENERIC_TYPE(CArray)
 DEFINE_GENERIC_TYPE(DType)
 DEFINE_GENERIC_TYPE(Device)
 DEFINE_GENERIC_TYPE(Exception)
@@ -50,9 +50,39 @@ DEFINE_GENERIC_TYPE(Tensor)
 
 #undef DEFINE_GENERIC_TYPE
 
+MlirType mlirTVMFFIArrayTypeGetChecked(MlirLocation location,
+                                       MlirType element) {
+  mlir::Location const loc = unwrap(location);
+  mlir::Type const type = unwrap(element);
+  if (!type || type.getContext() != loc.getContext()) {
+    mlir::emitError(loc)
+        << "array element must belong to the construction context";
+    return MlirType{nullptr};
+  }
+  return wrap(
+      trident::tvm_ffi::ArrayType::getChecked(loc, loc.getContext(), type));
+}
+
+MlirType mlirTVMFFIArrayTypeGetElementType(MlirType type) {
+  return wrap(
+      mlir::cast<trident::tvm_ffi::ArrayType>(unwrap(type)).getElementType());
+}
+
+MlirStringRef mlirTVMFFIArrayTypeGetName(void) {
+  return wrap(trident::tvm_ffi::ArrayType::name);
+}
+
+MlirTypeID mlirTVMFFIArrayTypeGetTypeID(void) {
+  return wrap(trident::tvm_ffi::ArrayType::getTypeID());
+}
+
+bool mlirTypeIsATVMFFIArrayType(MlirType type) {
+  return mlir::isa<trident::tvm_ffi::ArrayType>(unwrap(type));
+}
+
 MlirType mlirTVMFFIResultTypeGetChecked(MlirLocation location,
                                         MlirType payload) {
-  const mlir::Location loc = unwrap(location);
+  mlir::Location const loc = unwrap(location);
   const mlir::Type type = unwrap(payload);
   if (!type) {
     mlir::emitError(loc) << "Result requires one payload type";
@@ -84,9 +114,53 @@ bool mlirTypeIsATVMFFIResultType(MlirType type) {
   return mlir::isa<trident::tvm_ffi::ResultType>(unwrap(type));
 }
 
+MlirType mlirTVMFFITupleTypeGetChecked(MlirLocation location, intptr_t numTypes,
+                                       const MlirType *types) {
+  mlir::Location const loc = unwrap(location);
+  if (numTypes < 0 || (numTypes > 0 && !types)) {
+    mlir::emitError(loc) << "tuple requires a valid member array";
+    return MlirType{nullptr};
+  }
+  llvm::SmallVector<mlir::Type> members;
+  members.reserve(numTypes);
+  for (intptr_t index = 0; index < numTypes; ++index) {
+    const mlir::Type member = unwrap(types[index]);
+    if (!member || member.getContext() != loc.getContext()) {
+      mlir::emitError(loc)
+          << "tuple members must belong to the construction context";
+      return MlirType{nullptr};
+    }
+    members.push_back(member);
+  }
+  return wrap(trident::tvm_ffi::TupleType::getChecked(
+      loc, loc.getContext(), llvm::ArrayRef<mlir::Type>(members)));
+}
+
+MlirStringRef mlirTVMFFITupleTypeGetName(void) {
+  return wrap(trident::tvm_ffi::TupleType::name);
+}
+
+intptr_t mlirTVMFFITupleTypeGetNumTypes(MlirType type) {
+  return static_cast<intptr_t>(
+      mlir::cast<trident::tvm_ffi::TupleType>(unwrap(type)).getTypes().size());
+}
+
+MlirType mlirTVMFFITupleTypeGetType(MlirType type, intptr_t index) {
+  return wrap(
+      mlir::cast<trident::tvm_ffi::TupleType>(unwrap(type)).getTypes()[index]);
+}
+
+MlirTypeID mlirTVMFFITupleTypeGetTypeID(void) {
+  return wrap(trident::tvm_ffi::TupleType::getTypeID());
+}
+
+bool mlirTypeIsATVMFFITupleType(MlirType type) {
+  return mlir::isa<trident::tvm_ffi::TupleType>(unwrap(type));
+}
+
 MlirType mlirTVMFFIUnionTypeGetChecked(MlirLocation location, intptr_t numTypes,
                                        const MlirType *types) {
-  const mlir::Location loc = unwrap(location);
+  mlir::Location const loc = unwrap(location);
   llvm::SmallVector<mlir::Type> members;
   members.reserve(numTypes);
   for (intptr_t index = 0; index < numTypes; ++index) {

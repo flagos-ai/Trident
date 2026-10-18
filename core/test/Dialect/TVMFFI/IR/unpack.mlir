@@ -21,6 +21,33 @@ tvm_ffi.func @case_1(%input: !tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.resul
   tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
 
+// CHECK-LABEL: tvm_ffi.func @case_10(
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.function)
+tvm_ffi.func @case_10(%input: !tvm_ffi.monad.result<!tvm_ffi.function>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.function)
+  %unit = tvm_ffi.constant.none
+  %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
+}
+
+// CHECK-LABEL: tvm_ffi.func @case_11(
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.object>) -> (i1, !tvm_ffi.object)
+tvm_ffi.func @case_11(%input: !tvm_ffi.monad.result<!tvm_ffi.object>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.object>) -> (i1, !tvm_ffi.object)
+  %unit = tvm_ffi.constant.none
+  %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
+}
+
+// CHECK-LABEL: tvm_ffi.func @case_12(
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>)
+tvm_ffi.func @case_12(%input: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>)
+  %unit = tvm_ffi.constant.none
+  %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
+}
+
 // CHECK-LABEL: tvm_ffi.func @case_2(
 // CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<f64>) -> (i1, f64)
 tvm_ffi.func @case_2(%input: !tvm_ffi.monad.result<f64>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
@@ -58,9 +85,9 @@ tvm_ffi.func @case_5(%input: !tvm_ffi.monad.result<!tvm_ffi.tensor>) -> !tvm_ffi
 }
 
 // CHECK-LABEL: tvm_ffi.func @case_6(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.array>) -> (i1, !tvm_ffi.any)
-tvm_ffi.func @case_6(%input: !tvm_ffi.monad.result<!tvm_ffi.array>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.array>) -> (i1, !tvm_ffi.any)
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.c.array>) -> (i1, !tvm_ffi.any)
+tvm_ffi.func @case_6(%input: !tvm_ffi.monad.result<!tvm_ffi.c.array>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.c.array>) -> (i1, !tvm_ffi.any)
   %unit = tvm_ffi.constant.none
   %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
@@ -92,31 +119,3 @@ tvm_ffi.func @case_9(%input: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, 
   %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
-
-// CHECK-LABEL: tvm_ffi.func @case_10(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.function)
-tvm_ffi.func @case_10(%input: !tvm_ffi.monad.result<!tvm_ffi.function>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.function)
-  %unit = tvm_ffi.constant.none
-  %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
-  tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
-}
-
-// CHECK-LABEL: tvm_ffi.func @case_11(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.object>) -> (i1, !tvm_ffi.object)
-tvm_ffi.func @case_11(%input: !tvm_ffi.monad.result<!tvm_ffi.object>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.object>) -> (i1, !tvm_ffi.object)
-  %unit = tvm_ffi.constant.none
-  %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
-  tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
-}
-
-// CHECK-LABEL: tvm_ffi.func @case_12(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>)
-tvm_ffi.func @case_12(%input: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>)
-  %unit = tvm_ffi.constant.none
-  %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
-  tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
-}
-

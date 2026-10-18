@@ -36,7 +36,7 @@
 // CHECK: [[FAILURE]]:
 // CHECK: %[[EXCEPTION:[a-zA-Z0-9_]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
 // CHECK-NEXT: %[[FAILURE_RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[EXCEPTION]] : !tvm_ffi.exception -> !tvm_ffi.any
-// CHECK: %[[RETURN:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[FAILURE_RESULT]], %[[READY:[a-zA-Z0-9_]+]] : !tvm_ffi.any, i1 to !tvm_ffi.monad.result<!tvm_ffi.any>
+// CHECK: %[[RETURN:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[FAILURE_RESULT]] : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
 // CHECK: tvm_ffi.return %[[RETURN]] : !tvm_ffi.monad.result<!tvm_ffi.any>
 // CHECK-NOT: tvm_ffi.kernel_launch
 
@@ -154,14 +154,14 @@ module attributes {gpu.container_module} {
 // -----
 
 // CHECK-LABEL: tvm_ffi.func @validate_tuple
-// CHECK-SAME: %[[TUPLE:[a-zA-Z0-9_]+]]: !tvm_ffi.array
+// CHECK-SAME: %[[TUPLE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array
 // CHECK: %[[INITIAL_TUPLE:[a-zA-Z0-9_]+]] = llvm.mlir.constant(true) : i1
 // CHECK: %[[ONE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
 // CHECK: %[[TRUE_TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.bool true
 // CHECK: %[[NAME:[a-zA-Z0-9_]+]] = tvm_ffi.constant.raw_str "name"
-// CHECK: %[[INNER:[a-zA-Z0-9_]+]], %[[INNER_STATUS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[INNER_HANDLE:[a-zA-Z0-9_]+]](%[[TRUE_TUPLE]], %[[NAME]])
-// CHECK: %[[EXPECTED_TUPLE:[a-zA-Z0-9_]+]], %[[OUTER_STATUS:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[OUTER_HANDLE:[a-zA-Z0-9_]+]](%[[ONE]], %[[INNER]])
-// CHECK: %[[TUPLE_EQUAL:[a-zA-Z0-9_]+]] = tvm_ffi.eq %[[TUPLE]], %[[EXPECTED_TUPLE]] : !tvm_ffi.array
+// CHECK: %[[INNER:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[INNER_HANDLE:[a-zA-Z0-9_]+]](%[[TRUE_TUPLE]], %[[NAME]])
+// CHECK: %[[EXPECTED_TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[OUTER_HANDLE:[a-zA-Z0-9_]+]](%[[ONE]], %[[INNER]])
+// CHECK: %[[TUPLE_EQUAL:[a-zA-Z0-9_]+]] = tvm_ffi.eq %[[TUPLE]], %[[EXPECTED_TUPLE]] : !tvm_ffi.c.array
 // CHECK: %[[TUPLE_CHECK:[a-zA-Z0-9_]+]] = arith.andi %[[INITIAL_TUPLE]], %[[TUPLE_EQUAL]] : i1
 // CHECK: cf.cond_br %[[TUPLE_CHECK]], [[SUCCESS_TUPLE:\^bb[0-9]+]], [[FAILURE_TUPLE:\^bb[0-9]+]]
 // CHECK: [[SUCCESS_TUPLE]]:
@@ -173,20 +173,20 @@ module attributes {gpu.container_module} {
   gpu.binary @kernel [#gpu.object<#nvvm.target, "">]
 
   func.func private @launch_tuple(
-      %value: !tvm_ffi.array) -> !tvm_ffi.int {
+      %value: !tvm_ffi.c.array) -> !tvm_ffi.int {
     %one = arith.constant 1 : i64
     tvm_ffi.kernel_launch @kernel::@entry
         blocks in (%one, %one, %one) : i64
         threads in (%one, %one, %one)
-        args (%value : !tvm_ffi.array #tvm_ffi.constant_specialization<value = [1 : i64, [true, "name"]]>)
+        args (%value : !tvm_ffi.c.array #tvm_ffi.constant_specialization<value = [1 : i64, [true, "name"]]>)
     %result = tvm_ffi.constant.int 0
     return %result : !tvm_ffi.int
   }
 
   tvm_ffi.func @validate_tuple(
-      %value: !tvm_ffi.array) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
+      %value: !tvm_ffi.c.array) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
     %result = func.call @launch_tuple(%value)
-        : (!tvm_ffi.array) -> !tvm_ffi.int
+        : (!tvm_ffi.c.array) -> !tvm_ffi.int
     %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
 
     %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>

@@ -61,7 +61,7 @@ func.func private @helper(%tensor: !tvm_ffi.monad.result<!tvm_ffi.tensor>, %scal
   return %output#0, %output#1 : !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<i64>
 }
 
-// CHECK-LABEL: tvm_ffi.func @nested_mixed(
+// CHECK-LABEL: func.func @nested_mixed(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<i64>, %[[UNIT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.none>
 // CHECK: %[[OK:[a-zA-Z0-9_]+]], %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT]]
 // CHECK: %[[OUTER:[a-zA-Z0-9_]+]]:2 = scf.if %[[OK]]
@@ -78,8 +78,8 @@ func.func private @helper(%tensor: !tvm_ffi.monad.result<!tvm_ffi.tensor>, %scal
 // CHECK: } else {
 // CHECK: %[[OUTER_FAIL:[a-zA-Z0-9_]+]]:2 = tvm_ffi.monad.fail
 // CHECK: scf.yield %[[OUTER_FAIL]]#0, %[[OUTER_FAIL]]#1
-// CHECK: tvm_ffi.return %[[OUTER]]#0, %[[OUTER]]#1
-tvm_ffi.func @nested_mixed(%input: !tvm_ffi.monad.result<i64>, %unit: !tvm_ffi.monad.result<!tvm_ffi.none>) -> (!tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>) {
+// CHECK: return %[[OUTER]]#0, %[[OUTER]]#1
+func.func @nested_mixed(%input: !tvm_ffi.monad.result<i64>, %unit: !tvm_ffi.monad.result<!tvm_ffi.none>) -> (!tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>) {
   %outer:2 = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> (!tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>) {
   ^bb0(%payload: i64):
     %inner:2 = tvm_ffi.monad.bind %unit : (!tvm_ffi.monad.result<!tvm_ffi.none>) -> (!tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>) {
@@ -91,5 +91,5 @@ tvm_ffi.func @nested_mixed(%input: !tvm_ffi.monad.result<i64>, %unit: !tvm_ffi.m
     tvm_ffi.monad.yield %inner#0, %inner#1 : !tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>
   }
 
-  tvm_ffi.return %outer#0, %outer#1 : !tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>
+  func.return %outer#0, %outer#1 : !tvm_ffi.monad.result<i64>, !tvm_ffi.monad.result<!tvm_ffi.none>
 }

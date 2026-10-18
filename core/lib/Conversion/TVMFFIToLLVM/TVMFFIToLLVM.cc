@@ -85,6 +85,8 @@ mlir::Value createConstantABI(mlir::ConversionPatternRewriter &rewriter,
   return result;
 }
 
+// Results stay as one SSA value until LLVM conversion. Field zero is the
+// payload; field one records whether it is valid.
 class ConvertAsOp final : public mlir::OpConversionPattern<tvm_ffi::AsOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -154,9 +156,10 @@ public:
     mlir::Value const success = mlir::LLVM::ICmpOp::create(
         rewriter, op.getLoc(), mlir::LLVM::ICmpPredicate::eq, call.getResult(0),
         zero);
-    rewriter.replaceOp(op, {mlir::LLVM::LoadOp::create(rewriter, op.getLoc(),
-                                                       anyTy, resultSlot),
-                            success});
+    if (mlir::failed(utils::emitLLVMAssert(rewriter, op.getLoc(), success))) {
+      return op.emitError("failed to assert local call success");
+    }
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, anyTy, resultSlot);
     return mlir::success();
   }
 };
@@ -355,6 +358,15 @@ public:
   matchAndRewrite(tvm_ffi::FunctionCallOp op,
                   tvm_ffi::FunctionCallOpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value const nonnull = mlir::LLVM::ICmpOp::create(
+        rewriter, op.getLoc(), mlir::LLVM::ICmpPredicate::ne,
+        adaptor.getCallee(),
+        mlir::LLVM::ZeroOp::create(
+            rewriter, op.getLoc(),
+            mlir::LLVM::LLVMPointerType::get(rewriter.getContext())));
+    if (mlir::failed(utils::emitLLVMAssert(rewriter, op.getLoc(), nonnull))) {
+      return op.emitError("failed to assert non-null function handle");
+    }
     mlir::ModuleOp const module = op->getParentOfType<mlir::ModuleOp>();
     mlir::LLVM::LLVMStructType anyTy =
         tvm_ffi::TVMFFIABIType::getLLVMType(rewriter.getContext());
@@ -393,10 +405,10 @@ public:
     mlir::Value const success = mlir::LLVM::ICmpOp::create(
         rewriter, op.getLoc(), mlir::LLVM::ICmpPredicate::eq, status.value(),
         zero);
-    llvm::SmallVector<mlir::Value> const replacements{
-        mlir::LLVM::LoadOp::create(rewriter, op.getLoc(), anyTy, resultSlot),
-        success};
-    rewriter.replaceOp(op, replacements);
+    if (mlir::failed(utils::emitLLVMAssert(rewriter, op.getLoc(), success))) {
+      return op.emitError("failed to assert function call success");
+    }
+    rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(op, anyTy, resultSlot);
     return mlir::success();
   }
 };
@@ -421,8 +433,18 @@ public:
         rewriter, op.getLoc(), rewriter.getI32Type(), 0);
     mlir::Value const success = mlir::LLVM::ICmpOp::create(
         rewriter, op.getLoc(), mlir::LLVM::ICmpPredicate::eq, status, zero);
-    llvm::SmallVector<mlir::Value> const replacements{handle, success};
-    rewriter.replaceOp(op, replacements);
+    if (mlir::failed(utils::emitLLVMAssert(rewriter, op.getLoc(), success))) {
+      return op.emitError("failed to assert global lookup success");
+    }
+    mlir::Value const nonnull = mlir::LLVM::ICmpOp::create(
+        rewriter, op.getLoc(), mlir::LLVM::ICmpPredicate::ne, handle,
+        mlir::LLVM::ZeroOp::create(
+            rewriter, op.getLoc(),
+            mlir::LLVM::LLVMPointerType::get(rewriter.getContext())));
+    if (mlir::failed(utils::emitLLVMAssert(rewriter, op.getLoc(), nonnull))) {
+      return op.emitError("failed to assert non-null global handle");
+    }
+    rewriter.replaceOp(op, handle);
     return mlir::success();
   }
 };
@@ -461,6 +483,103 @@ public:
       return op.emitOpError("unsupported get from ")
              << operandType << " to " << resultType;
     }
+    return mlir::success();
+  }
+};
+
+class ConvertMonadFailOp final
+    : public mlir::OpConversionPattern<tvm_ffi::MonadFailOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(tvm_ffi::MonadFailOp op, OpAdaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location const loc = op.getLoc();
+    mlir::Value const success = mlir::LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI1Type(), false);
+    llvm::SmallVector<mlir::Value> results;
+    for (mlir::Value const output : op.getOutputs()) {
+      mlir::Type const type = getTypeConverter()->convertType(output.getType());
+      if (!type) {
+        return rewriter.notifyMatchFailure(op,
+                                           "unsupported Result payload type");
+      }
+      mlir::Type const payloadType =
+          mlir::cast<mlir::LLVM::LLVMStructType>(type).getBody().front();
+      mlir::Type const sourceType =
+          mlir::cast<tvm_ffi::ResultType>(output.getType()).getPayloadType();
+      mlir::Value const payload =
+          mlir::isa<tvm_ffi::TVMFFIABIType>(sourceType)
+              ? mlir::Value(
+                    mlir::LLVM::ZeroOp::create(rewriter, loc, payloadType))
+              : mlir::Value(
+                    mlir::LLVM::PoisonOp::create(rewriter, loc, payloadType));
+      mlir::Value result = mlir::LLVM::PoisonOp::create(rewriter, loc, type);
+      result = mlir::LLVM::InsertValueOp::create(rewriter, loc, result, payload,
+                                                 llvm::ArrayRef<int64_t>{0});
+      result = mlir::LLVM::InsertValueOp::create(rewriter, loc, result, success,
+                                                 llvm::ArrayRef<int64_t>{1});
+      results.push_back(result);
+    }
+    rewriter.replaceOp(op, results);
+    return mlir::success();
+  }
+};
+
+class ConvertMonadPureOp final
+    : public mlir::OpConversionPattern<tvm_ffi::MonadPureOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(tvm_ffi::MonadPureOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location const loc = op.getLoc();
+    mlir::Value const success = mlir::LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI1Type(), true);
+    llvm::SmallVector<mlir::Value> results;
+    for (auto [output, payload] :
+         llvm::zip_equal(op.getOutputs(), adaptor.getValues())) {
+      mlir::Type const type = getTypeConverter()->convertType(output.getType());
+      if (!type) {
+        return rewriter.notifyMatchFailure(op,
+                                           "unsupported Result payload type");
+      }
+      mlir::Value result = mlir::LLVM::PoisonOp::create(rewriter, loc, type);
+      result = mlir::LLVM::InsertValueOp::create(rewriter, loc, result, payload,
+                                                 llvm::ArrayRef<int64_t>{0});
+      result = mlir::LLVM::InsertValueOp::create(rewriter, loc, result, success,
+                                                 llvm::ArrayRef<int64_t>{1});
+      results.push_back(result);
+    }
+    rewriter.replaceOp(op, results);
+    return mlir::success();
+  }
+};
+
+class ConvertMonadUnpackOp final
+    : public mlir::OpConversionPattern<tvm_ffi::MonadUnpackOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(tvm_ffi::MonadUnpackOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location const loc = op.getLoc();
+    mlir::Value const success = mlir::LLVM::ExtractValueOp::create(
+        rewriter, loc, adaptor.getInput(), llvm::ArrayRef<int64_t>{1});
+    mlir::Value payload = mlir::LLVM::ExtractValueOp::create(
+        rewriter, loc, adaptor.getInput(), llvm::ArrayRef<int64_t>{0});
+    if (mlir::isa<tvm_ffi::AnyType>(op.getValue().getType())) {
+      // Tagged values share the Any layout. A failed Result exposes None,
+      // never its invalid placeholder, through this public unpack operation.
+      mlir::Value const none =
+          mlir::LLVM::ZeroOp::create(rewriter, loc, payload.getType());
+      payload =
+          mlir::LLVM::SelectOp::create(rewriter, loc, success, payload, none);
+    }
+    rewriter.replaceOp(op, {success, payload});
     return mlir::success();
   }
 };
@@ -566,23 +685,6 @@ public:
   }
 };
 
-class ConvertTVMFFIUpcastOp final
-    : public mlir::OpConversionPattern<tvm_ffi::UpcastOp> {
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(tvm_ffi::UpcastOp op, OpAdaptor adaptor,
-                  mlir::ConversionPatternRewriter &rewriter) const override {
-    // All supported tagged cast values lower to the TVMFFIAny LLVM struct.
-    // The dialect-level upcast therefore becomes
-    // an identity after conversion; the source conversion has already
-    // materialized the correct type tag and payload.
-    rewriter.replaceOp(op, adaptor.getValue());
-    return mlir::success();
-  }
-};
-
 class ConvertTVMFFIToLLVMPass final
     : public impl::ConvertTVMFFIToLLVMBase<ConvertTVMFFIToLLVMPass> {
 public:
@@ -631,6 +733,23 @@ public:
       signalPassFailure();
       return;
     }
+  }
+};
+
+class ConvertTVMFFIUpcastOp final
+    : public mlir::OpConversionPattern<tvm_ffi::UpcastOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(tvm_ffi::UpcastOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // All supported tagged cast values lower to the TVMFFIAny LLVM struct.
+    // The dialect-level upcast therefore becomes
+    // an identity after conversion; the source conversion has already
+    // materialized the correct type tag and payload.
+    rewriter.replaceOp(op, adaptor.getValue());
+    return mlir::success();
   }
 };
 
@@ -995,20 +1114,32 @@ void populateTVMFFIToLLVMConversionPatterns(
       return std::nullopt;
     }
   });
+  typeConverter.addConversion([&typeConverter](
+                                  tvm_ffi::ResultType type) -> mlir::Type {
+    mlir::Type const payload = typeConverter.convertType(type.getPayloadType());
+    if (!payload) {
+      return {};
+    }
+    return mlir::LLVM::LLVMStructType::getLiteral(
+        type.getContext(),
+        {payload, mlir::IntegerType::get(type.getContext(), 1)});
+  });
   mlir::registerConversionPDLFunctions(patterns);
   populateGeneratedPDLLPatterns(patterns,
                                 mlir::PDLConversionConfig(&typeConverter));
-  patterns.add<ConvertAsOp, ConvertCallOp, ConvertConstantDeviceOp,
-               ConvertConstantDTypeOp, ConvertConstantRawStrOp, ConvertEqOp,
-               ConvertExceptionOp, ConvertFunctionCallOp,
-               ConvertFunctionGetGlobalOp, ConvertGetOp, ConvertTensorCloneOp,
-               ConvertTensorCopyOp, ConvertTensorLiteralOp, ConvertToOp,
-               ConvertTVMFFIDowncastOp, ConvertTVMFFIUpcastOp,
-               ConvertRefOp<tvm_ffi::ObjectDecRefOp,
-                            &conversion::utils::getOrCreateTVMFFIObjectDecRef>,
-               ConvertRefOp<tvm_ffi::ObjectIncRefOp,
-                            &conversion::utils::getOrCreateTVMFFIObjectIncRef>>(
-      typeConverter, patterns.getContext());
+  patterns
+      .add<ConvertAsOp, ConvertCallOp, ConvertConstantDTypeOp,
+           ConvertConstantDeviceOp, ConvertConstantRawStrOp, ConvertEqOp,
+           ConvertExceptionOp, ConvertFunctionCallOp,
+           ConvertFunctionGetGlobalOp, ConvertGetOp, ConvertMonadFailOp,
+           ConvertMonadPureOp, ConvertMonadUnpackOp,
+           ConvertRefOp<tvm_ffi::ObjectDecRefOp,
+                        &conversion::utils::getOrCreateTVMFFIObjectDecRef>,
+           ConvertRefOp<tvm_ffi::ObjectIncRefOp,
+                        &conversion::utils::getOrCreateTVMFFIObjectIncRef>,
+           ConvertTVMFFIDowncastOp, ConvertTVMFFIUpcastOp, ConvertTensorCloneOp,
+           ConvertTensorCopyOp, ConvertTensorLiteralOp, ConvertToOp>(
+          typeConverter, patterns.getContext());
   target.addIllegalDialect<tvm_ffi::TVMFFIDialect>();
 }
 

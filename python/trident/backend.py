@@ -45,7 +45,7 @@ from trident.ffi import Exception
 from .guards import parse_guards
 from .importer import TridentFxImporter
 from .input import InputTableBuilder
-from .ir import bind, pure
+from .ir import bind, container_create, pure, tuple_type
 
 RuntimeValue: TypeAlias = Any
 RuntimeArguments: TypeAlias = tuple[RuntimeValue, ...]
@@ -325,10 +325,14 @@ class TridentGraphModule:
                                     )
                                 else:
                                     with bind(
-                                        importer.build_call(
-                                            "ffi.Array",
+                                        container_create(
                                             invocation.arguments,
-                                            tvm_ffi_d.ArrayType.get(),
+                                            tuple_type(
+                                                [
+                                                    value.type
+                                                    for value in invocation.arguments
+                                                ],
+                                            ),
                                         ),
                                         result_types=[ffi_result_type],
                                     ) as packing:

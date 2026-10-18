@@ -1,9 +1,9 @@
 add_mlir_dialect_library(
   TVMFFIDialect
+  TVMFFIAttrs.cc
   TVMFFIDialect.cc
   TVMFFIInterfaces.cc
   TVMFFIOps.cc
-  TVMFFISpecialization.cc
   TVMFFITypes.cc
   DEPENDS
   MLIRTVMFFIAttrDefsIncGen

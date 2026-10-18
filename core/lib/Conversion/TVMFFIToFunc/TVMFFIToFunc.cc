@@ -7,6 +7,7 @@
 
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Conversion/Utils/TVMFFIUtils.h"
+#include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIOps.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <cstdint>
@@ -70,32 +71,25 @@ mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
   builder.setInsertionPoint(op);
   mlir::Value ready =
       mlir::arith::ConstantIntOp::create(builder, op.getLoc(), true, 1);
+  llvm::SmallVector<mlir::Value> payloads;
   for (mlir::Value const value : op.getOperands()) {
-    tvm_ffi::ResultType const type =
-        mlir::cast<tvm_ffi::ResultType>(value.getType());
-    mlir::UnrealizedConversionCastOp fields =
-        value.getDefiningOp<mlir::UnrealizedConversionCastOp>();
-    if (!fields || fields.getNumOperands() != 2 ||
-        !fields.getInputs().back().getType().isInteger(1) ||
-        fields.getInputs().front().getType() != type.getPayloadType()) {
-      return op.emitError("run lower-tvm-ffi-monad before converting "
-                          "tvm_ffi.return to the ABI");
-    }
-    ready = builder.createOrFold<mlir::arith::AndIOp>(
-        op.getLoc(), ready, fields.getInputs().back());
+    tvm_ffi::MonadUnpackOp unpack =
+        tvm_ffi::MonadUnpackOp::create(builder, op.getLoc(), value);
+    ready = builder.createOrFold<mlir::arith::AndIOp>(op.getLoc(), ready,
+                                                      unpack.getSuccess());
+    payloads.push_back(unpack.getValue());
   }
-  llvm::SmallVector<mlir::Value> const payloads = llvm::map_to_vector(
-      op.getOperands(), [](mlir::Value value) -> mlir::Value {
-        return value.getDefiningOp<mlir::UnrealizedConversionCastOp>()
-            .getInputs()
-            .front();
-      });
   mlir::LLVMTypeConverter const converter(builder.getContext());
-  llvm::SmallVector<mlir::Type> const storageTypes =
-      llvm::map_to_vector(payloads, [&](mlir::Value payload) -> mlir::Type {
-        return mlir::isa<tvm_ffi::TVMFFIABIType>(payload.getType())
+  llvm::SmallVector<mlir::Type> const storageTypes = llvm::map_to_vector(
+      op.getOperands(), [&](mlir::Value result) -> mlir::Type {
+        mlir::Type const payload =
+            mlir::cast<tvm_ffi::ResultType>(result.getType()).getPayloadType();
+        if (mlir::isa<tvm_ffi::FunctionType, tvm_ffi::ObjectType>(payload)) {
+          return mlir::LLVM::LLVMPointerType::get(builder.getContext());
+        }
+        return mlir::isa<tvm_ffi::TVMFFIABIType>(payload)
                    ? tvm_ffi::TVMFFIABIType::getLLVMType(builder.getContext())
-                   : converter.convertType(payload.getType());
+                   : converter.convertType(payload);
       });
   if (llvm::any_of(storageTypes,
                    [](mlir::Type type) -> bool { return !type; })) {
@@ -105,9 +99,15 @@ mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
   mlir::scf::IfOp branch = mlir::scf::IfOp::create(
       builder, op.getLoc(), mlir::TypeRange{builder.getI32Type()}, ready, true);
   builder.setInsertionPointToStart(branch.thenBlock());
-  for (auto [payload, slot, type] :
-       llvm::zip_equal(payloads, slots, storageTypes)) {
+  for (auto [payload, slot, type, result] :
+       llvm::zip_equal(payloads, slots, storageTypes, op.getOperands())) {
     mlir::Value value = payload;
+    mlir::Type const semanticType =
+        mlir::cast<tvm_ffi::ResultType>(result.getType()).getPayloadType();
+    if (value.getType() != semanticType) {
+      value = tvm_ffi::DowncastOp::create(builder, op.getLoc(), semanticType,
+                                          value);
+    }
     if (value.getType() != type) {
       value = mlir::UnrealizedConversionCastOp::create(builder, op.getLoc(),
                                                        type, value)
@@ -248,10 +248,12 @@ class ConvertTVMFFIToFuncPass final
             /*withElseRegion=*/true);
         builder.setInsertionPointToStart(guard.thenBlock());
         if (!llvm::all_of(payloadTypes, [](mlir::Type type) -> bool {
-              return mlir::isa<tvm_ffi::TVMFFIABIType>(type);
+              return mlir::isa<tvm_ffi::TVMFFIABIType>(type) &&
+                     !mlir::isa<tvm_ffi::FunctionType, tvm_ffi::ObjectType>(
+                         type);
             })) {
           tvmffiFuncOp.emitError(
-              "ABI return payloads must have a TVM FFI ABI type");
+              "ABI return payloads must have a tagged TVM FFI ABI type");
           signalPassFailure();
           return mlir::WalkResult::interrupt();
         }
@@ -275,20 +277,8 @@ class ConvertTVMFFIToFuncPass final
             mlir::scf::IfOp::create(builder, tvmffiFuncOp.getLoc(),
                                     mlir::TypeRange{i32Ty}, success, true);
         builder.setInsertionPointToStart(successful.thenBlock());
-        // Every Result has one ABI payload, including None. Read output slots
-        // only after success, and reuse those slots when packing multiple
-        // values.
-        mlir::Value resultSlot = slots.front();
-        if (slots.size() > 1) {
-          mlir::FailureOr<mlir::Value> array = utils::callTVMFFIGlobalFunction(
-              builder, tvmffiFuncOp.getLoc(), module, "ffi.Array", slots);
-          if (mlir::failed(array)) {
-            tvmffiFuncOp.emitError("failed to create ffi.Array result");
-            signalPassFailure();
-            return mlir::WalkResult::interrupt();
-          }
-          resultSlot = *array;
-        }
+        // The single Result payload, including None, is read only on success.
+        mlir::Value const resultSlot = slots.front();
         mlir::Value const packed = mlir::LLVM::LoadOp::create(
             builder, tvmffiFuncOp.getLoc(), llvmAnyTy, resultSlot);
         mlir::LLVM::StoreOp::create(builder, tvmffiFuncOp.getLoc(), packed,

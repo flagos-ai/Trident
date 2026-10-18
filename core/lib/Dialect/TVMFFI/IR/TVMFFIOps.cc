@@ -39,6 +39,16 @@ llvm::SmallVector<mlir::Type> getPayloadTypes(mlir::ValueRange values) {
 
 } // namespace
 
+mlir::LogicalResult ArrayCreateOp::verify() {
+  ArrayType const type = getResult().getType();
+  if (!llvm::all_of(getElements(), [&](mlir::Value value) -> bool {
+        return value.getType() == type.getElementType();
+      })) {
+    return emitOpError("elements must match the array element type");
+  }
+  return mlir::success();
+}
+
 mlir::LogicalResult AsOp::verify() {
   auto resultType = getResult().getType();
   return mlir::isa<dlpack::DLTensorType>(resultType)
@@ -61,12 +71,10 @@ mlir::LogicalResult FuncOp::verify() {
   if (std::optional<llvm::StringRef> visibility = getSymVisibility();
       visibility && *visibility != "public") {
     return emitOpError("must have public visibility");
-  } else if (getResultTypes().empty() ||
-             !llvm::all_of(getResultTypes(), [](mlir::Type type) -> bool {
-               return mlir::isa<ResultType>(type);
-             })) {
-    return emitOpError(
-        "function results must be nonempty monadic Result types");
+  } else if (getResultTypes().size() != 1 ||
+             !mlir::isa<ResultType>(getResultTypes().front())) {
+    return emitOpError("function must return exactly one monadic Result; use a "
+                       "tuple for multiple values and None for no value");
   } else {
     return mlir::success();
   }

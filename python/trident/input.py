@@ -19,8 +19,7 @@ from torch.export.graph_signature import (
 )
 
 from trident.core import ir
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import is_value_in_scope, value_type
+from trident.ir import array_type, is_value_in_scope, tuple_type, value_type
 
 InputPath: TypeAlias = Sequence[int | str]
 InputValue: TypeAlias = Any
@@ -279,9 +278,11 @@ class InputTableBuilder:
                 assert node.type in (list, tuple), (
                     f"unsupported input container at {name!r}: {node.type}"
                 )
+                children = [build_node(child, name) for child in node.children()]
+                types = [child.type for child in children]
                 return InputNodeBuilder(
-                    tvm_ffi_d.ArrayType.get(),
-                    children=[build_node(child, name) for child in node.children()],
+                    tuple_type(types) if node.type is tuple else array_type(types),
+                    children=children,
                 )
 
         provided_entries = {
@@ -293,9 +294,13 @@ class InputTableBuilder:
 
         def build_value(value: InputValue) -> InputNodeBuilder:
             if isinstance(value, (list, tuple)):
+                children = [build_value(child) for child in value]
+                types = [child.type for child in children]
                 return InputNodeBuilder(
-                    tvm_ffi_d.ArrayType.get(),
-                    children=[build_value(child) for child in value],
+                    tuple_type(types)
+                    if isinstance(value, tuple)
+                    else array_type(types),
+                    children=children,
                 )
             else:
                 return InputNodeBuilder(value_type(value))

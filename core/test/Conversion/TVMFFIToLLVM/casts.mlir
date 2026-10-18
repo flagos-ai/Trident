@@ -50,7 +50,7 @@ func.func @checked_union(%value: !tvm_ffi.any) -> !tvm_ffi.union<!tvm_ffi.int, !
 // CHECK: llvm.unreachable
 // CHECK: return
 func.func @unused_checks(%first: !tvm_ffi.any, %second: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.none>) {
-  %a = tvm_ffi.downcast %first : !tvm_ffi.any -> !tvm_ffi.array
+  %a = tvm_ffi.downcast %first : !tvm_ffi.any -> !tvm_ffi.c.array
   %b = tvm_ffi.downcast %second : !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.none> -> !tvm_ffi.tensor
   return
 }

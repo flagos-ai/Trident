@@ -20,6 +20,10 @@ class ContainerTest(unittest.TestCase):
             return x + values[0] + values[1]
 
         @trident.jit
+        def mixed_add(x: torch.Tensor, values: list) -> torch.Tensor:
+            return x + values[0] + values[2]
+
+        @trident.jit
         def nested_add(
             x: torch.Tensor,
             values: list[tuple[torch.Tensor, torch.Tensor]],
@@ -31,7 +35,7 @@ class ContainerTest(unittest.TestCase):
             x: torch.Tensor,
             values: tuple[torch.Tensor, torch.Tensor],
         ) -> torch.Tensor:
-            return x + values[0] + values[1]
+            return x + values[0] + values[-1]
 
         def check() -> None:
             x = torch.randn(4, device="cuda")
@@ -39,6 +43,7 @@ class ContainerTest(unittest.TestCase):
             second = torch.randn(4, device="cuda")
             for name, function, values, expected in (
                 ("list", list_add, [first, second], x + first + second),
+                ("mixed", mixed_add, [first, None, 3], x + first + 3),
                 (
                     "nested",
                     nested_add,
@@ -92,6 +97,24 @@ class ContainerTest(unittest.TestCase):
                     torch.testing.assert_close(result["tensor"], x + 1)
                     torch.testing.assert_close(result["other"][0], x * 2)
             self.assertEqual(len(outputs._sub_modules), 1)
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
+    def test_tuple_length_specialization(self) -> None:
+        @trident.jit
+        def add_length(x: torch.Tensor, values: tuple) -> torch.Tensor:
+            return x + len(values)
+
+        def check() -> None:
+            x = torch.ones(4, device="cuda")
+            for values in ((), (x,), (x, x), (), (x,)):
+                for phase in ("warmup", "cached"):
+                    with self.subTest(length=len(values), phase=phase):
+                        torch.testing.assert_close(
+                            add_length(x, values), x + len(values)
+                        )
+            self.assertEqual(len(add_length._sub_modules), 3)
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

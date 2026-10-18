@@ -281,64 +281,6 @@ class GuardExpressionVisitor:
         self._analysis[node] = analysis
         return analysis
 
-    def _operands(self, node: ast.expr) -> Sequence[ast.expr]:
-        """Select operands in evaluation order, retaining comparison diagnostics."""
-
-        if isinstance(node, ast.BinOp):
-            return (node.left, node.right)
-        elif isinstance(node, ast.BoolOp):
-            return node.values
-        elif isinstance(node, ast.IfExp):
-            return (node.test, node.body, node.orelse)
-        elif isinstance(node, ast.Compare):
-            identity = any(isinstance(operation, ast.Is) for operation in node.ops)
-            assert not identity or len(node.ops) == 1, (
-                f"identity guard comparison must be binary: {self.text!r} in {self.context}"
-            )
-            assert all(
-                isinstance(
-                    operation,
-                    (ast.Eq, ast.Gt, ast.GtE, ast.Is, ast.Lt, ast.LtE, ast.NotEq),
-                )
-                for operation in node.ops
-            ), f"unsupported guard comparison operator: {self.text!r} in {self.context}"
-            assert all(
-                ASTVisitor.supports(value) for value in (node.left, *node.comparators)
-            ), (
-                f"guard comparison operand cannot be lowered: {self.text!r} in {self.context}"
-            )
-            # Preserve the existing pairwise evaluation order, including shared operands.
-            return [
-                value
-                for operands in pairwise((node.left, *node.comparators))
-                for value in operands
-            ]
-        elif isinstance(node, ast.UnaryOp):
-            if (
-                isinstance(node.op, ast.Not)
-                and Local.from_expression(node.operand) is not None
-            ):
-                return [ast.Call(ast.Name("len", ast.Load()), [node.operand], [])]
-            else:
-                return [node.operand]
-        elif isinstance(node, ast.Attribute):
-            return [node.value]
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id == "len":
-                [argument] = node.args
-                return [
-                    argument.value
-                    if isinstance(argument, ast.Attribute) and argument.attr == "shape"
-                    else argument
-                ]
-            else:
-                return node.args
-        else:
-            source, _, _ = ASTVisitor.metadata(node)
-            return (
-                [] if source is None else [ast.parse(source.literal, mode="eval").body]
-            )
-
     def _build_comparison(self, node: ast.Compare, index: int = 0) -> list[ir.Value]:
         analysis = self._analyze(node)
         types = [tvm_ffi_d.ResultType.get(analysis.type)]
@@ -398,6 +340,15 @@ class GuardExpressionVisitor:
                 if isinstance(operation, (ast.Eq, ast.Is))
                 else binary(ASTVisitor.scalar_ops[type(operation)], lhs, rhs)
             )
+
+    def _container_size(self, value: ir.Value) -> list[ir.Value]:
+        if isinstance(value.type, tvm_ffi_d.TupleType):
+            # Entry guards validate untrusted tuple arity before the static
+            # schema may be used; static type arity cannot validate the input.
+            return self.importer.build_call(
+                "ffi.ArraySize", [value], tvm_ffi_d.IntType.get()
+            )
+        return pure([tvm_ffi_d.ArraySizeOp(value).result])
 
     def _direct_fallback(self, node: ast.expr) -> bool:
         if isinstance(node, ast.Attribute):
@@ -460,6 +411,64 @@ class GuardExpressionVisitor:
                     else tvm_ffi_d.tensor_stride
                 )(value, native_constant(index))
 
+    def _operands(self, node: ast.expr) -> Sequence[ast.expr]:
+        """Select operands in evaluation order, retaining comparison diagnostics."""
+
+        if isinstance(node, ast.BinOp):
+            return (node.left, node.right)
+        elif isinstance(node, ast.BoolOp):
+            return node.values
+        elif isinstance(node, ast.IfExp):
+            return (node.test, node.body, node.orelse)
+        elif isinstance(node, ast.Compare):
+            identity = any(isinstance(operation, ast.Is) for operation in node.ops)
+            assert not identity or len(node.ops) == 1, (
+                f"identity guard comparison must be binary: {self.text!r} in {self.context}"
+            )
+            assert all(
+                isinstance(
+                    operation,
+                    (ast.Eq, ast.Gt, ast.GtE, ast.Is, ast.Lt, ast.LtE, ast.NotEq),
+                )
+                for operation in node.ops
+            ), f"unsupported guard comparison operator: {self.text!r} in {self.context}"
+            assert all(
+                ASTVisitor.supports(value) for value in (node.left, *node.comparators)
+            ), (
+                f"guard comparison operand cannot be lowered: {self.text!r} in {self.context}"
+            )
+            # Preserve the existing pairwise evaluation order, including shared operands.
+            return [
+                value
+                for operands in pairwise((node.left, *node.comparators))
+                for value in operands
+            ]
+        elif isinstance(node, ast.UnaryOp):
+            if (
+                isinstance(node.op, ast.Not)
+                and Local.from_expression(node.operand) is not None
+            ):
+                return [ast.Call(ast.Name("len", ast.Load()), [node.operand], [])]
+            else:
+                return [node.operand]
+        elif isinstance(node, ast.Attribute):
+            return [node.value]
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "len":
+                [argument] = node.args
+                return [
+                    argument.value
+                    if isinstance(argument, ast.Attribute) and argument.attr == "shape"
+                    else argument
+                ]
+            else:
+                return node.args
+        else:
+            source, _, _ = ASTVisitor.metadata(node)
+            return (
+                [] if source is None else [ast.parse(source.literal, mode="eval").body]
+            )
+
     def build(self, node: ast.expr) -> list[ir.Value]:
         analysis = self._analyze(node)
         types = [tvm_ffi_d.ResultType.get(analysis.type)]
@@ -480,11 +489,7 @@ class GuardExpressionVisitor:
                     results = pure([fallback], result_types=types)
                 elif analysis.array_size:
                     with bind(
-                        self.importer.build_call(
-                            "ffi.ArraySize",
-                            operation.arguments,
-                            tvm_ffi_d.IntType.get(),
-                        ),
+                        self._container_size(operation.arguments[0]),
                         result_types=types,
                     ) as length:
                         [value] = length.arguments

@@ -21,20 +21,24 @@
 // CHECK: ^[[CONTINUATION]](%[[GET_STATUS:[a-zA-Z0-9_]+]]: i32):
 // CHECK: %[[GET_ZERO:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK: %[[GET_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[GET_STATUS]], %[[GET_ZERO]] : i32
+// CHECK: llvm.cond_br %[[GET_SUCCESS]], ^[[GET_OK:bb[0-9]+]], ^[[GET_FAILED:bb[0-9]+]]
+// CHECK: ^[[GET_FAILED]]:
+// CHECK-NEXT: llvm.call @abort() : () -> ()
+// CHECK-NEXT: llvm.unreachable
 // CHECK: %[[INITIAL_RESULT:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.struct<(i32, i32, i64)>
 // CHECK: llvm.store %[[INITIAL_RESULT]], %[[RESULT_SLOT:[a-zA-Z0-9_]+]]
 // CHECK: %[[CALL_STATUS:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[ARGS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RESULT_SLOT]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: %[[CALL_ZERO:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK: %[[CALL_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[CALL_STATUS]], %[[CALL_ZERO]] : i32
-// CHECK: cf.assert %[[GET_SUCCESS]], "TVMFFIFunctionGetGlobal failed"
-// CHECK: cf.assert %[[CALL_SUCCESS]], "TVMFFIFunctionCall failed"
+// CHECK: llvm.cond_br %[[CALL_SUCCESS]], ^[[CALL_OK:bb[0-9]+]], ^[[CALL_FAILED:bb[0-9]+]]
+// CHECK: ^[[CALL_FAILED]]:
+// CHECK-NEXT: llvm.call @abort() : () -> ()
+// CHECK-NEXT: llvm.unreachable
 func.func @checked_global_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
-  %callee, %get_success = tvm_ffi.FunctionGetGlobal "test.identity"
-      : !tvm_ffi.function, i1
-  %result, %call_success = tvm_ffi.FunctionCall %callee(%arg)
-      : (!tvm_ffi.int) -> !tvm_ffi.int, i1
-  cf.assert %get_success, "TVMFFIFunctionGetGlobal failed"
-  cf.assert %call_success, "TVMFFIFunctionCall failed"
+  %callee = tvm_ffi.FunctionGetGlobal "test.identity"
+      : !tvm_ffi.object
+  %result = tvm_ffi.FunctionCall %callee(%arg)
+      : (!tvm_ffi.int) -> !tvm_ffi.int
   return %result : !tvm_ffi.int
 }
 
@@ -146,10 +150,10 @@ func.func @get_bool(%value: !tvm_ffi.bool) -> i1 {
 // CHECK: llvm.mlir.global_ctors ctors = [@__trident_tvm_ffi_ctor_test.identity], priorities = [65535 : i32], data = [#llvm.zero]
 // CHECK: llvm.mlir.global_dtors dtors = [@__trident_tvm_ffi_dtor_test.identity], priorities = [65535 : i32], data = [#llvm.zero]
 func.func @global_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
-  %callee, %get_success = tvm_ffi.FunctionGetGlobal "test.identity"
-      : !tvm_ffi.function, i1
-  %result, %call_success = tvm_ffi.FunctionCall %callee(%arg)
-      : (!tvm_ffi.int) -> !tvm_ffi.int, i1
+  %callee = tvm_ffi.FunctionGetGlobal "test.identity"
+      : !tvm_ffi.object
+  %result = tvm_ffi.FunctionCall %callee(%arg)
+      : (!tvm_ffi.int) -> !tvm_ffi.int
   return %result : !tvm_ffi.int
 }
 
@@ -168,16 +172,19 @@ func.func @global_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
 // CHECK: %[[LOCAL_STATUS:[a-zA-Z0-9_]+]] = call @__tvm_ffi_callee(%[[LOCAL_CONTEXT]], %[[LOCAL_ARGS]], %[[LOCAL_NARGS]], %[[LOCAL_RESULT_SLOT]])
 // CHECK: %[[LOCAL_ZERO:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK: %[[LOCAL_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[LOCAL_STATUS]], %[[LOCAL_ZERO]] : i32
+// CHECK: llvm.cond_br %[[LOCAL_SUCCESS]], ^[[LOCAL_OK:bb[0-9]+]], ^[[LOCAL_FAILED:bb[0-9]+]]
+// CHECK: ^[[LOCAL_FAILED]]:
+// CHECK-NEXT: llvm.call @abort() : () -> ()
+// CHECK-NEXT: llvm.unreachable
+// CHECK: ^[[LOCAL_OK]]:
 // CHECK: %[[LOCAL_RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[LOCAL_RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: cf.assert %[[LOCAL_SUCCESS]], "local TVM FFI call failed"
 // CHECK: return %[[LOCAL_RESULT]] : !llvm.struct<(i32, i32, i64)>
 func.func private @__tvm_ffi_callee(
     !llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 
 func.func @local_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
-  %result, %success = tvm_ffi.call @callee(%arg)
-      : (!tvm_ffi.int) -> !tvm_ffi.int, i1
-  cf.assert %success, "local TVM FFI call failed"
+  %result = tvm_ffi.call @callee(%arg)
+      : (!tvm_ffi.int) -> !tvm_ffi.int
   return %result : !tvm_ffi.int
 }
 

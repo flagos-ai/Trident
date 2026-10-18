@@ -8,19 +8,11 @@
 include "mlir/Pass/PassBase.td"
 
 def DecomposeTVMFFI : Pass<"decompose-tvm-ffi", "mlir::ModuleOp"> {
-  let summary = "Decompose TVM FFI binds into unpack and SCF branches";
-  let dependentDialects = [
-    "mlir::arith::ArithDialect", "mlir::scf::SCFDialect",
-    "trident::tvm_ffi::TVMFFIDialect"
-  ];
-}
-
-def LowerTVMFFIMonad : Pass<"lower-tvm-ffi-monad", "mlir::ModuleOp"> {
-  let summary = "Expand TVM FFI Results into payloads and success bits";
+  let summary = "Erase semantic containers and decompose TVM FFI binds";
   let dependentDialects = [
     "mlir::LLVM::LLVMDialect", "mlir::arith::ArithDialect",
     "mlir::cf::ControlFlowDialect", "mlir::scf::SCFDialect",
-    "mlir::ub::UBDialect", "trident::tvm_ffi::TVMFFIDialect"
+    "trident::tvm_ffi::TVMFFIDialect"
   ];
 }
 

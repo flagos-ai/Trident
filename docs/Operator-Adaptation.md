@@ -106,8 +106,8 @@ guaranteed. Preserve insertion-point restoration. Guards and the backend
 explicitly bind their construction Results rather than passing continuation
 callbacks.
 
-FFI functions declare Result return types, and `tvm_ffi.return` matches those
-types exactly. Every Result requires one payload type. Use `monad.pure` for
+FFI functions declare exactly one Result return type, and `tvm_ffi.return`
+matches that type exactly. Pack multiple values into a semantic tuple payload. Every Result requires one payload type. Use `monad.pure` for
 successful values and `Result<!tvm_ffi.none>` with `tvm_ffi.constant.none` for
 no-data returns. Empty argument builders retain a None Result success marker;
 pass only the original number of arguments to calls, including zero for empty
@@ -123,12 +123,18 @@ signless width. Build unions with `UnionType.get(types, context=...)`; invalid,
 duplicate or cross-context members raise `ValueError`. Type printing is for IR
 text and diagnostics, not type dispatch.
 
-The lowering pipeline decomposes binds into `monad.unpack` and `scf.if`, then
-runs `lower-tvm-ffi-monad` after helper inlining and before ownership analysis.
-Only successful branches restore widened payloads with `tvm_ffi.downcast`.
+The lowering pipeline decomposes binds into `monad.unpack` and `scf.if`,
+retaining semantic Results until LLVM conversion. LLVM conversion lowers each
+Result to one struct containing its converted payload and an i1 success bit,
+and lowers `monad.pure`, `monad.fail` and `monad.unpack`. ABI return conversion
+uses unpack and restores widened payloads only in successful branches with
+`tvm_ffi.downcast`.
 
-Ownership is handled by operation interfaces and the deallocation pass before
-ABI lowering. Mark an allocation, borrow, alias or transfer accurately rather
+Ownership deallocation is temporarily omitted from the default pipeline pending
+semantic Result support. Object lifetime correctness and CUDA leak verification
+are deferred to that refactor; the standalone ownership pass retains its legacy
+materialized-Result input contract. Ownership interfaces remain the intended
+place to describe allocations and transfers. Mark an allocation, borrow, alias or transfer accurately rather
 than inserting reference-count calls in the importer. Extend semantic operations
 and their lowering under `core/include/trident/core/Dialect/TVMFFI/` and
 `core/lib/Conversion/` when an existing operation cannot represent the behavior.
@@ -147,6 +153,31 @@ Other payload types, including native scalars and Function/Object handles,
 remain unchanged and may only be used when success is true. Unpack neither
 clears runtime errors nor transfers ownership. Result payload types remain
 unrestricted except for the existing prohibition on nested Results.
+
+## Semantic containers
+
+Use `ArrayType.get(element_type)` for lists and `TupleType.get(types)` for tuples.
+Tuple element types must inherit `TVMFFIABIType`; semantic Array and Tuple
+types also inherit it, preserving nested containers. Array elements must be
+tagged FFI values or semantic containers. Native scalars and Results are not
+valid container elements. Box native scalars before construction; heterogeneous and
+empty lists use `ArrayType.get(AnyType.get())`. The ABI Array binding is
+`CArrayType.get()`.
+
+Emit `array.create`, `array.get` and `array.size` for lists; these return the
+array, element and boxed integer types directly. Array get accepts a native
+i64 index.
+For tuples, `tuple.construct` directly returns a semantic Tuple and
+`tuple.unconstruct` directly returns every element in order, without Results.
+Use unconstruct results for static indexing and type information for static
+length. Input guards must still check runtime arity through checked
+`ffi.ArraySize` calls. Container decomposition asserts lookup status, a non-null
+handle and call status, terminating on failure.
+`decompose-tvm-ffi` uses one dialect conversion to expand checked runtime calls
+and monadic binds while erasing container types to `c.array` throughout
+signatures and regions.
+Keep this pass before ABI and LLVM conversion. Direct runtime
+ABI helpers may continue using `c.array`; frontend code uses semantic types.
 
 ## Symbolic shapes
 
@@ -171,8 +202,9 @@ specialization attribute. The latter records native ABI type and optional
 divisibility; constexpr operands are checked and omitted from the native kernel
 call. Functional wrapper outputs clone only the specified tensors before launch.
 
-`ConvertTVMFFIToGPU` runs after inlining, Result expansion and SCF-to-CFG,
-and before ownership deallocation.
+`ConvertTVMFFIToGPU` runs after inlining and SCF-to-CFG, before ABI and LLVM
+conversion. Its specialization rejection branch constructs a successful Result
+with `monad.pure`.
 It extracts native tensor data pointers and scalars from semantic operands,
 validates specializations, obtains the current stream through TVM FFI, and emits
 `gpu.launch_func`. A specialization failure must return the existing GuardMatch

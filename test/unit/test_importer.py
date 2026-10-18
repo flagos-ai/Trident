@@ -6,15 +6,65 @@
 import unittest
 
 import sympy
+import torch
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.importer import TridentFxImporter
-from trident.ir import bind, constant, make_result_types, native_constant, pure
+from trident.ir import (
+    bind,
+    box,
+    constant,
+    ffi_type,
+    make_result_types,
+    native_constant,
+    pure,
+)
 
 from test.support.ir import new_context
 
 
 class ImporterTest(unittest.TestCase):
+    def test_abi_type_spellings(self) -> None:
+        context = new_context()
+        with context:
+            for name, type_class in (
+                ("any", tvm_ffi_d.AnyType),
+                ("bool", tvm_ffi_d.BoolType),
+                ("c.array", tvm_ffi_d.CArrayType),
+                ("dtype", tvm_ffi_d.DTypeType),
+                ("device", tvm_ffi_d.DeviceType),
+                ("float", tvm_ffi_d.FloatType),
+                ("function", tvm_ffi_d.FunctionType),
+                ("int", tvm_ffi_d.IntType),
+                ("none", tvm_ffi_d.NoneType),
+                ("object", tvm_ffi_d.ObjectType),
+                ("raw_str", tvm_ffi_d.RawStrType),
+                ("small_str", tvm_ffi_d.SmallStrType),
+                ("str", tvm_ffi_d.StrType),
+                ("tensor", tvm_ffi_d.TensorType),
+            ):
+                with self.subTest(name=name):
+                    type_ = type_class.get()
+                    self.assertEqual(f"{type_}", f"!tvm_ffi.{name}")
+                    parsed = ffi_type(name)
+                    self.assertIsInstance(parsed, type_class)
+                    self.assertEqual(parsed, type_)
+            exception = tvm_ffi_d.ExceptionType.get()
+            self.assertEqual(f"{exception}", "!tvm_ffi.exception")
+            self.assertIsInstance(ffi_type("exception"), tvm_ffi_d.ExceptionType)
+            union = tvm_ffi_d.UnionType.get([tvm_ffi_d.IntType.get(), exception])
+            self.assertEqual(
+                f"{union}", "!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>"
+            )
+            parsed_union = ir.Type.parse(f"{union}")
+            self.assertIsInstance(parsed_union, tvm_ffi_d.UnionType)
+            self.assertEqual(parsed_union.types, union.types)
+            result = tvm_ffi_d.ResultType.get(union)
+            self.assertEqual(f"{result}", f"!tvm_ffi.monad.result<{union}>")
+            parsed_result = ir.Type.parse(f"{result}")
+            self.assertIsInstance(parsed_result, tvm_ffi_d.ResultType)
+            self.assertEqual(parsed_result.payload_type, union)
+
     def test_bind_result_contract(self) -> None:
         context = new_context()
         importer = TridentFxImporter(context=context, specialization_id=0)
@@ -66,13 +116,145 @@ class ImporterTest(unittest.TestCase):
                 [unit.payload_type, unit.payload_type, integer, unit.payload_type],
             )
 
+    def test_container_array_operations(self) -> None:
+        context = new_context()
+        importer = TridentFxImporter(context=context, specialization_id=0)
+        with context, ir.Location.unknown(context):
+            with ir.InsertionPoint(importer.module.body):
+                integer = box(constant(7))
+                array_type = tvm_ffi_d.ArrayType.get(integer.type)
+                created = tvm_ffi_d.ArrayCreateOp(array_type, [integer]).result
+                self.assertEqual(created.type, array_type)
+                size = tvm_ffi_d.ArraySizeOp(created).result
+                self.assertEqual(size.type, integer.type)
+                element = tvm_ffi_d.ArrayGetOp(created, constant(0)).result
+                self.assertEqual(element.type, integer.type)
+                with bind(
+                    pure([created]), result_types=[tvm_ffi_d.ResultType.get(array_type)]
+                ) as bound:
+                    [array] = bound.arguments
+                    for target in (integer.type, ir.IntegerType.get_signless(64)):
+                        with self.subTest(target=target):
+                            [result] = importer.build_container_get(array, 0, target)
+                            self.assertEqual(result.type.payload_type, target)
+                    tvm_ffi_d.MonadYieldOp(pure([array]))
+            self.assertTrue(importer.module.operation.verify())
+
+    def test_container_inference(self) -> None:
+        context = new_context()
+        importer = TridentFxImporter(context=context, specialization_id=0)
+        with (
+            context,
+            ir.Location.unknown(context),
+            ir.InsertionPoint(importer.module.body),
+        ):
+            for value, expected in (
+                ([], "!tvm_ffi.array<!tvm_ffi.any>"),
+                ((), "!tvm_ffi.tuple<>"),
+                ([1, 2], "!tvm_ffi.array<!tvm_ffi.int>"),
+                ([1, None], "!tvm_ffi.array<!tvm_ffi.any>"),
+                (["a", "b"], "!tvm_ffi.array<!tvm_ffi.raw_str>"),
+                ([torch.float32, torch.float64], "!tvm_ffi.array<!tvm_ffi.int>"),
+                ((torch.float32, 1), "!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.int>"),
+                ([[1], [2]], "!tvm_ffi.array<!tvm_ffi.array<!tvm_ffi.int>>"),
+            ):
+                with self.subTest(value=value):
+                    [result] = importer.build_arguments([value])
+                    self.assertEqual(f"{result.type.payload_type}", expected)
+            self.assertTrue(importer.module.operation.verify())
+
+    def test_container_tuple_operations(self) -> None:
+        context = new_context()
+        importer = TridentFxImporter(context=context, specialization_id=0)
+        with context, ir.Location.unknown(context):
+            with ir.InsertionPoint(importer.module.body):
+                integer, boolean = box(constant(7)), box(constant(True))
+                type_ = tvm_ffi_d.TupleType.get([integer.type, boolean.type])
+                tuple_ = tvm_ffi_d.TupleConstructOp(type_, [integer, boolean]).result
+                self.assertEqual(tuple_.type, type_)
+                elements = tvm_ffi_d.TupleUnconstructOp(type_.types, tuple_).elements
+                self.assertEqual(
+                    [value.type for value in elements], [integer.type, boolean.type]
+                )
+                for index, expected in (
+                    (0, integer.type),
+                    (1, boolean.type),
+                    (-1, boolean.type),
+                    (-2, integer.type),
+                ):
+                    with self.subTest(index=index):
+                        [result] = importer.build_container_get(tuple_, index, expected)
+                        self.assertEqual(result.type.payload_type, expected)
+                for index in (-3, 2):
+                    with (
+                        self.subTest(index=index),
+                        self.assertRaisesRegex(
+                            AssertionError, "tuple index out of range"
+                        ),
+                    ):
+                        importer.build_container_get(tuple_, index, integer.type)
+                empty_type = tvm_ffi_d.TupleType.get([])
+                empty = tvm_ffi_d.TupleConstructOp(empty_type, []).result
+                self.assertEqual(
+                    len(tvm_ffi_d.TupleUnconstructOp([], empty).elements), 0
+                )
+            self.assertTrue(importer.module.operation.verify())
+            self.assertTrue(ir.Module.parse(f"{importer.module}").operation.verify())
+
+    def test_container_types(self) -> None:
+        context = new_context()
+        with context, ir.Location.unknown(context):
+            integer = tvm_ffi_d.IntType.get()
+            array = tvm_ffi_d.ArrayType.get(integer)
+            tuple_ = tvm_ffi_d.TupleType.get([array, integer, integer])
+            for value, cls in (
+                (array, tvm_ffi_d.ArrayType),
+                (tuple_, tvm_ffi_d.TupleType),
+            ):
+                self.assertIsInstance(ir.Type.parse(f"{value}"), cls)
+                self.assertEqual(ir.Type.parse(f"{value}"), value)
+            self.assertEqual(array.element_type, integer)
+            self.assertEqual(tuple_.types, (array, integer, integer))
+            abi_members = (
+                tvm_ffi_d.AnyType.get(),
+                array,
+                tvm_ffi_d.FunctionType.get(),
+                tvm_ffi_d.NoneType.get(),
+                tvm_ffi_d.ObjectType.get(),
+                tuple_,
+                tvm_ffi_d.UnionType.get([integer, tvm_ffi_d.NoneType.get()]),
+            )
+            abi_tuple = tvm_ffi_d.TupleType.get(abi_members)
+            self.assertEqual(abi_tuple.types, abi_members)
+            self.assertEqual(ir.Type.parse(f"{abi_tuple}"), abi_tuple)
+            empty = tvm_ffi_d.TupleType.get([])
+            self.assertEqual(empty.types, ())
+            self.assertEqual(ir.Type.parse(f"{empty}"), empty)
+            for type_ in (
+                ir.IntegerType.get_signless(64),
+                tvm_ffi_d.ResultType.get(integer),
+            ):
+                with self.assertRaises(ValueError):
+                    tvm_ffi_d.ArrayType.get(type_)
+                with self.assertRaises(ValueError):
+                    tvm_ffi_d.TupleType.get([type_])
+            other = new_context()
+            with other:
+                foreign = tvm_ffi_d.IntType.get()
+            with self.assertRaises(ValueError):
+                tvm_ffi_d.ArrayType.get(foreign)
+            with self.assertRaises(ValueError):
+                tvm_ffi_d.TupleType.get([foreign])
+
     def test_empty_arguments_and_explicit_none(self) -> None:
-        def collect(operation: ir.Operation) -> list[tvm_ffi_d.FunctionCallOp]:
-            calls: list[tvm_ffi_d.FunctionCallOp] = []
+        def collect(operation: ir.Operation) -> list[ir.OpView]:
+            calls: list[ir.OpView] = []
             for region in operation.regions:
                 for block in region.blocks:
                     for child in block.operations:
-                        if isinstance(child, tvm_ffi_d.FunctionCallOp):
+                        if isinstance(
+                            child, (tvm_ffi_d.ArrayCreateOp, tvm_ffi_d.TupleConstructOp)
+                        ):
                             calls.append(child)
                         calls.extend(collect(child.operation))
             return calls
@@ -102,7 +284,7 @@ class ImporterTest(unittest.TestCase):
                     calls = collect(importer.module.operation)
                     self.assertEqual(len(calls), array_calls)
                     for call in calls:
-                        self.assertEqual(len(call.arguments), 0)
+                        self.assertEqual(len(call.elements), 0)
 
     def test_monad_unpack(self) -> None:
         context = new_context()
