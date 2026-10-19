@@ -342,7 +342,7 @@ class CleanupTest(unittest.TestCase):
             pipeline.run(module.operation)
             materialized = f"{module}"
             self.assertNotIn(CLEANUP_ATTR, materialized)
-            self.assertNotIn("tvm_ffi.retain_payloads", materialized)
+            self.assertNotIn(RETAIN_ATTR, materialized)
             self.assertNotIn("ObjectIncRef", materialized)
             self.assertNotIn("ObjectDecRef", materialized)
             self.assertTrue(module.operation.verify())
@@ -412,7 +412,7 @@ class CleanupTest(unittest.TestCase):
             self.assertTrue(module.operation.verify())
             self.assertIsInstance(function.arguments[0].type, ffi.CArrayType)
             materialized = f"{module}"
-            self.assertNotIn("tvm_ffi.retain_payloads", materialized)
+            self.assertNotIn(RETAIN_ATTR, materialized)
             self.assertNotIn(CLEANUP_ATTR, materialized)
             self.assertNotIn("tvm_ffi.monad.bind", materialized)
             self.assertIn("tvm_ffi.ObjectIncRef", materialized)
@@ -444,7 +444,7 @@ class CleanupTest(unittest.TestCase):
                 ],
                 [],
             )
-            self.assertIn("tvm_ffi.retain_payloads", results[0].owner.attributes)
+            self.assertIn(RETAIN_ATTR, results[0].owner.attributes)
             self.assertTrue(module.operation.verify())
             register_all_passes()
             passmanager.PassManager.parse(
@@ -459,7 +459,7 @@ class CleanupTest(unittest.TestCase):
                 ],
                 [value, value],
             )
-            self.assertNotIn("tvm_ffi.retain_payloads", results[0].owner.attributes)
+            self.assertNotIn(RETAIN_ATTR, results[0].owner.attributes)
             # Both Results and the source retain their own cleanup responsibility.
             self.assertEqual(
                 len([op for op in block.operations if isinstance(op, scf.IfOp)]),
@@ -473,6 +473,12 @@ class CleanupTest(unittest.TestCase):
                 ],
                 [value],
             )
+
+            materialized = f"{module}"
+            passmanager.PassManager.parse(
+                "builtin.module(materialize-tvm-ffi-cleanup)"
+            ).run(module.operation)
+            self.assertEqual(f"{module}", materialized)
 
     def test_result_exports_retain_only_on_success(self) -> None:
         with new_context(), ir.Location.unknown():

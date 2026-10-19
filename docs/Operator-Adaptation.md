@@ -85,7 +85,7 @@ returning a complete Result without consuming a callback. `build_arguments`
 constructs nested list/tuple arguments in order and returns Results, leaving
 operator execution and subsequent graph traversal to its caller. Keep pure
 argument prefixes iterative. `pure` borrows payloads and requests an independent
-reference for each Result through `tvm_ffi.retain_payloads`, then marks it for
+reference for each Result through `tvm_ffi.retain`, then marks it for
 cleanup. It infers types by default;
 with declared Result types it boxes native scalars and widens Any/Union payloads at the boundary. `bind` borrows
 its inputs; its builder unconditionally marks the bind operation for cleanup. For exits marked with `tvm_ffi.retain`, the cleanup pass retains
@@ -191,9 +191,9 @@ runtime calls and converted FunctionCall operations for cleanup before `material
 before inlining and SCF-to-CFG, directly emitting unpack and success branches
 for Result reference adjustments. No second decomposition is needed. Cleanup
 assumes well-formed input attributes and processes block exits only when their
-immediate parent region has one block. Separate
-payload-retain, export-retain and cleanup pattern stages run without folding or
-dead-code elimination. Export retention handles
+immediate parent region has one block. Pure retains are processed regardless of
+the parent region's block count. Separate retain and cleanup pattern stages run
+without folding or dead-code elimination. Export retention handles
 marked reference-bearing operands of `func.return`, `tvm_ffi.return`, `scf.yield` and
 `tvm_ffi.monad.yield` before releasing local references in reverse order. There is no scope operation whitelist. Empty and
 multi-block regions have no direct block-exit cleanup or export rewrites. Nested single-block

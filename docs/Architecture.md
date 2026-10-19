@@ -218,7 +218,7 @@ The lowering pipeline is:
    references produced by container construction and extraction receive
    `tvm_ffi.cleanup`; borrowed casts and arguments remain unmarked.
 2. Run `materialize-tvm-ffi-cleanup` on this structured CArray IR. It consumes
-   explicit cleanup markers and `tvm_ffi.retain_payloads` on frontend pure Ops,
+   explicit cleanup markers and `tvm_ffi.retain` on frontend pure Ops,
    retaining each borrowed payload occurrence before wrapping it and retaining
    exports before local releases. Result reference adjustments directly use
    `monad.unpack` and independent `scf.if` success branches. Inline private
@@ -317,6 +317,9 @@ use a fresh importer for each program.
 
 Python imports `CLEANUP_ATTR` and `RETAIN_ATTR` from `trident.ownership`;
 these constants name `tvm_ffi.cleanup` and `tvm_ffi.retain`.
+The retain marker requests independent references for operand occurrences on
+`monad.pure` and the supported exits. Pure retains precede wrapping; exit
+retains precede local cleanup. Other operations do not consume this marker.
 
 Frontend exits construct `func.ReturnOp`, `tvm_ffi_d.ReturnOp`,
 `scf.YieldOp` or `tvm_ffi_d.MonadYieldOp`, then directly set
@@ -394,13 +397,14 @@ multi-results. Scalars are ignored. Unmarked results remain unmanaged. Cleanup
 responsibility describes object references, even when they share tensor storage.
 
 `materialize-tvm-ffi-cleanup` assumes well-formed input attributes and processes
-operations only when their immediate parent region has one block. Three pattern
-walks materialize borrowed pure payload retains, then export retains, then
-consume cleanup markers at block exits. The walks do not fold or eliminate operations, and cleanup patterns
+export retains and cleanup only when their immediate parent region has one block.
+Pure retains are processed regardless of the parent region's block count. Two
+pattern walks materialize pure and export retains, then consume cleanup markers
+at block exits. The walks do not fold or eliminate operations, and cleanup patterns
 explicitly preserve reverse operation and result
 order independently of traversal order. Region selection does not use an operation
-whitelist. Operations directly in multi-block regions retain their attributes
-and are skipped; nested single-block regions can be processed independently.
+whitelist. Export and cleanup markers directly in multi-block regions remain
+pending; nested single-block regions can be processed independently.
 The walk driver does not visit unreachable blocks.
 Results of the region-owning operation are still processed in its selected parent
 block. Export retains are generated for marked `func.return`, `tvm_ffi.return`,
@@ -425,7 +429,7 @@ a cleanup UnitAttr, regardless of result type. Marked terminator exports acquire
 their references during cleanup.
 
 Resource helpers borrow arguments and explicitly mark their acquired results
-for cleanup. `pure` borrows payloads and records `tvm_ffi.retain_payloads` to
+for cleanup. `pure` borrows payloads and records `tvm_ffi.retain` to
 request an independent reference for each resource Result after container erasure,
 including repeated payloads; callers do not retain them again.
 The low-level `MonadPureOp` transfers references, so callers must manage ownership

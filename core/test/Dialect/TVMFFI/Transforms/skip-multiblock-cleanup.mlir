@@ -38,3 +38,19 @@ func.func @multiple_blocks(%predicate: i1) -> !tvm_ffi.exception {
 ^exit:
   return {tvm_ffi.retain} %output : !tvm_ffi.exception
 }
+
+// Pure retains do not require a single-block region. Local cleanup and export
+// markers remain pending, and a second pass must not retain the payload again.
+// CHECK-LABEL: func.func @pure_in_multiple_blocks(
+// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
+// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
+// CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[INPUT]] {tvm_ffi.cleanup}
+// CHECK-NEXT: cf.br ^[[PURE_EXIT:bb[0-9]+]](%[[RESULT]] : !tvm_ffi.monad.result<!tvm_ffi.tensor>)
+// CHECK-NEXT: ^[[PURE_EXIT]](%[[OUTPUT_RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.tensor>):
+// CHECK-NEXT: return {tvm_ffi.retain} %[[OUTPUT_RESULT]] : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+func.func @pure_in_multiple_blocks(%input: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
+  %result = tvm_ffi.monad.pure %input {tvm_ffi.cleanup, tvm_ffi.retain} : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  cf.br ^exit(%result : !tvm_ffi.monad.result<!tvm_ffi.tensor>)
+^exit(%output: !tvm_ffi.monad.result<!tvm_ffi.tensor>):
+  return {tvm_ffi.retain} %output : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+}

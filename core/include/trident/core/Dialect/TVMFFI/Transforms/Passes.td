@@ -25,7 +25,7 @@ def MaterializeTVMFFICleanup : Pass<"materialize-tvm-ffi-cleanup", "mlir::Module
   let summary = "Retain exports and release owned references at block exits";
   let description = [{
     Run after container decomposition and before inlining. Consume
-    tvm_ffi.retain_payloads on frontend monad.pure operations, retaining each
+    tvm_ffi.retain on frontend monad.pure operations, retaining each
     borrowed payload occurrence before wrapping it. Low-level unmarked pure
     operations continue to transfer references.
     Consume tvm_ffi.retain on exits, retaining reference-bearing operands
@@ -35,10 +35,11 @@ def MaterializeTVMFFICleanup : Pass<"materialize-tvm-ffi-cleanup", "mlir::Module
     defining block exit in reverse operation and result order. Result payloads
     are unpacked and adjusted in independent scf.if success branches. Export
     retains precede all local releases.
-    Process operations whose immediate parent region has one block, without a
-    scope operation whitelist. Skip operations directly in multi-block regions,
-    preserving their attributes. Nested single-block regions may be processed
-    independently; the walk driver skips unreachable blocks. Region-owning
+    Process pure retains regardless of the parent region's block count. Process
+    export retains and cleanup only when the immediate parent region has one
+    block, without a scope operation whitelist. Preserve pending export and
+    cleanup attributes directly in multi-block regions. Nested single-block
+    regions may be processed independently; the walk driver skips unreachable blocks. Region-owning
     results are processed in the selected parent block. Assume input attributes
     are well-formed; run separate retain and cleanup pattern stages without
     folding. Remove consumed cleanup and export markers, including scalar-only

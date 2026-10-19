@@ -39,7 +39,7 @@ func.func @borrowed(%input: !tvm_ffi.tuple<>) -> (!tvm_ffi.tuple<>, !tvm_ffi.tup
 // LLVM-LABEL: llvm.func @repeated_payloads(
 func.func @repeated_payloads() {
   %array = tvm_ffi.array.create() : () -> !tvm_ffi.array<!tvm_ffi.int>
-  %results:2 = tvm_ffi.monad.pure %array, %array {tvm_ffi.cleanup, tvm_ffi.retain_payloads} : (!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.array<!tvm_ffi.int>) -> (!tvm_ffi.monad.result<!tvm_ffi.array<!tvm_ffi.int>>, !tvm_ffi.monad.result<!tvm_ffi.array<!tvm_ffi.int>>)
+  %results:2 = tvm_ffi.monad.pure %array, %array {tvm_ffi.cleanup, tvm_ffi.retain} : (!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.array<!tvm_ffi.int>) -> (!tvm_ffi.monad.result<!tvm_ffi.array<!tvm_ffi.int>>, !tvm_ffi.monad.result<!tvm_ffi.array<!tvm_ffi.int>>)
   return {tvm_ffi.retain}
 }
 
