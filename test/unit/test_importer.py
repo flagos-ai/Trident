@@ -14,6 +14,7 @@ from trident.ir import (
     bind,
     box,
     constant,
+    container_get,
     ffi_type,
     make_result_types,
     native_constant,
@@ -59,6 +60,18 @@ class ImporterTest(unittest.TestCase):
             parsed_union = ir.Type.parse(f"{union}")
             self.assertIsInstance(parsed_union, tvm_ffi_d.UnionType)
             self.assertEqual(parsed_union.types, union.types)
+            for member in (
+                ir.IntegerType.get_signless(64),
+                tvm_ffi_d.ObjectType.get(),
+                tvm_ffi_d.ResultType.get(tvm_ffi_d.IntType.get()),
+            ):
+                with (
+                    self.subTest(member=f"{member}"),
+                    self.assertRaisesRegex(
+                        ValueError, "union members must be TVM FFI C ABI types"
+                    ),
+                ):
+                    tvm_ffi_d.UnionType.get([tvm_ffi_d.IntType.get(), member])
             result = tvm_ffi_d.ResultType.get(union)
             self.assertEqual(f"{result}", f"!tvm_ffi.monad.result<{union}>")
             parsed_result = ir.Type.parse(f"{result}")
@@ -84,15 +97,13 @@ class ImporterTest(unittest.TestCase):
                 tvm_ffi_d.ResultType.get(payload)
             with ir.InsertionPoint(module.body):
                 value = native_constant(7)
-                for inputs in ([], [value]):
-                    with self.subTest(inputs=inputs):
-                        count = len(module.body.operations)
-                        with (
-                            self.assertRaisesRegex(AssertionError, "bind inputs"),
-                            bind(inputs, result_types=[payload]),
-                        ):
-                            self.fail("invalid inputs entered the bind body")
-                        self.assertEqual(len(module.body.operations), count)
+                count = len(module.body.operations)
+                with (
+                    self.assertRaisesRegex(AssertionError, "bind inputs"),
+                    bind([value], result_types=[payload]),
+                ):
+                    self.fail("invalid inputs entered the bind body")
+                self.assertEqual(len(module.body.operations), count)
                 none = constant(None)
                 results = pure(
                     [none, none, value, none], result_types=[unit, unit, payload, unit]
@@ -135,7 +146,7 @@ class ImporterTest(unittest.TestCase):
                     [array] = bound.arguments
                     for target in (integer.type, ir.IntegerType.get_signless(64)):
                         with self.subTest(target=target):
-                            [result] = importer.build_container_get(array, 0, target)
+                            [result] = container_get(array, 0, target)
                             self.assertEqual(result.type.payload_type, target)
                     tvm_ffi_d.MonadYieldOp(pure([array]))
             self.assertTrue(importer.module.operation.verify())
@@ -183,7 +194,7 @@ class ImporterTest(unittest.TestCase):
                     (-2, integer.type),
                 ):
                     with self.subTest(index=index):
-                        [result] = importer.build_container_get(tuple_, index, expected)
+                        [result] = container_get(tuple_, index, expected)
                         self.assertEqual(result.type.payload_type, expected)
                 for index in (-3, 2):
                     with (
@@ -192,7 +203,7 @@ class ImporterTest(unittest.TestCase):
                             AssertionError, "tuple index out of range"
                         ),
                     ):
-                        importer.build_container_get(tuple_, index, integer.type)
+                        container_get(tuple_, index, integer.type)
                 empty_type = tvm_ffi_d.TupleType.get([])
                 empty = tvm_ffi_d.TupleConstructOp(empty_type, []).result
                 self.assertEqual(
@@ -218,12 +229,17 @@ class ImporterTest(unittest.TestCase):
             abi_members = (
                 tvm_ffi_d.AnyType.get(),
                 array,
+                tvm_ffi_d.ExceptionType.get(),
                 tvm_ffi_d.FunctionType.get(),
                 tvm_ffi_d.NoneType.get(),
-                tvm_ffi_d.ObjectType.get(),
                 tuple_,
                 tvm_ffi_d.UnionType.get([integer, tvm_ffi_d.NoneType.get()]),
             )
+            for element in abi_members:
+                with self.subTest(array_element=element):
+                    abi_array = tvm_ffi_d.ArrayType.get(element)
+                    self.assertEqual(abi_array.element_type, element)
+                    self.assertEqual(ir.Type.parse(f"{abi_array}"), abi_array)
             abi_tuple = tvm_ffi_d.TupleType.get(abi_members)
             self.assertEqual(abi_tuple.types, abi_members)
             self.assertEqual(ir.Type.parse(f"{abi_tuple}"), abi_tuple)
@@ -232,11 +248,17 @@ class ImporterTest(unittest.TestCase):
             self.assertEqual(ir.Type.parse(f"{empty}"), empty)
             for type_ in (
                 ir.IntegerType.get_signless(64),
+                ir.RankedTensorType.get([2], ir.IntegerType.get_signless(64)),
+                tvm_ffi_d.ObjectType.get(),
                 tvm_ffi_d.ResultType.get(integer),
             ):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(
+                    ValueError, "array element must be a TVM FFI C ABI type"
+                ):
                     tvm_ffi_d.ArrayType.get(type_)
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(
+                    ValueError, "tuple elements must be TVM FFI C ABI types"
+                ):
                     tvm_ffi_d.TupleType.get([type_])
             other = new_context()
             with other:

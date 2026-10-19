@@ -48,6 +48,12 @@ mlir::Value buildConstantValue(mlir::OpBuilder &builder, mlir::Location loc,
         tvm_ffi::FunctionCallOp call = tvm_ffi::FunctionCallOp::create(
             builder, loc, tvm_ffi::CArrayType::get(builder.getContext()),
             handle.getResult(), elements);
+        tvm_ffi::ObjectDecRefOp::create(builder, loc, handle.getResult());
+        for (mlir::Value const element : llvm::reverse(elements)) {
+          if (mlir::isa<tvm_ffi::CArrayType>(element.getType())) {
+            tvm_ffi::ObjectDecRefOp::create(builder, loc, element);
+          }
+        }
         return call.getResult();
       })
       .Case<mlir::FloatAttr>([&](mlir::FloatAttr floating) -> mlir::Value {
@@ -107,7 +113,12 @@ mlir::Value ConstantSpecializationAttr::buildCheck(mlir::OpBuilder &builder,
                                                    mlir::Location loc,
                                                    mlir::Value operand) const {
   mlir::Value const expected = buildConstantValue(builder, loc, getValue());
-  return tvm_ffi::EqOp::create(builder, loc, operand, expected);
+  mlir::Value const matches =
+      tvm_ffi::EqOp::create(builder, loc, operand, expected);
+  if (mlir::isa<tvm_ffi::CArrayType>(expected.getType())) {
+    tvm_ffi::ObjectDecRefOp::create(builder, loc, expected);
+  }
+  return matches;
 }
 
 mlir::Type ConstantSpecializationAttr::getTargetType() const {

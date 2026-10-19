@@ -1,7 +1,7 @@
 add_mlir_library(
   TVMFFITransforms
   DecomposeTVMFFI.cc
-  OwnershipDeallocation.cc
+  MaterializeOwnershipMark.cc
   DEPENDS
   MLIRTVMFFITransformsPassIncGen
   LINK_LIBS

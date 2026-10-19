@@ -9,7 +9,11 @@
 #define TRIDENT_CORE_DIALECT_TVMFFI_IR_TVMFFIATTRS_H_
 
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIInterfaces.h"
+#include <cstdint>
+#include <llvm/ADT/SmallVector.h>
 #include <mlir/IR/Attributes.h>
+#include <mlir/IR/Operation.h>
+#include <mlir/Support/LogicalResult.h>
 
 #define GET_ATTRDEF_CLASSES
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIAttrs.h.inc"

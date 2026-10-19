@@ -17,7 +17,7 @@
 // CHECK: ^[[SUCCESS]]:
 // CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[SLOT]]
 func.func @tuple_roundtrip(%value: !tvm_ffi.int) -> !tvm_ffi.int {
-  %tuple = tvm_ffi.tuple.construct(%value) : (!tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.int>
-  %result = tvm_ffi.tuple.unconstruct %tuple : (!tvm_ffi.tuple<!tvm_ffi.int>) -> (!tvm_ffi.int)
-  return %result : !tvm_ffi.int
+  %tuple = tvm_ffi.tuple.construct(%value) {tvm_ffi.cleanup} : (!tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.int>
+  %result = tvm_ffi.tuple.unconstruct %tuple {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.int>) -> (!tvm_ffi.int)
+  return {tvm_ffi.retain} %result : !tvm_ffi.int
 }

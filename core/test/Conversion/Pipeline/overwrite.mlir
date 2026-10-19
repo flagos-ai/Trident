@@ -29,6 +29,6 @@ tvm_ffi.func @overwrite(%source: !tvm_ffi.tensor,
   tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.tensor
 
   %returned_none = tvm_ffi.constant.none
-  %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
-  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.none>
+  %returned = tvm_ffi.monad.pure %returned_none {tvm_ffi.cleanup} : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  tvm_ffi.return {tvm_ffi.retain} %returned : !tvm_ffi.monad.result<!tvm_ffi.none>
 }

@@ -16,7 +16,7 @@
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIInterfaces.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/OwnershipDeallocation.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/MaterializeOwnershipMark.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
 #include <mlir/Conversion/GPUCommon/GPUToLLVM.h>
@@ -49,5 +49,5 @@ void trident::conversion::registerAllPasses() {
   trident::conversion::registerFinalizeTVMFFIPass();
   trident::conversion::registerTridentLoweringPipelinePass();
   trident::tvm_ffi::registerDecomposeTVMFFIPass();
-  trident::tvm_ffi::registerOwnershipDeallocationPass();
+  trident::tvm_ffi::registerMaterializeTVMFFICleanupPass();
 }

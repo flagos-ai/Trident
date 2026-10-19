@@ -6,12 +6,9 @@ from __future__ import annotations
 import ast
 import re
 from collections.abc import Sequence
-from typing import TypeAlias
 
 from trident.core import ir
 from trident.input import InputTable
-
-Subscript: TypeAlias = int | str
 
 
 class Local:
@@ -25,7 +22,7 @@ class Local:
     def __hash__(self) -> int:
         return hash(self._subscripts)
 
-    def __init__(self, subscripts: Sequence[Subscript]) -> None:
+    def __init__(self, subscripts: Sequence[int | str]) -> None:
         assert subscripts, "local subscripts must not be empty"
         root, *follows = subscripts
         assert isinstance(root, str) and root, (
@@ -35,7 +32,7 @@ class Local:
             isinstance(step, (int, str)) and not isinstance(step, bool)
             for step in follows
         ), "local subscripts must be integers or strings"
-        self._subscripts: tuple[Subscript, ...] = tuple(subscripts)
+        self._subscripts: tuple[int | str, ...] = tuple(subscripts)
 
     def __repr__(self) -> str:
         return f"Local(subscripts={self._subscripts!r})"
@@ -46,7 +43,7 @@ class Local:
 
     @classmethod
     def from_expression(cls, expression: ast.expr) -> Local | None:
-        def parse(node: ast.expr) -> list[Subscript] | None:
+        def parse(node: ast.expr) -> list[int | str] | None:
             if not isinstance(node, ast.Subscript):
                 return None
 
@@ -92,5 +89,5 @@ class Local:
         return tree[self._subscripts]
 
     @property
-    def subscripts(self) -> tuple[Subscript, ...]:
+    def subscripts(self) -> tuple[int | str, ...]:
         return self._subscripts

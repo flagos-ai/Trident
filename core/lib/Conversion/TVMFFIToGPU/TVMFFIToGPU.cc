@@ -20,15 +20,14 @@
 #include <dlpack/dlpack.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/ADT/TypeSwitch.h>
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
-#include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/GPU/IR/GPUDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinDialect.h>
@@ -72,74 +71,28 @@ public:
                        rewriter, loc, kind, source);
     };
 
-    tvm_ffi::FuncOp function = op->getParentOfType<tvm_ffi::FuncOp>();
-    if (function) {
-      mlir::Value allChecks = mlir::LLVM::ConstantOp::create(
-          rewriter, loc, rewriter.getI1Type(), 1);
-      for (auto [specialization, source] :
-           llvm::zip(specializations
-                         .getAsRange<tvm_ffi::SpecializationAttrInterface>(),
-                     op.getKernelOperands())) {
-        mlir::Value const operand = materializeOperand(specialization, source);
-        if (!operand) {
-          return op.emitOpError(
-              "failed to materialize a native kernel operand");
-        }
-        if (mlir::Value const check =
-                specialization.buildCheck(rewriter, loc, operand)) {
-          allChecks =
-              mlir::arith::AndIOp::create(rewriter, loc, allChecks, check);
-        }
+    mlir::Value allChecks =
+        mlir::arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    for (auto [specialization, source] : llvm::zip(
+             specializations.getAsRange<tvm_ffi::SpecializationAttrInterface>(),
+             op.getKernelOperands())) {
+      mlir::Value const operand = materializeOperand(specialization, source);
+      if (!operand) {
+        return op.emitOpError("failed to materialize a native kernel operand");
       }
-
-      mlir::FunctionType const functionType = function.getFunctionType();
-      if (functionType.getNumResults() != 1) {
-        return op.emitOpError(
-            "enclosing function must have one result to report "
-            "specialization failure");
+      if (mlir::Value const check =
+              specialization.buildCheck(rewriter, loc, operand)) {
+        allChecks =
+            mlir::arith::AndIOp::create(rewriter, loc, allChecks, check);
       }
-      mlir::Type const resultType =
-          mlir::cast<tvm_ffi::ResultType>(functionType.getResult(0))
-              .getPayloadType();
-      bool const canReportFailure =
-          llvm::TypeSwitch<mlir::Type, bool>(resultType)
-              .Case<tvm_ffi::AnyType>(
-                  [](tvm_ffi::AnyType) -> bool { return true; })
-              .Case<tvm_ffi::UnionType>(
-                  [&](tvm_ffi::UnionType resultUnion) -> bool {
-                    return resultUnion.contains(
-                        tvm_ffi::ExceptionType::get(function.getContext()));
-                  })
-              .Default([](mlir::Type) -> bool { return false; });
-      if (!canReportFailure) {
-        return op.emitOpError(
-            "enclosing function result must be !tvm_ffi.any or contain "
-            "!tvm_ffi.exception");
-      }
-
-      mlir::Block *launchBlock = op->getBlock();
-      mlir::Block *continuation =
-          rewriter.splitBlock(launchBlock, op->getIterator());
-      mlir::Block *failure =
-          rewriter.createBlock(&function.getBody(), function.getBody().end());
-      rewriter.setInsertionPointToEnd(launchBlock);
-      mlir::cf::CondBranchOp::create(rewriter, loc, allChecks, continuation, {},
-                                     failure, {});
-
-      rewriter.setInsertionPointToEnd(failure);
-      mlir::Value const exception = tvm_ffi::ExceptionOp::create(
-          rewriter, loc, tvm_ffi::ExceptionType::get(function.getContext()),
-          "GuardMatch");
-      mlir::Value const failureResult =
-          tvm_ffi::UpcastOp::create(rewriter, loc, resultType, exception);
-      mlir::Value const result =
-          tvm_ffi::MonadPureOp::create(
-              rewriter, loc, mlir::TypeRange{functionType.getResult(0)},
-              mlir::ValueRange{failureResult})
-              .getResult(0);
-      tvm_ffi::ReturnOp::create(rewriter, loc, result);
-      rewriter.setInsertionPoint(op);
     }
+    mlir::scf::IfOp branch = mlir::scf::IfOp::create(
+        rewriter, loc, op->getResultTypes(), allChecks, true);
+    rewriter.setInsertionPointToStart(branch.elseBlock());
+    tvm_ffi::MonadFailOp rejected =
+        tvm_ffi::MonadFailOp::create(rewriter, loc, op->getResultTypes());
+    mlir::scf::YieldOp::create(rewriter, loc, rejected.getResults());
+    rewriter.setInsertionPointToStart(branch.thenBlock());
     // TODO: Materialized native values can borrow storage from their source
     // objects and must not outlive or cross blocks independently of them.
     // Add a block-transfer check for borrowed values so future conversions
@@ -207,10 +160,16 @@ public:
         mlir::LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64Type(), 0);
     operands.append(2, nullPointer);
 
-    rewriter.replaceOpWithNewOp<mlir::gpu::LaunchFuncOp>(
-        op, op.getKernel(), gridSize, blockSize, dynamicSharedMemorySize,
-        operands, nullptr, mlir::ValueRange{}, asyncObject, clusterSize);
+    mlir::gpu::LaunchFuncOp::create(rewriter, loc, op.getKernel(), gridSize,
+                                    blockSize, dynamicSharedMemorySize,
+                                    operands, nullptr, mlir::ValueRange{},
+                                    asyncObject, clusterSize);
 
+    mlir::Value const none = tvm_ffi::ConstantNoneOp::create(rewriter, loc);
+    tvm_ffi::MonadPureOp result = tvm_ffi::MonadPureOp::create(
+        rewriter, loc, op->getResultTypes(), mlir::ValueRange{none});
+    mlir::scf::YieldOp::create(rewriter, loc, result.getResults());
+    rewriter.replaceOp(op, branch.getResults());
     return mlir::success();
   }
 };
@@ -273,11 +232,11 @@ public:
     });
 
     target.addIllegalOp<tvm_ffi::KernelLaunchOp>();
-    target
-        .addLegalDialect<dlpack::DLPackDialect, mlir::BuiltinDialect,
-                         mlir::LLVM::LLVMDialect, mlir::arith::ArithDialect,
-                         mlir::cf::ControlFlowDialect, mlir::func::FuncDialect,
-                         mlir::gpu::GPUDialect, tvm_ffi::TVMFFIDialect>();
+    target.addLegalDialect<dlpack::DLPackDialect, mlir::BuiltinDialect,
+                           mlir::LLVM::LLVMDialect, mlir::arith::ArithDialect,
+                           mlir::cf::ControlFlowDialect,
+                           mlir::func::FuncDialect, mlir::gpu::GPUDialect,
+                           mlir::scf::SCFDialect, tvm_ffi::TVMFFIDialect>();
 
     mlir::RewritePatternSet patterns(&getContext());
     populateTVMFFIToGPUConversionPatterns(target, patterns, typeConverter);

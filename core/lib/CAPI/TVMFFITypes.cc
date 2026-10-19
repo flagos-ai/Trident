@@ -59,8 +59,14 @@ MlirType mlirTVMFFIArrayTypeGetChecked(MlirLocation location,
         << "array element must belong to the construction context";
     return MlirType{nullptr};
   }
-  return wrap(
-      trident::tvm_ffi::ArrayType::getChecked(loc, loc.getContext(), type));
+  trident::tvm_ffi::TVMFFICABIType const elementType =
+      mlir::dyn_cast<trident::tvm_ffi::TVMFFICABIType>(type);
+  if (!elementType) {
+    mlir::emitError(loc) << "array element must be a TVM FFI C ABI type";
+    return MlirType{nullptr};
+  }
+  return wrap(trident::tvm_ffi::ArrayType::getChecked(loc, loc.getContext(),
+                                                      elementType));
 }
 
 MlirType mlirTVMFFIArrayTypeGetElementType(MlirType type) {
@@ -121,7 +127,7 @@ MlirType mlirTVMFFITupleTypeGetChecked(MlirLocation location, intptr_t numTypes,
     mlir::emitError(loc) << "tuple requires a valid member array";
     return MlirType{nullptr};
   }
-  llvm::SmallVector<mlir::Type> members;
+  llvm::SmallVector<trident::tvm_ffi::TVMFFICABIType> members;
   members.reserve(numTypes);
   for (intptr_t index = 0; index < numTypes; ++index) {
     const mlir::Type member = unwrap(types[index]);
@@ -130,10 +136,17 @@ MlirType mlirTVMFFITupleTypeGetChecked(MlirLocation location, intptr_t numTypes,
           << "tuple members must belong to the construction context";
       return MlirType{nullptr};
     }
-    members.push_back(member);
+    trident::tvm_ffi::TVMFFICABIType const cabi =
+        mlir::dyn_cast<trident::tvm_ffi::TVMFFICABIType>(member);
+    if (!cabi) {
+      mlir::emitError(loc) << "tuple elements must be TVM FFI C ABI types";
+      return MlirType{nullptr};
+    }
+    members.push_back(cabi);
   }
   return wrap(trident::tvm_ffi::TupleType::getChecked(
-      loc, loc.getContext(), llvm::ArrayRef<mlir::Type>(members)));
+      loc, loc.getContext(),
+      llvm::ArrayRef<trident::tvm_ffi::TVMFFICABIType>(members)));
 }
 
 MlirStringRef mlirTVMFFITupleTypeGetName(void) {
@@ -161,19 +174,30 @@ bool mlirTypeIsATVMFFITupleType(MlirType type) {
 MlirType mlirTVMFFIUnionTypeGetChecked(MlirLocation location, intptr_t numTypes,
                                        const MlirType *types) {
   mlir::Location const loc = unwrap(location);
-  llvm::SmallVector<mlir::Type> members;
+  if (numTypes < 0 || (numTypes > 0 && !types)) {
+    mlir::emitError(loc) << "union requires a valid member array";
+    return MlirType{nullptr};
+  }
+  llvm::SmallVector<trident::tvm_ffi::TVMFFICABIType> members;
   members.reserve(numTypes);
   for (intptr_t index = 0; index < numTypes; ++index) {
     const mlir::Type member = unwrap(types[index]);
-    if (member.getContext() != loc.getContext()) {
+    if (!member || member.getContext() != loc.getContext()) {
       mlir::emitError(loc)
           << "union members must belong to the construction context";
       return MlirType{nullptr};
     }
-    members.push_back(member);
+    trident::tvm_ffi::TVMFFICABIType const cabi =
+        mlir::dyn_cast<trident::tvm_ffi::TVMFFICABIType>(member);
+    if (!cabi) {
+      mlir::emitError(loc) << "union members must be TVM FFI C ABI types";
+      return MlirType{nullptr};
+    }
+    members.push_back(cabi);
   }
   return wrap(trident::tvm_ffi::UnionType::getChecked(
-      loc, loc.getContext(), llvm::ArrayRef<mlir::Type>(members)));
+      loc, loc.getContext(),
+      llvm::ArrayRef<trident::tvm_ffi::TVMFFICABIType>(members)));
 }
 
 MlirStringRef mlirTVMFFIUnionTypeGetName(void) {

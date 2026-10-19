@@ -101,6 +101,27 @@ class ContainerTest(unittest.TestCase):
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
 
+    def test_repeated_outputs_keep_independent_references(self) -> None:
+        @trident.jit
+        def outputs(x: torch.Tensor):
+            result = x + 1
+            return x, result, result
+
+        def check() -> None:
+            x = torch.ones(4, device="cuda")
+            for phase in ("warmup", "cached"):
+                with self.subTest(phase=phase):
+                    borrowed, first, second = outputs(x)
+                    self.assertEqual(borrowed.data_ptr(), x.data_ptr())
+                    self.assertEqual(first.data_ptr(), second.data_ptr())
+                    first.add_(3)
+                    del borrowed, first
+                    torch.testing.assert_close(second, x + 4)
+            self.assertEqual(len(outputs._sub_modules), 1)
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
     def test_tuple_length_specialization(self) -> None:
         @trident.jit
         def add_length(x: torch.Tensor, values: tuple) -> torch.Tensor:

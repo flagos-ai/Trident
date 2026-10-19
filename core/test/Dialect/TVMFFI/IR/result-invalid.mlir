@@ -139,3 +139,25 @@ tvm_ffi.func @omitted_none_argument(%unit: !tvm_ffi.monad.result<!tvm_ffi.none>,
   }
   tvm_ffi.return %output : !tvm_ffi.monad.result<i64>
 }
+
+// -----
+
+func.func @zero_input_wrong_arguments() {
+  // expected-error@+1 {{region arguments must match input Result payloads}}
+  tvm_ffi.monad.bind : () -> () {
+  ^bb0(%unexpected: i64):
+    tvm_ffi.monad.yield
+  }
+  return
+}
+
+// -----
+
+func.func @zero_output_wrong_yield(%input: !tvm_ffi.monad.result<i64>) {
+  tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> () {
+  ^bb0(%payload: i64):
+    // expected-error@+1 {{Result types must match bind outputs}}
+    tvm_ffi.monad.yield %input : !tvm_ffi.monad.result<i64>
+  }
+  return
+}

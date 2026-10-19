@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Iterator, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 import torch._guards
 from torch._guards import GuardSource
@@ -14,9 +14,7 @@ from trident.core.dialects import scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTableBuilder
 from trident.ir import bind, native_constant, pure
-
-if TYPE_CHECKING:
-    from trident.importer import TridentFxImporter
+from trident.ownership import RETAIN_ATTR
 
 from .codes import GuardCode
 from .kinds import Guard
@@ -45,25 +43,27 @@ class Guards:
         builder: InputTableBuilder,
         arguments: Sequence[ir.Value],
         context: ir.Context,
-        importer: TridentFxImporter,
     ) -> list[ir.Value]:
         type_ = tvm_ffi_d.ResultType.get(ir.IntegerType.get_signless(1))
         code = next(codes, None)
         if code is None:
             return pure([native_constant(True)], result_types=[type_])
         with bind(
-            code.build_result(builder.build(arguments), context, importer),
+            code.build_result(builder.build(arguments), context),
             result_types=[type_],
         ) as operation:
             [predicate] = operation.arguments
             branch = scf.IfOp(predicate, [type_], has_else=True)
             with ir.InsertionPoint(branch.then_block):
-                scf.YieldOp(
-                    self._build_checks(codes, builder, arguments, context, importer)
-                )
+                yielded = self._build_checks(codes, builder, arguments, context)
+                terminator = scf.YieldOp(yielded)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
             with ir.InsertionPoint(branch.else_block):
-                scf.YieldOp(pure([native_constant(False)], result_types=[type_]))
-            tvm_ffi_d.MonadYieldOp(branch.results)
+                yielded = pure([native_constant(False)], result_types=[type_])
+                terminator = scf.YieldOp(yielded)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            terminator = tvm_ffi_d.MonadYieldOp(branch.results)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         return [*operation.outputs]
 
     def build(
@@ -71,7 +71,6 @@ class Guards:
         builder: InputTableBuilder,
         arguments: Sequence[ir.Value],
         context: ir.Context,
-        importer: TridentFxImporter,
     ) -> list[ir.Value]:
         # Captured globals and defaults are resolved by export, not wrapper inputs.
         unique: dict[Hashable, GuardCode] = {}
@@ -94,4 +93,4 @@ class Guards:
             ),
         )
 
-        return self._build_checks(iter(ordered), builder, arguments, context, importer)
+        return self._build_checks(iter(ordered), builder, arguments, context)

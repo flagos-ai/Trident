@@ -69,7 +69,7 @@ mlir::Value createConstantABI(mlir::ConversionPatternRewriter &rewriter,
                               mlir::Location loc, int32_t typeIndex,
                               mlir::Value payload) {
   mlir::LLVM::LLVMStructType const anyTy =
-      tvm_ffi::TVMFFIABIType::getLLVMType(rewriter.getContext());
+      tvm_ffi::TVMFFICABIType::getLLVMType(rewriter.getContext());
   mlir::IntegerType const i32Ty = rewriter.getI32Type();
   mlir::Value result = mlir::LLVM::UndefOp::create(rewriter, loc, anyTy);
   result = mlir::LLVM::InsertValueOp::create(
@@ -118,7 +118,7 @@ public:
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::MLIRContext *ctx = rewriter.getContext();
     mlir::LLVM::LLVMStructType const anyTy =
-        tvm_ffi::TVMFFIABIType::getLLVMType(ctx);
+        tvm_ffi::TVMFFICABIType::getLLVMType(ctx);
     mlir::LLVM::LLVMPointerType const ptrTy =
         mlir::LLVM::LLVMPointerType::get(ctx);
     mlir::IntegerType const i32Ty = rewriter.getI32Type();
@@ -265,7 +265,7 @@ public:
     mlir::LLVM::LLVMPointerType const ptrTy =
         mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     mlir::LLVM::LLVMStructType const anyTy =
-        tvm_ffi::TVMFFIABIType::getLLVMType(rewriter.getContext());
+        tvm_ffi::TVMFFICABIType::getLLVMType(rewriter.getContext());
     mlir::Value const one =
         mlir::LLVM::ConstantOp::create(rewriter, loc, i64Ty, 1);
     mlir::Value const lhsStorage =
@@ -315,7 +315,7 @@ public:
     mlir::LLVM::LLVMPointerType const ptrTy =
         mlir::LLVM::LLVMPointerType::get(context);
     mlir::LLVM::LLVMStructType const anyTy =
-        tvm_ffi::TVMFFIABIType::getLLVMType(context);
+        tvm_ffi::TVMFFICABIType::getLLVMType(context);
     mlir::Value const kindPtr = utils::getString(rewriter, loc, op.getKind());
     mlir::Value exceptionArg =
         mlir::LLVM::UndefOp::create(rewriter, loc, anyTy);
@@ -369,7 +369,7 @@ public:
     }
     mlir::ModuleOp const module = op->getParentOfType<mlir::ModuleOp>();
     mlir::LLVM::LLVMStructType anyTy =
-        tvm_ffi::TVMFFIABIType::getLLVMType(rewriter.getContext());
+        tvm_ffi::TVMFFICABIType::getLLVMType(rewriter.getContext());
     mlir::LLVM::LLVMPointerType ptrTy =
         mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     mlir::IntegerType const i64Ty = rewriter.getI64Type();
@@ -661,7 +661,8 @@ public:
             op.getType())
             .Case<tvm_ffi::UnionType>(
                 [](tvm_ffi::UnionType type) -> llvm::SmallVector<mlir::Type> {
-                  return llvm::SmallVector<mlir::Type>(type.getTypes());
+                  return llvm::SmallVector<mlir::Type>(type.getTypes().begin(),
+                                                       type.getTypes().end());
                 })
             .Default([](mlir::Type type) -> llvm::SmallVector<mlir::Type> {
               return {type};
@@ -767,7 +768,7 @@ public:
     }
     mlir::Location const loc = op.getLoc();
     mlir::LLVM::LLVMStructType const anyTy =
-        tvm_ffi::TVMFFIABIType::getLLVMType(rewriter.getContext());
+        tvm_ffi::TVMFFICABIType::getLLVMType(rewriter.getContext());
     mlir::LLVM::LLVMPointerType const ptrTy =
         mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     mlir::Value const one =
@@ -802,7 +803,7 @@ public:
     }
     mlir::Location const loc = op.getLoc();
     mlir::LLVM::LLVMStructType const anyTy =
-        tvm_ffi::TVMFFIABIType::getLLVMType(rewriter.getContext());
+        tvm_ffi::TVMFFICABIType::getLLVMType(rewriter.getContext());
     mlir::LLVM::LLVMPointerType const ptrTy =
         mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     mlir::Value const one =
@@ -1018,7 +1019,7 @@ public:
     mlir::LLVM::StoreOp::create(
         rewriter, loc, opaquePtrTypeIndex,
         mlir::LLVM::GEPOp::create(rewriter, loc, ptrType,
-                                  tvm_ffi::TVMFFIABIType::getLLVMType(context),
+                                  tvm_ffi::TVMFFICABIType::getLLVMType(context),
                                   tensorArgument,
                                   llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 0}));
     mlir::Value const opaquePtrPayload =
@@ -1026,7 +1027,7 @@ public:
     mlir::LLVM::StoreOp::create(
         rewriter, loc, opaquePtrPayload,
         mlir::LLVM::GEPOp::create(rewriter, loc, ptrType,
-                                  tvm_ffi::TVMFFIABIType::getLLVMType(context),
+                                  tvm_ffi::TVMFFICABIType::getLLVMType(context),
                                   tensorArgument,
                                   llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 2}));
     mlir::FailureOr<mlir::Value> result =
@@ -1037,7 +1038,7 @@ public:
       return op.emitError("failed to call TVM FFI tensor conversion helper");
     }
     rewriter.replaceOpWithNewOp<mlir::LLVM::LoadOp>(
-        op, tvm_ffi::TVMFFIABIType::getLLVMType(context), result.value());
+        op, tvm_ffi::TVMFFICABIType::getLLVMType(context), result.value());
     return mlir::success();
   }
 };
@@ -1063,7 +1064,7 @@ public:
     }
     mlir::IntegerType const i32Ty = rewriter.getI32Type();
     mlir::LLVM::LLVMStructType const anyTy =
-        tvm_ffi::TVMFFIABIType::getLLVMType(rewriter.getContext());
+        tvm_ffi::TVMFFICABIType::getLLVMType(rewriter.getContext());
     mlir::Value result = mlir::LLVM::UndefOp::create(rewriter, loc, anyTy);
     result = mlir::LLVM::InsertValueOp::create(
         rewriter, loc, result,
@@ -1108,8 +1109,8 @@ void populateTVMFFIToLLVMConversionPatterns(
       return mlir::LLVM::LLVMPointerType::get(type.getContext());
     } else if (mlir::isa<dlpack::DLTensorType>(type)) {
       return dlpack::DLTensorType::getLLVMType(type.getContext());
-    } else if (type.hasTrait<mlir::TypeTrait::TVMFFIABI>()) {
-      return tvm_ffi::TVMFFIABIType::getLLVMType(type.getContext());
+    } else if (mlir::isa<tvm_ffi::TVMFFICABIType>(type)) {
+      return tvm_ffi::TVMFFICABIType::getLLVMType(type.getContext());
     } else {
       return std::nullopt;
     }

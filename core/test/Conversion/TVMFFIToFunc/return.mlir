@@ -75,7 +75,7 @@ tvm_ffi.func @object(%input: !tvm_ffi.monad.result<!tvm_ffi.object>) -> !tvm_ffi
 // CHECK: llvm.store %[[PAYLOAD]], %[[SLOT]] : i1, !llvm.ptr
 // CHECK: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 tvm_ffi.func @ordinary_boolean(%value: i1) -> !tvm_ffi.monad.result<i1> {
-  %returned = tvm_ffi.monad.pure %value : (i1) -> !tvm_ffi.monad.result<i1>
+  %returned = tvm_ffi.monad.pure %value {tvm_ffi.cleanup} : (i1) -> !tvm_ffi.monad.result<i1>
   tvm_ffi.return %returned : !tvm_ffi.monad.result<i1>
 }
 
@@ -105,7 +105,7 @@ tvm_ffi.func @ordinary_boolean(%value: i1) -> !tvm_ffi.monad.result<i1> {
 // CHECK: scf.yield %[[CALL_STATUS]] : i32
 tvm_ffi.func @packed_unit() -> !tvm_ffi.monad.result<!tvm_ffi.none> attributes {emit_tvm_ffi_abi} {
   %unit_none = tvm_ffi.constant.none
-  %unit = tvm_ffi.monad.pure %unit_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  %unit = tvm_ffi.monad.pure %unit_none {tvm_ffi.cleanup} : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   tvm_ffi.return %unit : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
 

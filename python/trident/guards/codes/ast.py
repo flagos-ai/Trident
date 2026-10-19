@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Hashable
-from typing import TYPE_CHECKING, Final, Self, override
+from typing import Final, Self, override
 
 from trident.core import ir
 from trident.input import InputTable
@@ -13,9 +13,6 @@ from trident.input import InputTable
 from ..ast import ASTVisitor, GuardExpressionVisitor
 from ..local import Local
 from .base import GuardCode
-
-if TYPE_CHECKING:
-    from trident.importer import TridentFxImporter
 
 
 class ASTCode(GuardCode):
@@ -33,21 +30,12 @@ class ASTCode(GuardCode):
     @override
     def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         """Build standalone expressions used by the guard IR tests."""
-        from trident.importer import TridentFxImporter
-
-        importer = TridentFxImporter(context=context, specialization_id=0)
-        return GuardExpressionVisitor(self.text, tree, context, importer).value(
-            self.expression
-        )
+        return GuardExpressionVisitor(self.text, tree, context).value(self.expression)
 
     @override
-    def build_result(
-        self, tree: InputTable, context: ir.Context, importer: TridentFxImporter
-    ) -> list[ir.Value]:
+    def build_result(self, tree: InputTable, context: ir.Context) -> list[ir.Value]:
         assert self.supported, f"guard expression cannot be lowered: {self.text!r}"
-        return GuardExpressionVisitor(self.text, tree, context, importer).build(
-            self.expression
-        )
+        return GuardExpressionVisitor(self.text, tree, context).build(self.expression)
 
     @property
     def key(self) -> Hashable:

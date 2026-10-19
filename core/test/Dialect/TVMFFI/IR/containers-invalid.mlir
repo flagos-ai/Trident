@@ -12,7 +12,7 @@ func.func @array_create(%value: !tvm_ffi.int) {
 // -----
 
 func.func @array_create_payload(%value: !tvm_ffi.int) {
-  // expected-error@+1 {{result #0 must be , but got '!tvm_ffi.int'}}
+  // expected-error@+1 {{result #0 must be An array whose elements are TVM FFI C ABI values, but got '!tvm_ffi.int'}}
   %result = tvm_ffi.array.create(%value) : (!tvm_ffi.int) -> !tvm_ffi.int
   return
 }
@@ -35,12 +35,27 @@ func.func @array_size(%array: !tvm_ffi.array<!tvm_ffi.int>) {
 
 // -----
 
-// expected-error@+1 {{array element must be a tagged FFI value or semantic container}}
-func.func private @native(!tvm_ffi.array<i64>)
+// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+func.func private @array_native(!tvm_ffi.array<i64>)
 
 // -----
 
-// expected-error@+1 {{tuple elements must be TVM FFI ABI types}}
+// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+func.func private @array_object(!tvm_ffi.array<!tvm_ffi.object>)
+
+// -----
+
+// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+func.func private @array_result(!tvm_ffi.array<!tvm_ffi.monad.result<!tvm_ffi.int>>)
+
+// -----
+
+// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+func.func private @array_tensor(!tvm_ffi.array<tensor<2xi64>>)
+
+// -----
+
+// expected-error@+1 {{tuple elements must be TVM FFI C ABI types}}
 func.func private @result(!tvm_ffi.tuple<!tvm_ffi.monad.result<!tvm_ffi.int>>)
 
 // -----
@@ -61,12 +76,17 @@ func.func @tuple_construct_type(%value: !tvm_ffi.int) {
 
 // -----
 
-// expected-error@+1 {{tuple elements must be TVM FFI ABI types}}
+// expected-error@+1 {{tuple elements must be TVM FFI C ABI types}}
 func.func private @tuple_native(!tvm_ffi.tuple<!tvm_ffi.int, i64>)
 
 // -----
 
-// expected-error@+1 {{tuple elements must be TVM FFI ABI types}}
+// expected-error@+1 {{tuple elements must be TVM FFI C ABI types}}
+func.func private @tuple_object(!tvm_ffi.tuple<!tvm_ffi.object>)
+
+// -----
+
+// expected-error@+1 {{tuple elements must be TVM FFI C ABI types}}
 func.func private @tuple_tensor(!tvm_ffi.tuple<tensor<2xi64>>)
 
 // -----

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from torch._guards import GuardSource
 from trident.core import ir
+from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.guards.codes import (
     ASTCode,
@@ -34,6 +35,7 @@ from trident.guards.kinds import (
     TypeMatchGuard,
 )
 from trident.guards.local import Local
+from trident.input import InputNodeBuilder, InputTableBuilder
 
 from test.support.ir import new_context
 
@@ -74,6 +76,46 @@ class GuardExpressionTest(unittest.TestCase):
             result_type = result.type
             module_text = str(module)
         return result_type, module_text
+
+    def test_container_length_extracts_nested_input(self) -> None:
+        for container in (tvm_ffi_d.ArrayType, tvm_ffi_d.TupleType):
+            with (
+                self.subTest(container=container.__name__),
+                new_context() as context,
+                ir.Location.unknown(),
+            ):
+                tensor = tvm_ffi_d.TensorType.get()
+                type_ = (
+                    container.get(tensor)
+                    if container is tvm_ffi_d.ArrayType
+                    else container.get([tensor, tensor])
+                )
+                array = tvm_ffi_d.ArrayType.get(type_)
+                builder = InputTableBuilder(
+                    [("xs", InputNodeBuilder(array, [InputNodeBuilder(type_)]))],
+                    ["xs"],
+                )
+                text = "len(L['xs'][0]) == 2"
+                code = ASTCode(text, ast.parse(text, mode="eval").body)
+                module = ir.Module.create()
+                result_type = tvm_ffi_d.ResultType.get(ir.IntegerType.get_signless(1))
+                with ir.InsertionPoint(module.body):
+                    function = func.FuncOp("guard", ([array], [result_type]))
+                    block = function.add_entry_block()
+                with ir.InsertionPoint(block):
+                    results = code.build_result(builder.build(block.arguments), context)
+                    func.ReturnOp(results)
+                self.assertEqual([result.type for result in results], [result_type])
+                self.assertTrue(module.operation.verify())
+                module_text = f"{module}"
+                self.assertIn("tvm_ffi.array.get", module_text)
+                self.assertIn("tvm_ffi.monad.bind", module_text)
+                self.assertIn("arith.cmpi eq", module_text)
+                # Tuple guards must check runtime arity instead of trusting the schema.
+                if container is tvm_ffi_d.TupleType:
+                    self.assertIn('"ffi.ArraySize"', module_text)
+                else:
+                    self.assertIn("tvm_ffi.array.size", module_text)
 
     def test_invalid_comparisons(self) -> None:
         for text, message in (

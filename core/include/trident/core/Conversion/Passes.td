@@ -32,7 +32,8 @@ def ConvertTVMFFIToGPU : Pass<"convert-tvm-ffi-to-gpu", "mlir::ModuleOp"> {
   let dependentDialects = [
     "mlir::LLVM::LLVMDialect", "mlir::arith::ArithDialect",
     "mlir::cf::ControlFlowDialect", "mlir::func::FuncDialect",
-    "mlir::gpu::GPUDialect", "trident::dlpack::DLPackDialect",
+    "mlir::gpu::GPUDialect", "mlir::scf::SCFDialect",
+    "trident::dlpack::DLPackDialect",
     "trident::tvm_ffi::TVMFFIDialect"
   ];
 }

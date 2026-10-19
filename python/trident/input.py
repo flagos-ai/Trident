@@ -6,7 +6,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import Any, Final, Self, TypeAlias
+from typing import Any, Final, Self
 
 import torch
 import torch.utils._pytree as pytree
@@ -19,11 +19,17 @@ from torch.export.graph_signature import (
 )
 
 from trident.core import ir
-from trident.ir import array_type, is_value_in_scope, tuple_type, value_type
-
-InputPath: TypeAlias = Sequence[int | str]
-InputValue: TypeAlias = Any
-
+from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.ir import (
+    array_type,
+    bind,
+    container_get,
+    make_result_types,
+    pure,
+    tuple_type,
+    value_type,
+)
+from trident.ownership import RETAIN_ATTR, has_cleanup_owner, is_value_in_scope
 
 pytree.register_pytree_node(
     torch.device,
@@ -74,7 +80,7 @@ class InputNodeBuilder:
 class InputTable:
     """Table-owned input nodes addressable through Python pytree paths."""
 
-    def __getitem__(self, path: InputPath) -> ir.Value | None:
+    def __getitem__(self, path: Sequence[int | str]) -> ir.Value | None:
         """Read a root or consumer-local value without extracting an input."""
         node = self.node(path)
         return None if node is None else node.value
@@ -94,6 +100,60 @@ class InputTable:
 
         for node in self._nodes.values():
             clear(node)
+
+    def extract(self, path: Sequence[int | str]) -> list[ir.Value]:
+        """Extract one structural path, caching only complete Results."""
+        node = self.node(path)
+        assert node is not None, f"input cannot be resolved: {path}"
+        if node.value is not None:
+            return pure(
+                [node.value], result_types=[tvm_ffi_d.ResultType.get(node.type)]
+            )
+        elif node.result is not None and all(
+            has_cleanup_owner(value) for value in node.result
+        ):
+            # The cache borrows a reference until block exit; return an independent one.
+            with bind(
+                node.result, result_types=[value.type for value in node.result]
+            ) as cached:
+                terminator = tvm_ffi_d.MonadYieldOp(pure(cached.arguments))
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            return [*cached.outputs]
+        else:
+            assert len(path) > 1, f"input cannot be resolved: {path}"
+            types = [tvm_ffi_d.ResultType.get(node.type)]
+            *parent_path, index = path
+            with bind(self.extract(parent_path), result_types=types) as operation:
+                [array] = operation.arguments
+                terminator = tvm_ffi_d.MonadYieldOp(
+                    container_get(array, index, node.type)
+                )
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            node.result = [*operation.outputs]
+            return node.result
+
+    def extract_many(
+        self, paths: Sequence[Sequence[int | str]] | None = None
+    ) -> list[ir.Value]:
+        paths = self.input_paths() if paths is None else paths
+        types = make_result_types(self.node(path).type for path in paths)
+
+        def build(start: int, values: list[ir.Value]) -> list[ir.Value]:
+            for index in range(start, len(paths)):
+                path = paths[index]
+                value = self[path]
+                if value is not None:
+                    values.append(value)
+                    continue
+                with bind(self.extract(path), result_types=types) as operation:
+                    terminator = tvm_ffi_d.MonadYieldOp(
+                        build(index + 1, [*values, *operation.arguments])
+                    )
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                return [*operation.outputs]
+            return pure(values, result_types=types)
+
+        return build(0, [])
 
     def input_paths(self) -> list[tuple[int | str, ...]]:
         """Return leaf paths in exported-input order without emitting IR."""
@@ -116,7 +176,7 @@ class InputTable:
             for path in leaves(self._nodes[name], (name,))
         ]
 
-    def node(self, path: InputPath) -> _InputNode | None:
+    def node(self, path: Sequence[int | str]) -> _InputNode | None:
         assert path, "input paths must start with a parameter name"
         name, *indices = path
         assert isinstance(name, str), "input paths must start with a parameter name"
@@ -132,7 +192,7 @@ class InputTable:
             node = node.children[index]
         return node
 
-    def with_value(self, path: InputPath, value: ir.Value) -> InputTable:
+    def with_value(self, path: Sequence[int | str], value: ir.Value) -> InputTable:
         """Copy table structure for one lexical consumer without changing shared state."""
 
         def copy(node: _InputNode) -> _InputNode:
@@ -183,7 +243,7 @@ class InputTableBuilder:
         cls,
         exported_program: torch.export.ExportedProgram,
         signature: inspect.Signature,
-        bound_arguments: Mapping[str, InputValue],
+        bound_arguments: Mapping[str, Any],
         main_input_types: Sequence[ir.Type],
     ) -> Self:
         input_specs = exported_program.graph_signature.input_specs
@@ -292,7 +352,7 @@ class InputTableBuilder:
             )
         }
 
-        def build_value(value: InputValue) -> InputNodeBuilder:
+        def build_value(value: Any) -> InputNodeBuilder:
             if isinstance(value, (list, tuple)):
                 children = [build_value(child) for child in value]
                 types = [child.type for child in children]

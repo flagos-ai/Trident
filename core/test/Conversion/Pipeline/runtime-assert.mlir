@@ -12,7 +12,7 @@
 // CHECK: llvm.cond_br %[[COND]],
 func.func @assert_direct(%condition: i1) {
   cf.assert %condition, "direct bool assert"
-  return
+  return {tvm_ffi.retain}
 }
 
 // CHECK-LABEL: llvm.func @assert_distinct(
@@ -22,5 +22,5 @@ func.func @assert_direct(%condition: i1) {
 func.func @assert_distinct(%x: i64, %y: i64) {
   %different = arith.cmpi ne, %x, %y : i64
   cf.assert %different, "x must not be equal to y"
-  return
+  return {tvm_ffi.retain}
 }

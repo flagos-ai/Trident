@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
 import torch
 
@@ -21,7 +21,9 @@ from trident.input import InputTable
 from trident.ir import (
     binary,
     bind,
+    checked_call,
     constant,
+    constant_type,
     equal,
     make_result_types,
     native,
@@ -29,11 +31,9 @@ from trident.ir import (
     native_type,
     pure,
 )
+from trident.ownership import RETAIN_ATTR
 
 from .local import Local
-
-if TYPE_CHECKING:
-    from trident.importer import TridentFxImporter
 
 
 class ASTVisitor:
@@ -189,12 +189,10 @@ class GuardExpressionVisitor:
         text: str,
         tree: InputTable | None,
         context: ir.Context,
-        importer: TridentFxImporter,
     ) -> None:
         self.text = text
         self.tree = tree
         self.context = context
-        self.importer = importer
         self._analysis: dict[ast.expr, _ExpressionAnalysis] = {}
 
     def _analyze(self, node: ast.expr) -> _ExpressionAnalysis:
@@ -207,16 +205,14 @@ class GuardExpressionVisitor:
             assert entry is not None, f"guard source cannot be resolved: {self.text!r}"
             analysis = _ExpressionAnalysis(entry.type, pure=entry.value is not None)
         elif isinstance(node, ast.Constant):
-            analysis = _ExpressionAnalysis(self.importer.argument_type(node.value))
+            analysis = _ExpressionAnalysis(constant_type(node.value))
         elif self._direct_fallback(node):
             source, _, _ = ASTVisitor.metadata(node)
             analysis = _ExpressionAnalysis(
                 ir.IntegerType.get_signless(1), fallback=source is not None
             )
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            analysis = _ExpressionAnalysis(
-                self.importer.argument_type(getattr(torch, node.attr))
-            )
+            analysis = _ExpressionAnalysis(constant_type(getattr(torch, node.attr)))
         elif isinstance(node, ast.Call) and ASTVisitor.device(node) is not None:
             analysis = _ExpressionAnalysis(tvm_ffi_d.DeviceType.get())
         else:
@@ -300,9 +296,13 @@ class GuardExpressionVisitor:
                     [value] = remaining.arguments
                     if analysis.fallback is None:
                         value = arith.andi(comparison, value)
-                    tvm_ffi_d.MonadYieldOp(pure([value], result_types=types))
+                    terminator = tvm_ffi_d.MonadYieldOp(
+                        pure([value], result_types=types)
+                    )
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                 results = [*remaining.outputs]
-            tvm_ffi_d.MonadYieldOp(results)
+            terminator = tvm_ffi_d.MonadYieldOp(results)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         return [*operation.outputs]
 
     def _build_operands(self, operands: Sequence[ast.expr]) -> list[ir.Value]:
@@ -316,9 +316,10 @@ class GuardExpressionVisitor:
                     values.append(self.value(operand))
                     continue
                 with bind(self.build(operand), result_types=types) as operation:
-                    tvm_ffi_d.MonadYieldOp(
+                    terminator = tvm_ffi_d.MonadYieldOp(
                         build(index + 1, [*values, *operation.arguments])
                     )
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                 return [*operation.outputs]
             return pure(values, result_types=types)
 
@@ -345,9 +346,7 @@ class GuardExpressionVisitor:
         if isinstance(value.type, tvm_ffi_d.TupleType):
             # Entry guards validate untrusted tuple arity before the static
             # schema may be used; static type arity cannot validate the input.
-            return self.importer.build_call(
-                "ffi.ArraySize", [value], tvm_ffi_d.IntType.get()
-            )
+            return checked_call("ffi.ArraySize", [value], tvm_ffi_d.IntType.get())
         return pure([tvm_ffi_d.ArraySizeOp(value).result])
 
     def _direct_fallback(self, node: ast.expr) -> bool:
@@ -477,7 +476,7 @@ class GuardExpressionVisitor:
         source = Local.from_expression(node)
         if source is not None:
             assert self.tree is not None
-            return self.importer.build_input(self.tree, source.subscripts)
+            return self.tree.extract(source.subscripts)
         elif isinstance(node, ast.Compare):
             return self._build_comparison(node)
         else:
@@ -493,15 +492,17 @@ class GuardExpressionVisitor:
                         result_types=types,
                     ) as length:
                         [value] = length.arguments
-                        tvm_ffi_d.MonadYieldOp(
+                        terminator = tvm_ffi_d.MonadYieldOp(
                             pure([native(value)], result_types=types)
                         )
+                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                     results = [*length.outputs]
                 else:
                     results = pure(
                         [self._evaluate(node, operation.arguments)], result_types=types
                     )
-                tvm_ffi_d.MonadYieldOp(results)
+                terminator = tvm_ffi_d.MonadYieldOp(results)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
             return [*operation.outputs]
 
     def value(self, node: ast.expr) -> ir.Value:

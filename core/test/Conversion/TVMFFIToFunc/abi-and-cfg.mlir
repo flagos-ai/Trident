@@ -109,7 +109,7 @@ tvm_ffi.func @forward_block_use() -> !tvm_ffi.monad.result<!tvm_ffi.none> {
 // INTERMEDIATE: [[LOADED:%[a-zA-Z0-9_]+]] = llvm.load [[OUTPUT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // INTERMEDIATE-NEXT: llvm.store [[LOADED]], [[RESULT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // The exception constructor is reached through the cached module-level handle.
-// This path emits LLVM directly and is never seen by the ownership pass, so it
+// This path emits LLVM directly and manages its own temporary references, so it
 // borrows the handle: no reference counting around the call at all.
 // INTERMEDIATE: [[GUARD_EXCEPTION_HANDLE_ADDR:%[a-zA-Z0-9_]+]] = llvm.mlir.addressof @__trident_tvm_ffi_handle_trident.ffi.Exception : !llvm.ptr
 // INTERMEDIATE-NEXT: [[GUARD_EXCEPTION_HANDLE:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_EXCEPTION_HANDLE_ADDR]] : !llvm.ptr -> !llvm.ptr
