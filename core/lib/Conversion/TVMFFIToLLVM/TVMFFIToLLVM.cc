@@ -507,14 +507,8 @@ public:
       }
       mlir::Type const payloadType =
           mlir::cast<mlir::LLVM::LLVMStructType>(type).getBody().front();
-      mlir::Type const sourceType =
-          mlir::cast<tvm_ffi::ResultType>(output.getType()).getPayloadType();
       mlir::Value const payload =
-          mlir::isa<tvm_ffi::TVMFFIABIType>(sourceType)
-              ? mlir::Value(
-                    mlir::LLVM::ZeroOp::create(rewriter, loc, payloadType))
-              : mlir::Value(
-                    mlir::LLVM::PoisonOp::create(rewriter, loc, payloadType));
+          mlir::LLVM::ZeroOp::create(rewriter, loc, payloadType);
       mlir::Value result = mlir::LLVM::PoisonOp::create(rewriter, loc, type);
       result = mlir::LLVM::InsertValueOp::create(rewriter, loc, result, payload,
                                                  llvm::ArrayRef<int64_t>{0});

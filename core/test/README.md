@@ -65,7 +65,7 @@ decomposition and cleanup without a second bind expansion.
 `materialize-cleanup.mlir` checks block-exit release order, nested scopes, separate
 Result success conditions and idempotence.
 `result-reference-adjustments.mlir` checks direct unpack and success branches
-for Any/Union and native Object payloads, failed cleanup and LLVM lowering.
+for Any/Union and Function payloads, failed cleanup and LLVM lowering.
 `retain-exports.mlir` covers four explicitly marked exit kinds, repeated and borrowed operands, containers, failed Results, scalar-only
 and empty exits, retain-before-release order, consumed export markers and idempotence.
 `decompose-export-markers.mlir` checks pending markers on converted returns and

@@ -212,14 +212,16 @@ def checked_call(
     owned_op = tvm_ffi_d.FunctionGetGlobalOp(name)
     owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
     handle = owned_op.result
-    call = tvm_ffi_d.FunctionCallOp(result, handle, [box(value) for value in arguments])
+    call = tvm_ffi_d.FunctionCallOp(
+        boxed_type(result), handle, [box(value) for value in arguments]
+    )
     call.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
     return pure([call.result])
 
 
 def checked_result(value: ir.Value, success: ir.Value) -> ir.Value:
     """Wrap a borrowed fallible payload, retaining it only on success."""
-    type_ = tvm_ffi_d.ResultType.get(value.type)
+    type_ = make_result_types([value.type])[0]
     branch = scf.IfOp(success, [type_], has_else=True)
     branch.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
     with ir.InsertionPoint(branch.then_block):
@@ -322,21 +324,19 @@ def container_get(
         return checked_call(
             "ffi.ArrayGetItem", [container, native_constant(index)], target
         )
+    target = boxed_type(target)
     if payload == target:
         return [result]
-    result_types = [tvm_ffi_d.ResultType.get(target)]
+    result_types = make_result_types([target])
     with bind([result], result_types=result_types) as extracted:
         [value] = extracted.arguments
-        boxed = boxed_type(target)
-        if value.type != boxed:
+        if value.type != target:
             if isinstance(
-                boxed, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+                target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
             ) and not isinstance(value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)):
-                value = tvm_ffi_d.upcast(boxed, value)
+                value = tvm_ffi_d.upcast(target, value)
             else:
-                value = tvm_ffi_d.downcast(boxed, value)
-        if target != boxed:
-            value = native(value)
+                value = tvm_ffi_d.downcast(target, value)
         terminator = tvm_ffi_d.MonadYieldOp(pure([value], result_types=result_types))
         terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
     return [*extracted.outputs]
@@ -350,7 +350,7 @@ def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
 
 
 def ffi_type(name: str) -> ir.Type:
-    """Parse a TVM FFI type description, e.g. ``int`` or ``monad.result<i64>``."""
+    """Parse a TVM FFI type description, e.g. ``int`` or ``monad.result<!tvm_ffi.int>``."""
     return ir.Type.parse(f"!tvm_ffi.{name}")
 
 
@@ -360,8 +360,8 @@ def is_binary_operation(operation: Any) -> bool:
 
 
 def make_result_types(payload_types: Iterable[ir.Type]) -> list[ir.Type]:
-    """Wrap payload types, using a None Result for an empty sequence."""
-    return [tvm_ffi_d.ResultType.get(type_) for type_ in payload_types] or [
+    """Box scalar payload types and wrap them, using None for an empty sequence."""
+    return [tvm_ffi_d.ResultType.get(boxed_type(type_)) for type_ in payload_types] or [
         tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
     ]
 

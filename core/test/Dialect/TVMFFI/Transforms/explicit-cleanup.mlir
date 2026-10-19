@@ -74,7 +74,7 @@ func.func @overrides() {
 // CHECK-LABEL: func.func @results(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
 // CHECK: tvm_ffi.ObjectIncRef %[[INPUT]]
-// CHECK: %[[NUMBER:[a-zA-Z0-9_]+]] = arith.constant 1
+// CHECK: %[[NUMBER:[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
 // CHECK: %[[RESULTS:[a-zA-Z0-9_]+]]:2 = tvm_ffi.monad.pure %[[INPUT]], %[[NUMBER]]
 // CHECK: %[[PAYLOAD_OK:[a-zA-Z0-9_]+]], %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[RESULTS]]#0
 // CHECK-NEXT: scf.if %[[PAYLOAD_OK]] {
@@ -83,23 +83,23 @@ func.func @overrides() {
 // CHECK-NEXT: return
 func.func @results(%input: !tvm_ffi.tensor) {
   tvm_ffi.ObjectIncRef %input : !tvm_ffi.tensor
-  %number = arith.constant 1 : i64
-  %results:2 = tvm_ffi.monad.pure %input, %number {tvm_ffi.cleanup} : (!tvm_ffi.tensor, i64) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<i64>)
+  %number = tvm_ffi.constant.int 1
+  %results:2 = tvm_ffi.monad.pure %input, %number {tvm_ffi.cleanup} : (!tvm_ffi.tensor, !tvm_ffi.int) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.int>)
   %failed = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.tensor>
   return {tvm_ffi.retain}
 }
 
 // Scalar and zero-result markers are consumed without reference operations.
 // CHECK-LABEL: func.func @scalar_and_empty_cleanup()
-// CHECK-NEXT: %[[NUMBER:[a-zA-Z0-9_]+]] = arith.constant 7 : i64
-// CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[NUMBER]] : (i64) -> !tvm_ffi.monad.result<i64>
+// CHECK-NEXT: %[[NUMBER:[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 7
+// CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[NUMBER]] : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
 // CHECK-NEXT: tvm_ffi.monad.bind : () -> () {
 // CHECK-NEXT: tvm_ffi.monad.yield
 // CHECK-NEXT: }
 // CHECK-NEXT: return
 func.func @scalar_and_empty_cleanup() {
-  %number = arith.constant {tvm_ffi.cleanup} 7 : i64
-  %result = tvm_ffi.monad.pure %number {tvm_ffi.cleanup, tvm_ffi.retain} : (i64) -> !tvm_ffi.monad.result<i64>
+  %number = tvm_ffi.constant.int 7 {tvm_ffi.cleanup}
+  %result = tvm_ffi.monad.pure %number {tvm_ffi.cleanup, tvm_ffi.retain} : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
   tvm_ffi.monad.bind : () -> () {
     tvm_ffi.monad.yield {tvm_ffi.retain}
   } {tvm_ffi.cleanup}

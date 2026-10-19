@@ -6,32 +6,36 @@
 
 // LLVM-LABEL: llvm.func @branches(
 // CHECK-LABEL: func.func @branches(
-// CHECK-SAME: %[[CONDITION:[a-zA-Z0-9_]+]]: i1, %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<i64>, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
-// CHECK: cf.cond_br %[[CONDITION]], ^[[YES:bb[0-9]+]](%[[INPUT]] : !tvm_ffi.monad.result<i64>), ^[[NO:bb[0-9]+]](%[[INPUT]] : !tvm_ffi.monad.result<i64>)
-// CHECK: ^[[YES]](%[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<i64>):
+// CHECK-SAME: %[[CONDITION:[a-zA-Z0-9_]+]]: i1, %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.int>, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
+// CHECK: cf.cond_br %[[CONDITION]], ^[[YES:bb[0-9]+]](%[[INPUT]] : !tvm_ffi.monad.result<!tvm_ffi.int>), ^[[NO:bb[0-9]+]](%[[INPUT]] : !tvm_ffi.monad.result<!tvm_ffi.int>)
+// CHECK: ^[[YES]](%[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.int>):
 // CHECK: %[[FIRST_READY:[a-zA-Z0-9_]+]], %[[FIRST_VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[FIRST]]
 // CHECK: scf.if %[[FIRST_READY]] -> (i32) {
-// CHECK: llvm.store %[[FIRST_VALUE]], %[[SLOT]] : i64, !llvm.ptr
+// CHECK: %[[FIRST_TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[FIRST_VALUE]] : !tvm_ffi.any -> !tvm_ffi.int
+// CHECK: %[[FIRST_ABI:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[FIRST_TYPED]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// CHECK: llvm.store %[[FIRST_ABI]], %[[SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: } else {
 // CHECK-NOT: llvm.store
 // CHECK: arith.constant -1 : i32
 // CHECK: return %[[FIRST_STATUS:[a-zA-Z0-9_]+]] : i32
-// CHECK: ^[[NO]](%[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<i64>):
+// CHECK: ^[[NO]](%[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.int>):
 // CHECK: %[[SECOND_READY:[a-zA-Z0-9_]+]], %[[SECOND_VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[SECOND]]
 // CHECK: scf.if %[[SECOND_READY]] -> (i32)
-// CHECK: llvm.store %[[SECOND_VALUE]], %[[SLOT]] : i64, !llvm.ptr
+// CHECK: %[[SECOND_TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[SECOND_VALUE]] : !tvm_ffi.any -> !tvm_ffi.int
+// CHECK: %[[SECOND_ABI:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[SECOND_TYPED]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
+// CHECK: llvm.store %[[SECOND_ABI]], %[[SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: return %[[SECOND_STATUS:[a-zA-Z0-9_]+]] : i32
-tvm_ffi.func @branches(%condition: i1, %input: !tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
-  cf.cond_br %condition, ^yes(%input : !tvm_ffi.monad.result<i64>), ^no(%input : !tvm_ffi.monad.result<i64>)
-^yes(%first: !tvm_ffi.monad.result<i64>):
-  tvm_ffi.return %first : !tvm_ffi.monad.result<i64>
-^no(%second: !tvm_ffi.monad.result<i64>):
-  tvm_ffi.return %second : !tvm_ffi.monad.result<i64>
+tvm_ffi.func @branches(%condition: i1, %input: !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+  cf.cond_br %condition, ^yes(%input : !tvm_ffi.monad.result<!tvm_ffi.int>), ^no(%input : !tvm_ffi.monad.result<!tvm_ffi.int>)
+^yes(%first: !tvm_ffi.monad.result<!tvm_ffi.int>):
+  tvm_ffi.return %first : !tvm_ffi.monad.result<!tvm_ffi.int>
+^no(%second: !tvm_ffi.monad.result<!tvm_ffi.int>):
+  tvm_ffi.return %second : !tvm_ffi.monad.result<!tvm_ffi.int>
 }
 
 // CHECK-LABEL: func.func private @external(
 // CHECK-SAME: i64, !llvm.ptr) -> i32
-tvm_ffi.func @external(i64) -> !tvm_ffi.monad.result<i64>
+tvm_ffi.func @external(i64) -> !tvm_ffi.monad.result<!tvm_ffi.int>
 
 // LLVM-LABEL: llvm.func @handle(
 // CHECK-LABEL: func.func @handle(
@@ -44,39 +48,18 @@ tvm_ffi.func @handle(%input: !tvm_ffi.monad.result<!tvm_ffi.function>) -> !tvm_f
   tvm_ffi.return %input : !tvm_ffi.monad.result<!tvm_ffi.function>
 }
 
-// LLVM-LABEL: llvm.func @native_index(
-// CHECK-LABEL: func.func @native_index(
-// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<index>, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
-// CHECK: %[[READY:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT]]
-// CHECK: scf.if %[[READY]] -> (i32)
-// CHECK: %[[NATIVE:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[VALUE]] : index to i64
-// CHECK: llvm.store %[[NATIVE]], %[[SLOT]] : i64, !llvm.ptr
-// CHECK: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
-tvm_ffi.func @native_index(%input: !tvm_ffi.monad.result<index>) -> !tvm_ffi.monad.result<index> {
-  tvm_ffi.return %input : !tvm_ffi.monad.result<index>
-}
-
-// LLVM-LABEL: llvm.func @object(
-// CHECK-LABEL: func.func @object(
-// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.object>, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
-// CHECK: %[[OK:[a-zA-Z0-9_]+]], %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT]]
-// CHECK: scf.if %[[OK]]
-// CHECK: %[[NATIVE:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[PAYLOAD]] : !tvm_ffi.object to !llvm.ptr
-// CHECK: llvm.store %[[NATIVE]], %[[SLOT]] : !llvm.ptr, !llvm.ptr
-tvm_ffi.func @object(%input: !tvm_ffi.monad.result<!tvm_ffi.object>) -> !tvm_ffi.monad.result<!tvm_ffi.object> {
-  tvm_ffi.return %input : !tvm_ffi.monad.result<!tvm_ffi.object>
-}
-
 // CHECK-LABEL: func.func @ordinary_boolean(
-// CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: i1, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
+// CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.bool, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
 // CHECK: %[[PURE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[VALUE]]
 // CHECK: %[[OK:[a-zA-Z0-9_]+]], %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[PURE]]
 // CHECK: scf.if %[[OK]] -> (i32)
-// CHECK: llvm.store %[[PAYLOAD]], %[[SLOT]] : i1, !llvm.ptr
+// CHECK: %[[BOOL:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[PAYLOAD]] : !tvm_ffi.any -> !tvm_ffi.bool
+// CHECK: %[[ABI:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[BOOL]] : !tvm_ffi.bool to !llvm.struct<(i32, i32, i64)>
+// CHECK: llvm.store %[[ABI]], %[[SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: return %[[STATUS:[a-zA-Z0-9_]+]] : i32
-tvm_ffi.func @ordinary_boolean(%value: i1) -> !tvm_ffi.monad.result<i1> {
-  %returned = tvm_ffi.monad.pure %value {tvm_ffi.cleanup} : (i1) -> !tvm_ffi.monad.result<i1>
-  tvm_ffi.return %returned : !tvm_ffi.monad.result<i1>
+tvm_ffi.func @ordinary_boolean(%value: !tvm_ffi.bool) -> !tvm_ffi.monad.result<!tvm_ffi.bool> {
+  %returned = tvm_ffi.monad.pure %value {tvm_ffi.cleanup} : (!tvm_ffi.bool) -> !tvm_ffi.monad.result<!tvm_ffi.bool>
+  tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.bool>
 }
 
 // CHECK-LABEL: func.func @packed_unit(

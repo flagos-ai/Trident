@@ -85,7 +85,7 @@ reuse through lexical block lifetimes. C++ retain/release ordering and the four
 supported terminators are covered by Lit.
 `unit/test_importer.py` checks C ABI type spellings and Python type registration,
 semantic container bindings and construction, Result binding, payload type registration, parsed
-OpView payload access, shared Result type inference and boundary
+OpView payload access, CABI-only Result validation, shared boxed Result type inference and boundary
 boxing/widening, insertion-point restoration, empty argument construction,
 explicit None positions and diagnostics for unsupported symbolic powers. The
 e2e suites cover public JIT execution, container reconstruction, conditional

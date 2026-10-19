@@ -89,18 +89,19 @@ bool mlirTypeIsATVMFFIArrayType(MlirType type) {
 MlirType mlirTVMFFIResultTypeGetChecked(MlirLocation location,
                                         MlirType payload) {
   mlir::Location const loc = unwrap(location);
-  const mlir::Type type = unwrap(payload);
+  trident::tvm_ffi::TVMFFICABIType const type =
+      mlir::dyn_cast_or_null<trident::tvm_ffi::TVMFFICABIType>(unwrap(payload));
   if (!type) {
-    mlir::emitError(loc) << "Result requires one payload type";
+    mlir::emitError(loc) << "Result payload must be a TVM FFI C ABI type";
     return MlirType{nullptr};
-  }
-  if (type.getContext() != loc.getContext()) {
+  } else if (type.getContext() != loc.getContext()) {
     mlir::emitError(loc)
         << "Result payload must belong to the construction context";
     return MlirType{nullptr};
+  } else {
+    return wrap(
+        trident::tvm_ffi::ResultType::getChecked(loc, loc.getContext(), type));
   }
-  return wrap(
-      trident::tvm_ffi::ResultType::getChecked(loc, loc.getContext(), type));
 }
 
 MlirStringRef mlirTVMFFIResultTypeGetName(void) {

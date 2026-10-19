@@ -39,7 +39,7 @@ class GuardCode:
         )
 
     def build_result(self, tree: InputTable, context: ir.Context) -> list[ir.Value]:
-        types = [tvm_ffi_d.ResultType.get(ir.IntegerType.get_signless(1))]
+        types = [tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())]
         if self.source is None or not self.requires_input:
             return pure([self.build(tree, context)], result_types=types)
         with bind(

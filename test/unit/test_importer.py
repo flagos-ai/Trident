@@ -83,7 +83,7 @@ class ImporterTest(unittest.TestCase):
         importer = TridentFxImporter(context=context, specialization_id=0)
         with context, ir.Location.unknown(context):
             module = importer.module
-            integer = ir.IntegerType.get_signless(64)
+            integer = tvm_ffi_d.IntType.get()
             payload = tvm_ffi_d.ResultType.get(integer)
             unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
             self.assertIsInstance(ir.Type.parse(f"{payload}"), tvm_ffi_d.ResultType)
@@ -93,7 +93,9 @@ class ImporterTest(unittest.TestCase):
                 tvm_ffi_d.ResultType.get()
             with self.assertRaises(TypeError):
                 tvm_ffi_d.ResultType.get(None)
-            with self.assertRaisesRegex(ValueError, "nested Result"):
+            with self.assertRaisesRegex(
+                ValueError, "Result payload must be a TVM FFI C ABI type"
+            ):
                 tvm_ffi_d.ResultType.get(payload)
             with ir.InsertionPoint(module.body):
                 value = native_constant(7)
@@ -147,7 +149,7 @@ class ImporterTest(unittest.TestCase):
                     for target in (integer.type, ir.IntegerType.get_signless(64)):
                         with self.subTest(target=target):
                             [result] = container_get(array, 0, target)
-                            self.assertEqual(result.type.payload_type, target)
+                            self.assertEqual(result.type.payload_type, integer.type)
                     tvm_ffi_d.MonadYieldOp(pure([array]))
             self.assertTrue(importer.module.operation.verify())
 
@@ -325,11 +327,7 @@ class ImporterTest(unittest.TestCase):
                         self.assertEqual(
                             unpacked.success.type, ir.IntegerType.get_signless(1)
                         )
-                        expected = (
-                            tvm_ffi_d.AnyType.get()
-                            if isinstance(value.type, tvm_ffi_d.NoneType)
-                            else value.type
-                        )
+                        expected = tvm_ffi_d.AnyType.get()
                         self.assertEqual(unpacked.value.type, expected)
                 self.assertTrue(module.operation.verify())
 
@@ -343,7 +341,7 @@ class ImporterTest(unittest.TestCase):
             with ir.InsertionPoint(module.body):
                 value = native_constant(7)
                 inferred = pure([value])
-                self.assertEqual(inferred[0].type.payload_type, integer)
+                self.assertEqual(inferred[0].type.payload_type, boxed)
                 self.assertEqual(make_result_types(iter([integer])), [inferred[0].type])
                 empty = pure([])
                 self.assertIsInstance(empty[0].type.payload_type, tvm_ffi_d.NoneType)
@@ -379,6 +377,48 @@ class ImporterTest(unittest.TestCase):
                 ):
                     pure(bound.arguments)
             self.assertTrue(module.operation.verify())
+
+    def test_result_payload_types(self) -> None:
+        with new_context(), ir.Location.unknown():
+            integer = tvm_ffi_d.IntType.get()
+            for payload in (
+                tvm_ffi_d.AnyType.get(),
+                tvm_ffi_d.ArrayType.get(integer),
+                tvm_ffi_d.BoolType.get(),
+                tvm_ffi_d.CArrayType.get(),
+                tvm_ffi_d.ExceptionType.get(),
+                tvm_ffi_d.FloatType.get(),
+                tvm_ffi_d.FunctionType.get(),
+                integer,
+                tvm_ffi_d.NoneType.get(),
+                tvm_ffi_d.TensorType.get(),
+                tvm_ffi_d.TupleType.get([integer]),
+                tvm_ffi_d.UnionType.get([integer, tvm_ffi_d.NoneType.get()]),
+            ):
+                with self.subTest(payload=payload):
+                    result = tvm_ffi_d.ResultType.get(payload)
+                    self.assertEqual(result.payload_type, payload)
+                    self.assertEqual(ir.Type.parse(f"{result}"), result)
+            for payload in (
+                ir.IntegerType.get_signless(1),
+                ir.IntegerType.get_signless(64),
+                ir.F64Type.get(),
+                ir.IndexType.get(),
+                ir.RankedTensorType.get([2], ir.IntegerType.get_signless(64)),
+                tvm_ffi_d.ObjectType.get(),
+                tvm_ffi_d.ResultType.get(integer),
+            ):
+                with (
+                    self.subTest(payload=payload),
+                    self.assertRaisesRegex(
+                        ValueError, "Result payload must be a TVM FFI C ABI type"
+                    ),
+                ):
+                    tvm_ffi_d.ResultType.get(payload)
+            with new_context():
+                foreign = tvm_ffi_d.IntType.get()
+            with self.assertRaisesRegex(ValueError, "construction context"):
+                tvm_ffi_d.ResultType.get(foreign)
 
     def test_unsupported_symbolic_power(self) -> None:
         importer = TridentFxImporter(context=new_context(), specialization_id=0)

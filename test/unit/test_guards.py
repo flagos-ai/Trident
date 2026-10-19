@@ -98,7 +98,7 @@ class GuardExpressionTest(unittest.TestCase):
                 text = "len(L['xs'][0]) == 2"
                 code = ASTCode(text, ast.parse(text, mode="eval").body)
                 module = ir.Module.create()
-                result_type = tvm_ffi_d.ResultType.get(ir.IntegerType.get_signless(1))
+                result_type = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
                 with ir.InsertionPoint(module.body):
                     function = func.FuncOp("guard", ([array], [result_type]))
                     block = function.add_entry_block()

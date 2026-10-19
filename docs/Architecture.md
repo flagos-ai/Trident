@@ -46,11 +46,12 @@ at FFI calls, containers or function return boundaries. `torch.cond` imports its
 branches into `scf.if`, with native predicates and monadic Result values.
 
 `ir.py` shares scalar arithmetic, constants, boxing and Result construction with
-the guard frontend. `make_result_types` wraps payload types and supplies the
-None default for empty sequences. `pure` infers Result types from payloads unless
-the caller declares a boundary type; at typed boundaries it boxes native scalars
-and widens semantic values to Any/Union before wrapping them. Empty successful
-sequences produce one explicit None payload. Shared `checked_call` and
+the guard frontend. `make_result_types` boxes native scalar types before wrapping
+payload types and supplies the None default for empty sequences. `pure` infers CABI Result types
+from payloads unless the caller declares a boundary type; it boxes native
+scalars before wrapping them and widens semantic values at Any/Union boundaries.
+Bind arguments retain their CABI types; consumers extract native scalars for
+arithmetic and boolean conditions. Empty successful sequences produce one explicit None payload. Shared `checked_call` and
 `container_get` builders construct registry calls and typed container extraction
 without depending on the graph importer. The shared binary operation mappings
 also define the supported FX scalar operations; the importer only normalizes symbolic min/max
@@ -130,7 +131,8 @@ returns true; Union checks direct membership or whether every member of another 
 Any, semantic Array/Tuple and Union belong to Opaque.
 Object remains a native-pointer `TVMFFIABIType` outside CABI; it cannot
 be a Tuple member, tagged call value or tagged cast operand/result. It retains
-reference management and native Result payload support. `decompose-tvm-ffi` converts semantic Array/Tuple to the concrete Base
+reference management but cannot be a Result payload. `decompose-tvm-ffi`
+converts semantic Array/Tuple to the concrete Base
 `CArrayType`, including function signatures, region arguments, Result payloads
 and type-bearing attributes. Other opaque types retain their specialized ABI/LLVM
 lowering paths; opaque classification alone does not imply container erasure.
@@ -231,14 +233,14 @@ The lowering pipeline is:
 5. Convert monadic returns to checked functions with output slots and an i32
    status, and generate packed ABI wrappers. Read Results through `monad.unpack`
    and restore typed payloads only in the successful branch before storing them.
-   Native Function/Object payloads can use internal output slots, but packed
+   Function payloads can use internal native-pointer output slots, but packed
    wrappers require tagged ABI payloads.
 6. Lower semantic values, including Results, to LLVM. A `Result<T>` becomes one
    LLVM struct containing the converted payload followed by an i1 success bit.
    Lower DLPack, arithmetic, control flow, GPU and UB operations, followed by
    canonicalization and cast reconciliation.
 
-`!tvm_ffi.monad.result<T>` always carries one payload and a success bit.
+`!tvm_ffi.monad.result<T>` always carries one CABI payload and a success bit.
 No-data results use `!tvm_ffi.monad.result<!tvm_ffi.none>` with an explicit
 `tvm_ffi.constant.none` payload. `monad.pure` constructs successful
 Results, and `monad.fail` constructs failure without replacing the runtime
@@ -357,8 +359,8 @@ helpers return complete Results; static fallback metadata preserves
 whole-expression `_base` and storage-offset behavior without a continuation
 protocol. Previously constructed calls still run and enforce their assertions;
 fallback suppresses later operands. Guard collections return a short-circuiting
-boolean Result. The backend explicitly binds this result, constructs the guarded
-branch, binds flattened inputs and the graph call, then packs the output into
+boxed boolean Result. The backend explicitly binds this result, constructs the
+guarded branch, binds flattened inputs and the graph call, then packs the output into
 the public Result. Each `tvm_ffi.func` declares exactly one Result return type, and
 `tvm_ffi.return` must match the signature exactly. No-data functions declare
 `Result<!tvm_ffi.none>`; these results use the ordinary TVM FFI None ABI
@@ -374,10 +376,9 @@ specialization failure remain successful `GuardMatch` values, requesting
 another specialization; runtime FFI failures return nonzero status without
 inspecting output payloads.
 
-Failed semantic ABI payloads are zero-initialized. Function handles use null
-native-pointer placeholders; native scalar payloads may be poison and are never
-consumed on failure. No Result object is allocated at runtime. Result retain and
-release use `monad.unpack` and independent `scf.if` success branches, accessing
+Failed CABI payloads are zero-initialized. Function handles use null
+native-pointer placeholders and are never consumed on failure. No Result object
+is allocated at runtime. Result retain and release use `monad.unpack` and independent `scf.if` success branches, accessing
 payloads only when their own Results succeed. Tagged payloads widened to Any
 are adjusted directly; native handles retain their types. These branches carry
 no values or additional references through their yields.
@@ -469,10 +470,13 @@ initialization; call sites retain and release the cached reference.
 `tvm_ffi.monad.unpack` exposes one Result as a success `i1` followed by its
 payload. Payload types compatible with `tvm_ffi.upcast` to Any produce
 `!tvm_ffi.any`: success preserves the value and failure produces None.
-Other payload types, including native scalars and Function/Object handles,
-remain unchanged and may only be used when success is true. Unpack neither
-clears runtime errors nor transfers ownership. Result payload types remain
-unrestricted except for the existing prohibition on nested Results.
+Function handles and unions containing them retain their payload types and may
+only be used when success is true. Unpack neither clears runtime errors nor
+transfers ownership. Result payloads must be `TVMFFICABIType`; native scalars,
+native Object handles and nested Results are rejected by parsing and checked
+C/Python construction. The C++ payload parameter and accessor use
+`TVMFFICABIType`. Function remains a valid CABI payload with native-pointer
+LLVM storage; CABI membership does not imply compatibility with Any casts.
 
 ## Source layout and validation
 

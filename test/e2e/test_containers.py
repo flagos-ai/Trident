@@ -122,6 +122,28 @@ class ContainerTest(unittest.TestCase):
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
 
+    def test_scalar_outputs(self) -> None:
+        @trident.jit(dynamic=True)
+        def outputs(x: torch.Tensor):
+            size = x.shape[0]
+            return x + 1, (size + 1, size / 2, size > 4)
+
+        def check() -> None:
+            for size in (3, 6, 8):
+                x = torch.ones(size, device="cuda")
+                for phase in ("warmup", "cached"):
+                    with self.subTest(size=size, phase=phase):
+                        tensor, scalars = outputs(x)
+                        torch.testing.assert_close(tensor, x + 1)
+                        self.assertEqual(scalars, (size + 1, size / 2, size > 4))
+                        self.assertEqual(
+                            tuple(type(value) for value in scalars), (int, float, bool)
+                        )
+            self.assertEqual(len(outputs._sub_modules), 1)
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
     def test_tuple_length_specialization(self) -> None:
         @trident.jit
         def add_length(x: torch.Tensor, values: tuple) -> torch.Tensor:

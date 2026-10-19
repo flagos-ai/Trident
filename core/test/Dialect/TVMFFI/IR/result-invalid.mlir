@@ -5,7 +5,7 @@
 
 tvm_ffi.func @failure_with_payload(%value: i64) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
   // expected-error@+1 {{requires zero operands}}
-  %result = "tvm_ffi.monad.fail"(%value) : (i64) -> !tvm_ffi.monad.result<i64>
+  %result = "tvm_ffi.monad.fail"(%value) : (i64) -> !tvm_ffi.monad.result<!tvm_ffi.int>
 
   %returned_none = tvm_ffi.constant.none
   %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
@@ -16,7 +16,7 @@ tvm_ffi.func @failure_with_payload(%value: i64) -> !tvm_ffi.monad.result<!tvm_ff
 
 tvm_ffi.func @missing_payload(%ready: i1) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
   // expected-error@+1 {{payload count must match Result count}}
-  %value = tvm_ffi.monad.pure : () -> !tvm_ffi.monad.result<i64>
+  %value = tvm_ffi.monad.pure : () -> !tvm_ffi.monad.result<!tvm_ffi.int>
 
   %returned_none = tvm_ffi.constant.none
   %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
@@ -37,11 +37,11 @@ tvm_ffi.func @missing_yield(%input: !tvm_ffi.monad.result<!tvm_ffi.none>) -> !tv
 
 // -----
 
-tvm_ffi.func @native_bind_yield(%input: !tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %result = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
-  ^bb0(%payload: i64):
+tvm_ffi.func @payload_bind_yield(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %result = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+  ^bb0(%payload: !tvm_ffi.int):
     // expected-error@+1 {{Result types must match bind outputs}}
-    tvm_ffi.monad.yield %payload : i64
+    tvm_ffi.monad.yield %payload : !tvm_ffi.int
   }
 
   %returned_none = tvm_ffi.constant.none
@@ -51,8 +51,9 @@ tvm_ffi.func @native_bind_yield(%input: !tvm_ffi.monad.result<i64>) -> !tvm_ffi.
 
 // -----
 
-// expected-error@+1 {{nested Result payloads are unsupported}}
-tvm_ffi.func @nested(%value: !tvm_ffi.monad.result<!tvm_ffi.monad.result<i64>>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+tvm_ffi.func @nested(%value: !tvm_ffi.monad.result<!tvm_ffi.monad.result<!tvm_ffi.int>>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
 
   %returned_none = tvm_ffi.constant.none
   %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
@@ -61,14 +62,14 @@ tvm_ffi.func @nested(%value: !tvm_ffi.monad.result<!tvm_ffi.monad.result<i64>>) 
 
 // -----
 
-tvm_ffi.func @wrong_argument(%input: !tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
+tvm_ffi.func @wrong_argument(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
   // expected-error@+1 {{region arguments must match input Result payloads}}
-  %output = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
+  %output = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
   ^bb0(%payload: i32):
-    tvm_ffi.monad.yield %input : !tvm_ffi.monad.result<i64>
+    tvm_ffi.monad.yield %input : !tvm_ffi.monad.result<!tvm_ffi.int>
   }
 
-  tvm_ffi.return %output : !tvm_ffi.monad.result<i64>
+  tvm_ffi.return %output : !tvm_ffi.monad.result<!tvm_ffi.int>
 }
 
 // -----
@@ -82,7 +83,7 @@ tvm_ffi.func @wrong_parent() -> !tvm_ffi.monad.result<!tvm_ffi.none> {
 
 tvm_ffi.func @wrong_pure_payload(%value: i32) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
   // expected-error@+1 {{payload type must match Result type}}
-  %result = tvm_ffi.monad.pure %value : (i32) -> !tvm_ffi.monad.result<i64>
+  %result = tvm_ffi.monad.pure %value : (i32) -> !tvm_ffi.monad.result<!tvm_ffi.int>
 
   %returned_none = tvm_ffi.constant.none
   %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
@@ -91,14 +92,14 @@ tvm_ffi.func @wrong_pure_payload(%value: i32) -> !tvm_ffi.monad.result<!tvm_ffi.
 
 // -----
 
-tvm_ffi.func @wrong_yield(%input: !tvm_ffi.monad.result<i64>, %other: !tvm_ffi.monad.result<i32>) -> !tvm_ffi.monad.result<i64> {
-  %output = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
-  ^bb0(%payload: i64):
+tvm_ffi.func @wrong_yield(%input: !tvm_ffi.monad.result<!tvm_ffi.int>, %other: !tvm_ffi.monad.result<!tvm_ffi.bool>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+  %output = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+  ^bb0(%payload: !tvm_ffi.int):
     // expected-error@+1 {{Result types must match bind outputs}}
-    tvm_ffi.monad.yield %other : !tvm_ffi.monad.result<i32>
+    tvm_ffi.monad.yield %other : !tvm_ffi.monad.result<!tvm_ffi.bool>
   }
 
-  tvm_ffi.return %output : !tvm_ffi.monad.result<i64>
+  tvm_ffi.return %output : !tvm_ffi.monad.result<!tvm_ffi.int>
 }
 
 // -----
@@ -131,13 +132,13 @@ tvm_ffi.func @empty_payload() -> !tvm_ffi.monad.result<>
 
 // -----
 
-tvm_ffi.func @omitted_none_argument(%unit: !tvm_ffi.monad.result<!tvm_ffi.none>, %input: !tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
+tvm_ffi.func @omitted_none_argument(%unit: !tvm_ffi.monad.result<!tvm_ffi.none>, %input: !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
   // expected-error@+1 {{region arguments must match input Result payloads}}
-  %output = tvm_ffi.monad.bind %unit, %input : (!tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
-  ^bb0(%value: i64):
-    tvm_ffi.monad.yield %input : !tvm_ffi.monad.result<i64>
+  %output = tvm_ffi.monad.bind %unit, %input : (!tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+  ^bb0(%value: !tvm_ffi.int):
+    tvm_ffi.monad.yield %input : !tvm_ffi.monad.result<!tvm_ffi.int>
   }
-  tvm_ffi.return %output : !tvm_ffi.monad.result<i64>
+  tvm_ffi.return %output : !tvm_ffi.monad.result<!tvm_ffi.int>
 }
 
 // -----
@@ -153,11 +154,53 @@ func.func @zero_input_wrong_arguments() {
 
 // -----
 
-func.func @zero_output_wrong_yield(%input: !tvm_ffi.monad.result<i64>) {
-  tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> () {
-  ^bb0(%payload: i64):
+func.func @zero_output_wrong_yield(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) {
+  tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> () {
+  ^bb0(%payload: !tvm_ffi.int):
     // expected-error@+1 {{Result types must match bind outputs}}
-    tvm_ffi.monad.yield %input : !tvm_ffi.monad.result<i64>
+    tvm_ffi.monad.yield %input : !tvm_ffi.monad.result<!tvm_ffi.int>
   }
   return
 }
+
+// -----
+
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+func.func private @invalid_float(!tvm_ffi.monad.result<f64>)
+
+// -----
+
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+func.func private @invalid_index(!tvm_ffi.monad.result<index>)
+
+// -----
+
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+func.func private @invalid_integer(!tvm_ffi.monad.result<i64>)
+
+// -----
+
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+func.func private @invalid_object(!tvm_ffi.monad.result<!tvm_ffi.object>)
+
+// -----
+
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+func.func private @invalid_pointer(!tvm_ffi.monad.result<!llvm.ptr>)
+
+// -----
+
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+func.func private @invalid_tensor(!tvm_ffi.monad.result<tensor<2xi64>>)
+
+// -----
+
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ResultType parameter}}
+func.func private @invalid_vector(!tvm_ffi.monad.result<vector<2xi32>>)

@@ -185,7 +185,9 @@ public:
       return mlir::FunctionType::get(context, inputs, outputs);
     });
     addConversion([this, context](ResultType type) -> mlir::Type {
-      return ResultType::get(context, convertType(type.getPayloadType()));
+      TVMFFICABIType const payload = mlir::dyn_cast_if_present<TVMFFICABIType>(
+          convertType(type.getPayloadType()));
+      return payload ? ResultType::get(context, payload) : mlir::Type{};
     });
     addConversion([context](TVMFFICOpaqueABIType type) -> mlir::Type {
       // Containers erase to the concrete Array ABI. Other opaque types retain
