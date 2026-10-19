@@ -332,7 +332,7 @@ def TVMFFI_MonadPureOp : TVMFFI_Op<"monad.pure", [Pure]> {
   let summary = "Wrap payloads in successful Results";
   let description = [{
     Transfers payload references by default. Frontend builders may attach the
-    tvm_ffi.retain_payloads UnitAttr to borrow payloads instead: cleanup
+    tvm_ffi.retain UnitAttr to borrow payloads instead: cleanup
     materialization retains each occurrence after semantic container erasure.
   }];
   let arguments = (ins Variadic<AnyType>:$values);

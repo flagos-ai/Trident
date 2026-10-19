@@ -56,42 +56,26 @@ void adjustReference(mlir::OpBuilder &builder, mlir::Value value) {
   }
 }
 
-// Frontend pure borrows its inputs. Materialize their independent references
-// after semantic containers have become CArray, once per payload occurrence.
-class RetainPayloadsPattern final : public mlir::OpRewritePattern<MonadPureOp> {
+// Materialize independent references for borrowed pure payloads and exports
+// after semantic containers have become CArray, once per operand occurrence.
+class RetainPattern final : public mlir::RewritePattern {
 public:
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(MonadPureOp op,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (!op->hasAttr("tvm_ffi.retain_payloads")) {
-      return mlir::failure();
-    }
-    rewriter.setInsertionPoint(op);
-    for (mlir::Value const value : op.getValues()) {
-      adjustReference<ObjectIncRefOp>(rewriter, value);
-    }
-    rewriter.modifyOpInPlace(
-        op, [&] { op->removeAttr("tvm_ffi.retain_payloads"); });
-    return mlir::success();
-  }
-};
-
-class RetainExportsPattern final : public mlir::RewritePattern {
-public:
-  explicit RetainExportsPattern(mlir::MLIRContext *context)
+  explicit RetainPattern(mlir::MLIRContext *context)
       : RewritePattern(MatchAnyOpTypeTag(), 1, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *operation,
                   mlir::PatternRewriter &rewriter) const final {
-    mlir::Region *region = operation->getParentRegion();
-    if (!region || !region->hasOneBlock() ||
-        !mlir::isa<mlir::func::ReturnOp, ReturnOp, MonadYieldOp,
-                   mlir::scf::YieldOp>(operation) ||
-        !operation->hasAttr(retainAttributeName)) {
+    if (!operation->hasAttr(retainAttributeName)) {
       return mlir::failure();
+    }
+    if (!mlir::isa<MonadPureOp>(operation)) {
+      mlir::Region *region = operation->getParentRegion();
+      if (!region || !region->hasOneBlock() ||
+          !mlir::isa<mlir::func::ReturnOp, ReturnOp, MonadYieldOp,
+                     mlir::scf::YieldOp>(operation)) {
+        return mlir::failure();
+      }
     }
     rewriter.setInsertionPoint(operation);
     for (mlir::Value const value : operation->getOperands()) {
@@ -119,8 +103,7 @@ public:
     // Retains from the first stage already precede this insertion point.
     rewriter.setInsertionPoint(operation);
     bool changed = false;
-    for (mlir::Operation &local :
-         llvm::make_early_inc_range(llvm::reverse(*operation->getBlock()))) {
+    for (mlir::Operation &local : llvm::reverse(*operation->getBlock())) {
       if (local.hasAttr(cleanupAttributeName)) {
         for (mlir::Value const value : llvm::reverse(local.getResults())) {
           adjustReference<ObjectDecRefOp>(rewriter, value);
@@ -143,12 +126,8 @@ class MaterializeTVMFFICleanupPass final
     : public impl::MaterializeTVMFFICleanupBase<MaterializeTVMFFICleanupPass> {
 public:
   void runOnOperation() final {
-    mlir::RewritePatternSet payloadPatterns(&getContext());
-    payloadPatterns.add<RetainPayloadsPattern>(&getContext());
-    mlir::walkAndApplyPatterns(getOperation(), std::move(payloadPatterns));
-
     mlir::RewritePatternSet retainPatterns(&getContext());
-    retainPatterns.add<RetainExportsPattern>(&getContext());
+    retainPatterns.add<RetainPattern>(&getContext());
     mlir::walkAndApplyPatterns(getOperation(), std::move(retainPatterns));
 
     mlir::RewritePatternSet cleanupPatterns(&getContext());

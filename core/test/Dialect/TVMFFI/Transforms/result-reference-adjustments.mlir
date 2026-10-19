@@ -56,6 +56,6 @@ func.func @failed_cleanup() {
 // CHECK-NEXT: return %[[RESULT]]
 // LLVM-LABEL: llvm.func @native_object(
 func.func @native_object(%input: !tvm_ffi.object) -> !tvm_ffi.monad.result<!tvm_ffi.object> {
-  %result = tvm_ffi.monad.pure %input {tvm_ffi.cleanup, tvm_ffi.retain_payloads} : (!tvm_ffi.object) -> !tvm_ffi.monad.result<!tvm_ffi.object>
+  %result = tvm_ffi.monad.pure %input {tvm_ffi.cleanup, tvm_ffi.retain} : (!tvm_ffi.object) -> !tvm_ffi.monad.result<!tvm_ffi.object>
   return {tvm_ffi.retain} %result : !tvm_ffi.monad.result<!tvm_ffi.object>
 }

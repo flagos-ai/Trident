@@ -431,7 +431,7 @@ def pure(
         payloads.append(value)
     operation = tvm_ffi_d.MonadPureOp(result_types, payloads)
     operation.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-    operation.attributes["tvm_ffi.retain_payloads"] = ir.UnitAttr.get()
+    operation.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
     return [*operation.outputs]
 
 

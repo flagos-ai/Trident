@@ -99,7 +99,7 @@ func.func @results(%input: !tvm_ffi.tensor) {
 // CHECK-NEXT: return
 func.func @scalar_and_empty_cleanup() {
   %number = arith.constant {tvm_ffi.cleanup} 7 : i64
-  %result = tvm_ffi.monad.pure %number {tvm_ffi.cleanup, tvm_ffi.retain_payloads} : (i64) -> !tvm_ffi.monad.result<i64>
+  %result = tvm_ffi.monad.pure %number {tvm_ffi.cleanup, tvm_ffi.retain} : (i64) -> !tvm_ffi.monad.result<i64>
   tvm_ffi.monad.bind : () -> () {
     tvm_ffi.monad.yield {tvm_ffi.retain}
   } {tvm_ffi.cleanup}
