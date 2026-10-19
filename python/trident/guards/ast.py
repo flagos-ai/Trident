@@ -279,7 +279,7 @@ class GuardExpressionVisitor:
 
     def _build_comparison(self, node: ast.Compare, index: int = 0) -> list[ir.Value]:
         analysis = self._analyze(node)
-        types = [tvm_ffi_d.ResultType.get(analysis.type)]
+        types = make_result_types([analysis.type])
         if index == len(node.ops):
             return pure([native_constant(True)], result_types=types)
         operands = analysis.operands[2 * index : 2 * index + 2]
@@ -295,7 +295,7 @@ class GuardExpressionVisitor:
                     # A later whole-expression fallback replaces preceding comparisons.
                     [value] = remaining.arguments
                     if analysis.fallback is None:
-                        value = arith.andi(comparison, value)
+                        value = arith.andi(comparison, native(value))
                     terminator = tvm_ffi_d.MonadYieldOp(
                         pure([value], result_types=types)
                     )
@@ -470,7 +470,7 @@ class GuardExpressionVisitor:
 
     def build(self, node: ast.expr) -> list[ir.Value]:
         analysis = self._analyze(node)
-        types = [tvm_ffi_d.ResultType.get(analysis.type)]
+        types = make_result_types([analysis.type])
         if analysis.pure:
             return pure([self.value(node)], result_types=types)
         source = Local.from_expression(node)

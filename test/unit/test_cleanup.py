@@ -45,7 +45,7 @@ class CleanupTest(unittest.TestCase):
     def test_bind_get_entry_block(self) -> None:
         with new_context(), ir.Location.unknown():
             module = ir.Module.create()
-            payload_types = [ir.IntegerType.get_signless(64), ffi.NoneType.get()]
+            payload_types = [ffi.IntType.get(), ffi.NoneType.get()]
             result_types = [ffi.ResultType.get(type_) for type_ in payload_types]
             locations = [ir.Location.name("integer"), ir.Location.name("none")]
             with ir.InsertionPoint(module.body):
@@ -92,7 +92,7 @@ class CleanupTest(unittest.TestCase):
                 ir.Location.unknown(),
             ):
                 module = ir.Module.create()
-                result_type = ffi.ResultType.get(ir.IntegerType.get_signless(64))
+                result_type = ffi.ResultType.get(ffi.IntType.get())
                 with ir.InsertionPoint(module.body):
                     function = func.FuncOp(
                         "test",

@@ -17,7 +17,6 @@
 #include <llvm/ADT/SmallVectorExtras.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/FormatVariadic.h>
-#include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -77,23 +76,15 @@ mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
                                                       unpack.getSuccess());
     payloads.push_back(unpack.getValue());
   }
-  mlir::LLVMTypeConverter const converter(builder.getContext());
   llvm::SmallVector<mlir::Type> const storageTypes = llvm::map_to_vector(
       op.getOperands(), [&](mlir::Value result) -> mlir::Type {
         mlir::Type const payload =
             mlir::cast<tvm_ffi::ResultType>(result.getType()).getPayloadType();
-        if (mlir::isa<tvm_ffi::FunctionType, tvm_ffi::ObjectType>(payload)) {
+        if (mlir::isa<tvm_ffi::FunctionType>(payload)) {
           return mlir::LLVM::LLVMPointerType::get(builder.getContext());
         }
-        return mlir::isa<tvm_ffi::TVMFFICABIType>(payload)
-                   ? tvm_ffi::TVMFFICABIType::getLLVMType(builder.getContext())
-                   : converter.convertType(payload);
+        return tvm_ffi::TVMFFICABIType::getLLVMType(builder.getContext());
       });
-  if (llvm::any_of(storageTypes,
-                   [](mlir::Type type) -> bool { return !type; })) {
-    return op.emitError(
-        "payload type cannot be lowered to an LLVM output slot");
-  }
   mlir::scf::IfOp branch = mlir::scf::IfOp::create(
       builder, op.getLoc(), mlir::TypeRange{builder.getI32Type()}, ready, true);
   builder.setInsertionPointToStart(branch.thenBlock());

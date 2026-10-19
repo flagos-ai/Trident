@@ -4,12 +4,12 @@
 // RUN: trident-core-opt %s --convert-tvm-ffi-to-llvm --verify-diagnostics
 
 // Decomposition owns continuation control flow; LLVM conversion requires it.
-func.func @unlowered_bind(%input: !tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
+func.func @unlowered_bind(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
   // expected-error@+1 {{failed to legalize operation 'tvm_ffi.monad.bind'}}
-  %result = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
-  ^bb0(%value: i64):
-    %pure = tvm_ffi.monad.pure %value : (i64) -> !tvm_ffi.monad.result<i64>
-    tvm_ffi.monad.yield %pure : !tvm_ffi.monad.result<i64>
+  %result = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+  ^bb0(%value: !tvm_ffi.int):
+    %pure = tvm_ffi.monad.pure %value : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+    tvm_ffi.monad.yield %pure : !tvm_ffi.monad.result<!tvm_ffi.int>
   }
-  return %result : !tvm_ffi.monad.result<i64>
+  return %result : !tvm_ffi.monad.result<!tvm_ffi.int>
 }

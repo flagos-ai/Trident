@@ -79,28 +79,6 @@ bool isTaggedCastType(mlir::Type type) {
 
 } // namespace
 
-mlir::Type ArrayType::parse(mlir::AsmParser &parser) {
-  llvm::SMLoc const loc = parser.getCurrentLocation();
-  mlir::Type type;
-  if (mlir::failed(parser.parseLess()) ||
-      mlir::failed(parser.parseType(type)) ||
-      mlir::failed(parser.parseGreater())) {
-    return {};
-  }
-  TVMFFICABIType const element = mlir::dyn_cast<TVMFFICABIType>(type);
-  if (!element) {
-    parser.emitError(loc) << "array element must be a TVM FFI C ABI type";
-    return {};
-  }
-  return getChecked(
-      [&]() -> mlir::InFlightDiagnostic { return parser.emitError(loc); },
-      parser.getContext(), element);
-}
-
-void ArrayType::print(mlir::AsmPrinter &printer) const {
-  printer << '<' << getElementType() << '>';
-}
-
 mlir::LogicalResult
 ArrayType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
                   TVMFFICABIType element) {
@@ -168,13 +146,10 @@ void FuncOp::print(mlir::OpAsmPrinter &p) {
 
 mlir::LogicalResult
 ResultType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
-                   mlir::Type payload) {
-  if (!payload) {
-    return emitError() << "Result requires one payload type";
-  }
-  return mlir::isa<ResultType>(payload)
-             ? emitError() << "nested Result payloads are unsupported"
-             : mlir::success();
+                   TVMFFICABIType payload) {
+  return TVMFFICABIType::classof(payload)
+             ? mlir::success()
+             : emitError() << "Result payload must be a TVM FFI C ABI type";
 }
 
 void TVMFFIDialect::initialize() {

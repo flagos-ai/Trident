@@ -95,7 +95,7 @@ def TVMFFI_ArrayType
     : TVMFFICOpaqueABI_Type<"Array", "array"> {
   let summary = "An array whose elements are TVM FFI C ABI values";
   let parameters = (ins "::trident::tvm_ffi::TVMFFICABIType":$elementType);
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = "`<` $elementType `>`";
   let genVerifyDecl = 1;
 }
 def TVMFFI_BoolType
@@ -141,8 +141,8 @@ def TVMFFI_ObjectType
 def TVMFFI_RawStrType : TVMFFIStaticTypeIndex_Type<"RawStr", "raw_str", 8>;
 def TVMFFI_ResultType
     : TVMFFI_Type<"Result", "monad.result"> {
-  let summary = "One payload guarded by a success bit";
-  let parameters = (ins "::mlir::Type":$payloadType);
+  let summary = "One TVM FFI C ABI payload guarded by a success bit";
+  let parameters = (ins "::trident::tvm_ffi::TVMFFICABIType":$payloadType);
   let assemblyFormat = "`<` $payloadType `>`";
   let genVerifyDecl = 1;
 }

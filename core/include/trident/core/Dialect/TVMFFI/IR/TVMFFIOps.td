@@ -388,7 +388,7 @@ def TVMFFI_ReturnOp
     Example:
 
     ```mlir
-    tvm_ffi.return %result : !tvm_ffi.monad.result<i64>
+    tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.int>
     ```
   }];
 

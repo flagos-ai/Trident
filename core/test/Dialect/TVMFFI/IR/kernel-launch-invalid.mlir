@@ -59,7 +59,7 @@ module {
     // expected-error@+1 {{must return Result<None>}}
     %launch = tvm_ffi.kernel_launch @kernel::@entry
         blocks in (%one, %one, %one) : i64 threads in (%one, %one, %one)
-        args (%one : i64 #tvm_ffi.variable_specialization<kind = i64>) -> !tvm_ffi.monad.result<i64>
+        args (%one : i64 #tvm_ffi.variable_specialization<kind = i64>) -> !tvm_ffi.monad.result<!tvm_ffi.int>
     func.return
   }
 }

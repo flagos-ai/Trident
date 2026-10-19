@@ -108,7 +108,7 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIRawStrTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIRawStrType(MlirType type);
 
 // ResultType
-// The payload is required; use TVM FFI None for no-data results.
+// The payload must be a TVM FFI C ABI type; use None for no-data results.
 
 MLIR_CAPI_EXPORTED MlirType
 mlirTVMFFIResultTypeGetChecked(MlirLocation location, MlirType payload);

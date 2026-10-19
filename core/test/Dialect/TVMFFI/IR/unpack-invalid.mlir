@@ -11,10 +11,10 @@ func.func @not_result(%input: i64) {
 
 // -----
 
-func.func @wrong_payload(%input: !tvm_ffi.monad.result<i64>) {
+func.func @wrong_payload(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) {
   // expected-error@+2 {{inferred type}}
   // expected-error@+1 {{failed to infer returned types}}
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<i64>) -> (i1, !tvm_ffi.any)
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> (i1, !tvm_ffi.int)
   return
 }
 

@@ -35,22 +35,26 @@ func.func @array_size(%array: !tvm_ffi.array<!tvm_ffi.int>) {
 
 // -----
 
-// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ArrayType parameter}}
 func.func private @array_native(!tvm_ffi.array<i64>)
 
 // -----
 
-// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ArrayType parameter}}
 func.func private @array_object(!tvm_ffi.array<!tvm_ffi.object>)
 
 // -----
 
-// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ArrayType parameter}}
 func.func private @array_result(!tvm_ffi.array<!tvm_ffi.monad.result<!tvm_ffi.int>>)
 
 // -----
 
-// expected-error@+1 {{array element must be a TVM FFI C ABI type}}
+// expected-error@+2 {{invalid kind of type specified}}
+// expected-error@+1 {{failed to parse TVMFFI_ArrayType parameter}}
 func.func private @array_tensor(!tvm_ffi.array<tensor<2xi64>>)
 
 // -----

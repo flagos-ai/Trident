@@ -47,7 +47,7 @@ from trident.ownership import CLEANUP_ATTR, RETAIN_ATTR
 from .guards import parse_guards
 from .importer import TridentFxImporter
 from .input import InputTableBuilder
-from .ir import bind, container_create, pure, tuple_type
+from .ir import bind, container_create, native, pure, tuple_type
 
 
 class TridentGraphModule:
@@ -337,7 +337,9 @@ class TridentGraphModule:
                     result_types=[ffi_result_type],
                 ) as guards:
                     [predicate] = guards.arguments
-                    branch = scf.IfOp(predicate, [ffi_result_type], has_else=True)
+                    branch = scf.IfOp(
+                        native(predicate), [ffi_result_type], has_else=True
+                    )
                     branch.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
                     with ir.InsertionPoint(branch.then_block):
                         with bind(

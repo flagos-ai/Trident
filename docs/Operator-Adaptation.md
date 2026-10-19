@@ -86,9 +86,11 @@ constructs nested list/tuple arguments in order and returns Results, leaving
 operator execution and subsequent graph traversal to its caller. Keep pure
 argument prefixes iterative. `pure` borrows payloads and requests an independent
 reference for each Result through `tvm_ffi.retain`, then marks it for
-cleanup. It infers types by default;
-with declared Result types it boxes native scalars and widens Any/Union payloads at the boundary. `bind` borrows
-its inputs; its builder unconditionally marks the bind operation for cleanup. For exits marked with `tvm_ffi.retain`, the cleanup pass retains
+cleanup. It infers boxed CABI types by default and boxes native scalars before
+wrapping them. With declared Result types it also widens Any/Union payloads at the boundary.
+`make_result_types` applies the same scalar type boxing. Bind arguments are CABI
+values; use `native` or `tvm_ffi.get` before arithmetic or boolean conditions.
+`bind` borrows its inputs; its builder unconditionally marks the bind operation for cleanup. For exits marked with `tvm_ffi.retain`, the cleanup pass retains
 region yields and function returns to establish independent references for the
 receiving scope before releasing local references. Result retains read
 payloads only on success; scalars need no references. The bind builder restores
@@ -133,8 +135,8 @@ for effects only and ends with an empty `monad.yield`. The Python `bind` helper
 supports the same counts; `pure([])` still constructs the existing None Result.
 
 FFI functions declare exactly one Result return type, and `tvm_ffi.return`
-matches that type exactly. Pack multiple values into a semantic tuple payload. Every Result requires one payload type. Use `monad.pure` for
-successful values and `Result<!tvm_ffi.none>` with `tvm_ffi.constant.none` for
+matches that type exactly. Pack multiple values into a semantic tuple payload.
+Every Result requires one CABI payload type. Use `monad.pure` for successful values and `Result<!tvm_ffi.none>` with `tvm_ffi.constant.none` for
 no-data returns. Empty argument builders retain a None Result success marker;
 pass only the original number of arguments to calls, including zero for empty
 lists. Actual None arguments remain ordinary arguments. Use typed `pure`
@@ -224,10 +226,13 @@ boundary even if import and IR verification succeeded.
 `tvm_ffi.monad.unpack` exposes one Result as a success `i1` followed by its
 payload. Payload types compatible with `tvm_ffi.upcast` to Any produce
 `!tvm_ffi.any`: success preserves the value and failure produces None.
-Other payload types, including native scalars and Function/Object handles,
-remain unchanged and may only be used when success is true. Unpack neither
-clears runtime errors nor transfers ownership. Result payload types remain
-unrestricted except for the existing prohibition on nested Results.
+Function handles and unions containing them retain their payload types and may
+only be used when success is true. Unpack neither clears runtime errors nor
+transfers ownership. Result payloads must be `TVMFFICABIType`; native scalars,
+native Object handles and nested Results are rejected by parsing and checked
+C/Python construction. The C++ payload parameter and accessor use
+`TVMFFICABIType`. Function remains a valid CABI payload with native-pointer
+LLVM storage; CABI membership does not imply compatibility with Any casts.
 
 ## Semantic containers
 

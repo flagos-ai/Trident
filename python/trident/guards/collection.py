@@ -13,7 +13,7 @@ from trident.core import ir
 from trident.core.dialects import scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTableBuilder
-from trident.ir import bind, native_constant, pure
+from trident.ir import bind, native, native_constant, pure
 from trident.ownership import RETAIN_ATTR
 
 from .codes import GuardCode
@@ -44,7 +44,7 @@ class Guards:
         arguments: Sequence[ir.Value],
         context: ir.Context,
     ) -> list[ir.Value]:
-        type_ = tvm_ffi_d.ResultType.get(ir.IntegerType.get_signless(1))
+        type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
         code = next(codes, None)
         if code is None:
             return pure([native_constant(True)], result_types=[type_])
@@ -53,7 +53,7 @@ class Guards:
             result_types=[type_],
         ) as operation:
             [predicate] = operation.arguments
-            branch = scf.IfOp(predicate, [type_], has_else=True)
+            branch = scf.IfOp(native(predicate), [type_], has_else=True)
             with ir.InsertionPoint(branch.then_block):
                 yielded = self._build_checks(codes, builder, arguments, context)
                 terminator = scf.YieldOp(yielded)
