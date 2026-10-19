@@ -239,6 +239,11 @@ def TVMFFI_KernelLaunchOp
 ]> {
   let summary = "Launch a compiled kernel entry point";
   let description = [{
+    Returns Result<None>: success after launching, failure on specialization
+    rejection without launching. Failure does not set a runtime error. The
+    caller propagates rejection through Results and handles it at its boundary.
+    Success does not imply asynchronous GPU execution has completed.
+
     Models launching a compiled kernel symbol with explicit grid/block sizes.
     Operands use TVM FFI semantic values or native scalars. Each operand's
     specialization attribute defines its runtime precondition. Constant
@@ -264,7 +269,7 @@ let arguments = (ins SymbolRefAttr:$kernel,
                    Optional<I32>:$dynamicSharedMemorySize,
                    Variadic<TVMFFI_KernelOperandType>:$kernelOperands,
                    TVMFFI_KernelSpecializationArrayAttr:$specializations);
-let results = (outs);
+let results = (outs TVMFFI_ResultType:$result);
 let hasVerifier = 1;
 
 let extraClassDeclaration = [{
@@ -290,16 +295,29 @@ let extraClassDeclaration = [{
     `threads` `in` `(` $blockSizeX `,` $blockSizeY `,` $blockSizeZ `)`
     (`dynamic_shared_memory_size` $dynamicSharedMemorySize^)?
     `args` `(` custom<KernelArguments>($kernelOperands, type($kernelOperands), $specializations) `)`
+    `->` type($result)
     prop-dict attr-dict
 }];
 }
 
 def TVMFFI_MonadBindOp : TVMFFI_Op<"monad.bind", [SingleBlock, RecursiveMemoryEffects]> {
   let summary = "Run a continuation only when every input Result succeeds";
+  let description = [{
+    Input and output Result counts are independent and may be zero. With no
+    inputs the body runs unconditionally. With no outputs the body is used only
+    for effects, and failed inputs skip those effects without producing Results.
+    Body arguments match input payloads and yielded Results match output types.
+  }];
   let arguments = (ins Variadic<TVMFFI_ResultType>:$inputs);
   let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = "$inputs `:` functional-type($inputs, $outputs) $body attr-dict";
+  let extraClassDeclaration = [{
+    /// Return the entry block, creating it through the builder if needed.
+    ::mlir::Block *addEntryBlock(::mlir::OpBuilder &builder);
+    /// Return the entry block, or null when the body is empty.
+    ::mlir::Block *getEntryBlock();
+  }];
   let hasVerifier = 1;
 }
 
@@ -312,6 +330,11 @@ def TVMFFI_MonadFailOp : TVMFFI_Op<"monad.fail", [Pure]> {
 
 def TVMFFI_MonadPureOp : TVMFFI_Op<"monad.pure", [Pure]> {
   let summary = "Wrap payloads in successful Results";
+  let description = [{
+    Transfers payload references by default. Frontend builders may attach the
+    tvm_ffi.retain_payloads UnitAttr to borrow payloads instead: cleanup
+    materialization retains each occurrence after semantic container erasure.
+  }];
   let arguments = (ins Variadic<AnyType>:$values);
   let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
   let assemblyFormat = "$values attr-dict `:` functional-type($values, $outputs)";

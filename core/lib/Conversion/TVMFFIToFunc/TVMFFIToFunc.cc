@@ -56,12 +56,10 @@ llvm::SmallVector<int32_t> getExpectedTypeIndices(mlir::Type type) {
                       .getTypeIndex();
                 });
           })
-      .Case<tvm_ffi::AnyType>(
-          [](tvm_ffi::AnyType) -> llvm::SmallVector<int32_t> { return {}; })
-      .Case<tvm_ffi::TVMFFIABIType>(
-          [](tvm_ffi::TVMFFIABIType abiType) -> llvm::SmallVector<int32_t> {
-            return {mlir::cast<tvm_ffi::TVMFFITypeIndexInterface>(abiType)
-                        .getTypeIndex()};
+      .Case<tvm_ffi::TVMFFITypeIndexInterface>(
+          [](tvm_ffi::TVMFFITypeIndexInterface indexedType)
+              -> llvm::SmallVector<int32_t> {
+            return {indexedType.getTypeIndex()};
           })
       .Default([](mlir::Type) -> llvm::SmallVector<int32_t> { return {}; });
 }
@@ -87,8 +85,8 @@ mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
         if (mlir::isa<tvm_ffi::FunctionType, tvm_ffi::ObjectType>(payload)) {
           return mlir::LLVM::LLVMPointerType::get(builder.getContext());
         }
-        return mlir::isa<tvm_ffi::TVMFFIABIType>(payload)
-                   ? tvm_ffi::TVMFFIABIType::getLLVMType(builder.getContext())
+        return mlir::isa<tvm_ffi::TVMFFICABIType>(payload)
+                   ? tvm_ffi::TVMFFICABIType::getLLVMType(builder.getContext())
                    : converter.convertType(payload);
       });
   if (llvm::any_of(storageTypes,
@@ -198,7 +196,7 @@ class ConvertTVMFFIToFuncPass final
         const mlir::IntegerType i32Ty = builder.getI32Type();
         const mlir::IntegerType i64Ty = builder.getI64Type();
         mlir::LLVM::LLVMStructType const llvmAnyTy =
-            tvm_ffi::TVMFFIABIType::getLLVMType(context);
+            tvm_ffi::TVMFFICABIType::getLLVMType(context);
         mlir::LLVM::LLVMPointerType const llvmPtrTy =
             mlir::LLVM::LLVMPointerType::get(context);
 
@@ -248,9 +246,8 @@ class ConvertTVMFFIToFuncPass final
             /*withElseRegion=*/true);
         builder.setInsertionPointToStart(guard.thenBlock());
         if (!llvm::all_of(payloadTypes, [](mlir::Type type) -> bool {
-              return mlir::isa<tvm_ffi::TVMFFIABIType>(type) &&
-                     !mlir::isa<tvm_ffi::FunctionType, tvm_ffi::ObjectType>(
-                         type);
+              return mlir::isa<tvm_ffi::TVMFFICABIType>(type) &&
+                     !mlir::isa<tvm_ffi::FunctionType>(type);
             })) {
           tvmffiFuncOp.emitError(
               "ABI return payloads must have a tagged TVM FFI ABI type");

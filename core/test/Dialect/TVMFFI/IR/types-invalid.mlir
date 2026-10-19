@@ -70,3 +70,18 @@ func.func private @old_str(!tvm_ffi.c.str)
 
 // expected-error@+1 {{unknown  type `c.tensor` in dialect `tvm_ffi`}}
 func.func private @old_tensor(!tvm_ffi.c.tensor)
+
+// -----
+
+// expected-error@+1 {{union members must be TVM FFI C ABI types}}
+func.func private @union_native_integer(!tvm_ffi.union<!tvm_ffi.int, i64>)
+
+// -----
+
+// expected-error@+1 {{union members must be TVM FFI C ABI types}}
+func.func private @union_native_object(!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.object>)
+
+// -----
+
+// expected-error@+1 {{union members must be TVM FFI C ABI types}}
+func.func private @union_result(!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.monad.result<!tvm_ffi.int>>)

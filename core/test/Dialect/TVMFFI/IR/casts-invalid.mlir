@@ -52,7 +52,7 @@ func.func @downcast_function(%arg: !tvm_ffi.any) {
 // -----
 
 func.func @downcast_object(%arg: !tvm_ffi.any) {
-  // expected-error@+1 {{cast incompatible}}
+  // expected-error@+1 {{result #0 must be TVM FFI value with a TVMFFIAny ABI representation}}
   %result = tvm_ffi.downcast %arg : !tvm_ffi.any -> !tvm_ffi.object
   return
 }
@@ -76,7 +76,7 @@ func.func @upcast_function(%arg: !tvm_ffi.function) {
 // -----
 
 func.func @upcast_object(%arg: !tvm_ffi.object) {
-  // expected-error@+1 {{cast incompatible}}
+  // expected-error@+1 {{operand #0 must be TVM FFI value with a TVMFFIAny ABI representation}}
   %result = tvm_ffi.upcast %arg : !tvm_ffi.object -> !tvm_ffi.any
   return
 }

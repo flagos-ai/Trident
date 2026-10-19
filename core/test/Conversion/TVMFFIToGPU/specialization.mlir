@@ -25,19 +25,17 @@
 // CHECK: llvm.urem
 // CHECK: llvm.icmp "eq"
 // CHECK: %[[ALL_CHECKS:[a-zA-Z0-9_]+]] = arith.andi
-// CHECK: cf.cond_br %[[ALL_CHECKS]], [[SUCCESS:\^bb[0-9]+]], [[FAILURE:\^bb[0-9]+]]
-// CHECK: [[SUCCESS]]:
+// CHECK: scf.if %[[ALL_CHECKS]]
 // CHECK: %[[LAUNCH_OBJECT:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[TENSOR]]
 // CHECK: %[[LAUNCH_TENSOR:[a-zA-Z0-9_]+]] = tvm_ffi.as %[[LAUNCH_OBJECT]]
 // CHECK: %[[LAUNCH_DATA:[a-zA-Z0-9_]+]] = dlpack.tensor.data %[[LAUNCH_TENSOR]]
 // CHECK: gpu.launch_func
 // CHECK-SAME: args(%[[LAUNCH_DATA]] : !llvm.ptr
-// CHECK: tvm_ffi.return
-// CHECK: [[FAILURE]]:
-// CHECK: %[[EXCEPTION:[a-zA-Z0-9_]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
-// CHECK-NEXT: %[[FAILURE_RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[EXCEPTION]] : !tvm_ffi.exception -> !tvm_ffi.any
-// CHECK: %[[RETURN:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[FAILURE_RESULT]] : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
-// CHECK: tvm_ffi.return %[[RETURN]] : !tvm_ffi.monad.result<!tvm_ffi.any>
+// CHECK: tvm_ffi.monad.pure
+// CHECK: scf.yield
+// CHECK: } else {
+// CHECK: %[[REJECTED:[a-zA-Z0-9_]+]] = tvm_ffi.monad.fail
+// CHECK: scf.yield %[[REJECTED]]
 // CHECK-NOT: tvm_ffi.kernel_launch
 
 module attributes {gpu.container_module} {
@@ -47,10 +45,10 @@ module attributes {gpu.container_module} {
       %specialized: !tvm_ffi.int, %value: !tvm_ffi.float)
       -> !tvm_ffi.int {
     %one = arith.constant 1 : i64
-    tvm_ffi.kernel_launch @kernel::@entry
+    %launch_0 = tvm_ffi.kernel_launch @kernel::@entry
         blocks in (%one, %one, %one) : i64
         threads in (%one, %one, %one)
-        args (%tensor : !tvm_ffi.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr, divisibility = 16>, %specialized : !tvm_ffi.int #tvm_ffi.constant_specialization<value = 1 : i64>, %value : !tvm_ffi.float #tvm_ffi.variable_specialization<kind = f32, divisibility = 16>)
+        args (%tensor : !tvm_ffi.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr, divisibility = 16>, %specialized : !tvm_ffi.int #tvm_ffi.constant_specialization<value = 1 : i64>, %value : !tvm_ffi.float #tvm_ffi.variable_specialization<kind = f32, divisibility = 16>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     %result = tvm_ffi.constant.int 0
     return %result : !tvm_ffi.int
   }
@@ -72,7 +70,7 @@ module attributes {gpu.container_module} {
 // CHECK-SAME: %[[FLAG:[a-zA-Z0-9_]+]]: !tvm_ffi.bool
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.int
 // CHECK-SAME: %[[SCALE:[a-zA-Z0-9_]+]]: !tvm_ffi.float
-// CHECK: %[[INITIAL:[a-zA-Z0-9_]+]] = llvm.mlir.constant(true) : i1
+// CHECK: %[[INITIAL:[a-zA-Z0-9_]+]] = arith.constant true
 // CHECK: %[[TRUE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.bool true
 // CHECK: %[[BOOL_EQUAL:[a-zA-Z0-9_]+]] = tvm_ffi.eq %[[FLAG]], %[[TRUE]] : !tvm_ffi.bool
 // CHECK: %[[BOOL_CHECK:[a-zA-Z0-9_]+]] = arith.andi %[[INITIAL]], %[[BOOL_EQUAL]] : i1
@@ -80,8 +78,7 @@ module attributes {gpu.container_module} {
 // CHECK: %[[EXPECTED_FLOAT:[a-zA-Z0-9_.]+]] = tvm_ffi.constant.float 1.000000e+00
 // CHECK: %[[FLOAT_EQUAL:[a-zA-Z0-9_]+]] = tvm_ffi.eq %[[SCALE]], %[[EXPECTED_FLOAT]] : !tvm_ffi.float
 // CHECK: %[[SCALAR_CHECK:[a-zA-Z0-9_]+]] = arith.andi %[[BOOL_CHECK]], %[[FLOAT_EQUAL]] : i1
-// CHECK: cf.cond_br %[[SCALAR_CHECK]], [[SUCCESS_SCALAR:\^bb[0-9]+]], [[FAILURE_SCALAR:\^bb[0-9]+]]
-// CHECK: [[SUCCESS_SCALAR]]:
+// CHECK: scf.if %[[SCALAR_CHECK]]
 // CHECK: %[[LAUNCH_VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[VALUE]]
 // CHECK: %[[LAUNCH_I32:[a-zA-Z0-9_]+]] = arith.trunci %[[LAUNCH_VALUE]] : i64 to i32
 // CHECK: gpu.launch_func
@@ -94,10 +91,10 @@ module attributes {gpu.container_module} {
   func.func private @launch_scalar_constants(%flag: !tvm_ffi.bool,
       %value: !tvm_ffi.int, %scale: !tvm_ffi.float) -> !tvm_ffi.int {
     %one = arith.constant 1 : i64
-    tvm_ffi.kernel_launch @kernel::@entry
+    %launch_1 = tvm_ffi.kernel_launch @kernel::@entry
         blocks in (%one, %one, %one) : i64
         threads in (%one, %one, %one)
-        args (%flag : !tvm_ffi.bool #tvm_ffi.constant_specialization<value = true>, %value : !tvm_ffi.int #tvm_ffi.variable_specialization<kind = i32>, %scale : !tvm_ffi.float #tvm_ffi.constant_specialization<value = 1.000000e+00 : f64>)
+        args (%flag : !tvm_ffi.bool #tvm_ffi.constant_specialization<value = true>, %value : !tvm_ffi.int #tvm_ffi.variable_specialization<kind = i32>, %scale : !tvm_ffi.float #tvm_ffi.constant_specialization<value = 1.000000e+00 : f64>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     %result = tvm_ffi.constant.int 0
     return %result : !tvm_ffi.int
   }
@@ -117,12 +114,11 @@ module attributes {gpu.container_module} {
 
 // CHECK-LABEL: tvm_ffi.func @validate_string
 // CHECK-SAME: %[[ACTIVATION:[a-zA-Z0-9_]+]]: !tvm_ffi.raw_str
-// CHECK: %[[INITIAL_STRING:[a-zA-Z0-9_]+]] = llvm.mlir.constant(true) : i1
+// CHECK: %[[INITIAL_STRING:[a-zA-Z0-9_]+]] = arith.constant true
 // CHECK: %[[EXPECTED_STRING:[a-zA-Z0-9_]+]] = tvm_ffi.constant.raw_str "leaky_relu"
 // CHECK: %[[STRING_EQUAL:[a-zA-Z0-9_]+]] = tvm_ffi.eq %[[ACTIVATION]], %[[EXPECTED_STRING]] : !tvm_ffi.raw_str
 // CHECK: %[[STRING_CHECK:[a-zA-Z0-9_]+]] = arith.andi %[[INITIAL_STRING]], %[[STRING_EQUAL]] : i1
-// CHECK: cf.cond_br %[[STRING_CHECK]], [[SUCCESS_STRING:\^bb[0-9]+]], [[FAILURE_STRING:\^bb[0-9]+]]
-// CHECK: [[SUCCESS_STRING]]:
+// CHECK: scf.if %[[STRING_CHECK]]
 // CHECK: gpu.launch_func
 // CHECK-SAME: args(%[[ZERO_STRING:[a-zA-Z0-9_]+]] : i64, %[[ZERO_STRING]] : i64)
 // CHECK-NOT: tvm_ffi.kernel_launch
@@ -133,10 +129,10 @@ module attributes {gpu.container_module} {
   func.func private @launch_string(%activation: !tvm_ffi.raw_str)
       -> !tvm_ffi.int {
     %one = arith.constant 1 : i64
-    tvm_ffi.kernel_launch @kernel::@entry
+    %launch_2 = tvm_ffi.kernel_launch @kernel::@entry
         blocks in (%one, %one, %one) : i64
         threads in (%one, %one, %one)
-        args (%activation : !tvm_ffi.raw_str #tvm_ffi.constant_specialization<value = "leaky_relu">)
+        args (%activation : !tvm_ffi.raw_str #tvm_ffi.constant_specialization<value = "leaky_relu">) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     %result = tvm_ffi.constant.int 0
     return %result : !tvm_ffi.int
   }
@@ -155,16 +151,18 @@ module attributes {gpu.container_module} {
 
 // CHECK-LABEL: tvm_ffi.func @validate_tuple
 // CHECK-SAME: %[[TUPLE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array
-// CHECK: %[[INITIAL_TUPLE:[a-zA-Z0-9_]+]] = llvm.mlir.constant(true) : i1
+// CHECK: %[[INITIAL_TUPLE:[a-zA-Z0-9_]+]] = arith.constant true
 // CHECK: %[[ONE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
 // CHECK: %[[TRUE_TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.bool true
 // CHECK: %[[NAME:[a-zA-Z0-9_]+]] = tvm_ffi.constant.raw_str "name"
 // CHECK: %[[INNER:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[INNER_HANDLE:[a-zA-Z0-9_]+]](%[[TRUE_TUPLE]], %[[NAME]])
 // CHECK: %[[EXPECTED_TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[OUTER_HANDLE:[a-zA-Z0-9_]+]](%[[ONE]], %[[INNER]])
+// CHECK: tvm_ffi.ObjectDecRef %[[OUTER_HANDLE]]
+// CHECK: tvm_ffi.ObjectDecRef %[[INNER]]
 // CHECK: %[[TUPLE_EQUAL:[a-zA-Z0-9_]+]] = tvm_ffi.eq %[[TUPLE]], %[[EXPECTED_TUPLE]] : !tvm_ffi.c.array
+// CHECK: tvm_ffi.ObjectDecRef %[[EXPECTED_TUPLE]]
 // CHECK: %[[TUPLE_CHECK:[a-zA-Z0-9_]+]] = arith.andi %[[INITIAL_TUPLE]], %[[TUPLE_EQUAL]] : i1
-// CHECK: cf.cond_br %[[TUPLE_CHECK]], [[SUCCESS_TUPLE:\^bb[0-9]+]], [[FAILURE_TUPLE:\^bb[0-9]+]]
-// CHECK: [[SUCCESS_TUPLE]]:
+// CHECK: scf.if %[[TUPLE_CHECK]]
 // CHECK: gpu.launch_func
 // CHECK-SAME: args(%[[ZERO_TUPLE:[a-zA-Z0-9_]+]] : i64, %[[ZERO_TUPLE]] : i64)
 // CHECK-NOT: tvm_ffi.kernel_launch
@@ -175,10 +173,10 @@ module attributes {gpu.container_module} {
   func.func private @launch_tuple(
       %value: !tvm_ffi.c.array) -> !tvm_ffi.int {
     %one = arith.constant 1 : i64
-    tvm_ffi.kernel_launch @kernel::@entry
+    %launch_3 = tvm_ffi.kernel_launch @kernel::@entry
         blocks in (%one, %one, %one) : i64
         threads in (%one, %one, %one)
-        args (%value : !tvm_ffi.c.array #tvm_ffi.constant_specialization<value = [1 : i64, [true, "name"]]>)
+        args (%value : !tvm_ffi.c.array #tvm_ffi.constant_specialization<value = [1 : i64, [true, "name"]]>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     %result = tvm_ffi.constant.int 0
     return %result : !tvm_ffi.int
   }

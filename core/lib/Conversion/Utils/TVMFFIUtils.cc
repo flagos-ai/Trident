@@ -276,7 +276,7 @@ callTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::LLVM::LLVMPointerType const ptrTy =
       mlir::LLVM::LLVMPointerType::get(ctx);
   mlir::LLVM::LLVMStructType const anyTy =
-      tvm_ffi::TVMFFIABIType::getLLVMType(ctx);
+      tvm_ffi::TVMFFICABIType::getLLVMType(ctx);
   const size_t numArgsCount = args.size();
 
   // Allocate contiguous args array and copy each pre-built slot.
@@ -315,7 +315,7 @@ getTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::Value const handle = cachedHandle.value();
   // The cached reference belongs to the module, so retain one for the caller.
   // `FunctionGetGlobalOp` keeps its default `Owned` result contract, and the
-  // ownership deallocation pass pairs this retain with a release.
+  // constructing layer pairs this retain with an explicit release.
   mlir::FailureOr<mlir::LLVM::LLVMFuncOp> incRef =
       getOrCreateTVMFFIObjectIncRef(moduleOp);
   if (mlir::failed(incRef)) {
@@ -368,7 +368,7 @@ callTVMFFIFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::LLVM::LLVMPointerType const ptrTy =
       mlir::LLVM::LLVMPointerType::get(ctx);
   mlir::LLVM::LLVMStructType const anyTy =
-      tvm_ffi::TVMFFIABIType::getLLVMType(ctx);
+      tvm_ffi::TVMFFICABIType::getLLVMType(ctx);
   mlir::Value const argsArray = mlir::LLVM::AllocaOp::create(
       builder, loc, ptrTy, anyTy,
       mlir::LLVM::ConstantOp::create(builder, loc, i64Ty,
@@ -410,12 +410,11 @@ callTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::MLIRContext *ctx = builder.getContext();
   mlir::IntegerType const i32Ty = mlir::IntegerType::get(ctx, 32);
   mlir::LLVM::LLVMStructType const anyTy =
-      tvm_ffi::TVMFFIABIType::getLLVMType(ctx);
+      tvm_ffi::TVMFFICABIType::getLLVMType(ctx);
   mlir::IntegerType const i64Ty = mlir::IntegerType::get(ctx, 64);
   mlir::LLVM::LLVMPointerType const ptrTy =
       mlir::LLVM::LLVMPointerType::get(ctx);
-  // This helper emits LLVM directly, so the ownership deallocation pass never
-  // sees it. The module holds the cached reference for its whole lifetime and
+  // The module holds the cached reference for its whole lifetime and
   // the call cannot outlive it, so borrowing the handle is enough.
   mlir::FailureOr<mlir::Value> cachedHandle =
       loadCachedTVMFFIGlobalHandle(builder, loc, moduleOp, funcName);

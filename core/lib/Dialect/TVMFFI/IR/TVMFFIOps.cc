@@ -15,9 +15,12 @@
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <mlir/IR/Attributes.h>
+#include <mlir/IR/Block.h>
+#include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinTypeInterfaces.h>
 #include <mlir/IR/BuiltinTypes.h>
+#include <mlir/IR/Location.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Region.h>
@@ -162,6 +165,10 @@ void KernelLaunchOp::printKernelArguments(mlir::OpAsmPrinter &printer,
 }
 
 mlir::LogicalResult KernelLaunchOp::verify() {
+  if (!mlir::isa<NoneType>(
+          mlir::cast<ResultType>(getResult().getType()).getPayloadType())) {
+    return emitOpError("must return Result<None>");
+  }
   if (getSpecializations().size() != getKernelOperands().size()) {
     return emitOpError(
         "specializations and kernel operands must have the same size");
@@ -169,18 +176,30 @@ mlir::LogicalResult KernelLaunchOp::verify() {
   return mlir::success();
 }
 
+mlir::Block *MonadBindOp::addEntryBlock(mlir::OpBuilder &builder) {
+  if (mlir::Block *entry = getEntryBlock()) {
+    return entry;
+  }
+  llvm::SmallVector<mlir::Type> const payloads = getPayloadTypes(getInputs());
+  llvm::SmallVector<mlir::Location> const locations(payloads.size(), getLoc());
+  return builder.createBlock(&getBody(), {}, payloads, locations);
+}
+
+mlir::Block *MonadBindOp::getEntryBlock() {
+  mlir::Region &body = getBody();
+  return body.empty() ? nullptr : &body.front();
+}
+
 mlir::LogicalResult MonadBindOp::verify() {
-  if (getInputs().empty() || getOutputs().empty()) {
-    return emitOpError("requires at least one input and output Result");
-  } else if (!getBody().hasOneBlock() || getBody().front().empty()) {
+  mlir::Block *entry = getEntryBlock();
+  if (!getBody().hasOneBlock() || !entry || entry->empty()) {
     return emitOpError(
         "body must contain one nonempty block ending with tvm_ffi.monad.yield");
   } else if (llvm::SmallVector<mlir::Type> const payloads =
                  getPayloadTypes(getInputs());
-             getBody().front().getArgumentTypes() !=
-             mlir::TypeRange(payloads)) {
+             entry->getArgumentTypes() != mlir::TypeRange(payloads)) {
     return emitOpError("region arguments must match input Result payloads");
-  } else if (!mlir::isa<MonadYieldOp>(getBody().front().getTerminator())) {
+  } else if (!mlir::isa<MonadYieldOp>(entry->getTerminator())) {
     return emitOpError("body must end with tvm_ffi.monad.yield");
   } else {
     return mlir::success();

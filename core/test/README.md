@@ -51,15 +51,38 @@ they do not each need a copy of the same ABI fixture. Dimension arrays,
 semantic copy, tensor literals and control flow retain their own integration
 regressions. Ownership edge transfers and ABI zero initialization remain
 explicit pass-local contracts. Result conversion and checked returns have focused conversion regressions.
-Ownership deallocation is temporarily omitted from the default pipeline.
-Legacy pass-local ownership cases remain; semantic Result ownership, including
-success-only return retains and unpack ownership, must regain coverage when
-ownership analysis is refactored. CUDA leak checks are not an acceptance
-criterion during this transition.
+`bind-arities.mlir` covers zero-input and zero-output binds through parsing,
+decomposition and LLVM lowering, including conditional side effects. Result
+verifier tests retain argument and yield matching checks for these cases.
+Python ownership tests cover explicit operation cleanup, explicit exports and
+independent Bind input/output counts. `explicit-cleanup.mlir` checks UnitAttr
+markers, mixed results and transfers;
+`decompose-cleanup.mlir` checks that decomposition marks independent call
+references before cleanup without duplicating temporary-handle releases.
+`deferred-container-ownership.mlir` checks borrowed CArray exports, independent
+nested extraction, repeated borrowed pure payload retains and idempotence through
+decomposition and cleanup without a second bind expansion.
+`materialize-cleanup.mlir` checks block-exit release order, nested scopes, separate
+Result success conditions and idempotence.
+`result-reference-adjustments.mlir` checks direct unpack and success branches
+for Any/Union and native Object payloads, failed cleanup and LLVM lowering.
+`retain-exports.mlir` covers four explicitly marked exit kinds, repeated and borrowed operands, containers, failed Results, scalar-only
+and empty exits, retain-before-release order, consumed export markers and idempotence.
+`decompose-export-markers.mlir` checks pending markers on converted returns and
+yields, unmarked generated failure exits, and cleanup idempotence after bind
+expansion.
+`two-stage-cleanup.mlir` checks that all exports are retained before any local
+release, single-block `scf.execute_region` support and unchanged scalar markers
+in skipped multi-block regions. `skip-multiblock-cleanup.mlir` checks that skipped
+multi-block regions keep their direct operations unchanged while visited nested
+single-block regions are processed independently.
+Pipeline tests check that exports acquire runtime
+reference operations. Lit also checks lowering-local handle cleanup. Kernel tests check Result<None> success/rejection without an early
+function exit. CUDA e2e allocation checks enforce cached-execution leak freedom.
 
 Python tests never load these files as executable fixtures. Lit regressions
 can be minimized or renamed independently of Python test setup.
 
 TVM FFI functions declare exactly one Result and return that Result through
 `tvm_ffi.return`. Return coverage includes None and tuple payloads, output-slot
-status gating. Conditional Result ownership transfer coverage is deferred.
+status gating. Result reference operations access payloads only in successful branches.

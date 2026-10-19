@@ -28,22 +28,22 @@ from torch.utils import _pytree as pytree
 from trident.core import ir
 from trident.core.dialects import arith, cf, func, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.ownership import CLEANUP_ATTR, RETAIN_ATTR, is_value_in_scope
 
-from .input import InputPath, InputTable
 from .ir import (
     array_type,
     binary,
     bind,
     box,
-    boxed_type,
+    checked_call,
     constant,
+    constant_type,
     container_create,
+    container_get,
     is_binary_operation,
-    is_value_in_scope,
     make_result_types,
     native,
     native_constant,
-    native_type,
     pure,
     tuple_type,
     value_type,
@@ -159,18 +159,23 @@ class TridentFxImporter:
             registry_name = f"trident.aten.{name}" + (
                 f".{schema.overload_name}" if schema.overload_name else ""
             )
-            call = self.build_call(
+            call = checked_call(
                 registry_name,
                 operation.arguments[: len(arguments)],
                 value_type(metadata),
             )
             if len(schema.returns) == 1:
-                tvm_ffi_d.MonadYieldOp(call)
+                terminator = tvm_ffi_d.MonadYieldOp(call)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
             else:
                 with bind(call, result_types=result_types) as invocation:
                     [array] = invocation.arguments
-                    tvm_ffi_d.MonadYieldOp(self._build_results(array, payload_types))
-                tvm_ffi_d.MonadYieldOp(invocation.outputs)
+                    terminator = tvm_ffi_d.MonadYieldOp(
+                        self._build_results(array, payload_types)
+                    )
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                terminator = tvm_ffi_d.MonadYieldOp(invocation.outputs)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         results = tuple(operation.outputs)
         if len(schema.returns) <= 1:
             [result] = results
@@ -216,6 +221,7 @@ class TridentFxImporter:
         ) as operation:
             *operand_values, condition = operation.arguments
             conditional = scf.IfOp(native(condition), branch_types, has_else=True)
+            conditional.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
             for block, graph in (
                 (conditional.then_block, true_graph),
                 (conditional.else_block, false_graph),
@@ -237,15 +243,16 @@ class TridentFxImporter:
                         importer._bind(placeholder, operand)
                     output = next(n for n in child.graph.nodes if n.op == "output")
                     (outputs,) = output.args
-                    scf.YieldOp(
-                        importer.visit(
-                            iter(child.graph.nodes),
-                            child,
-                            outputs,
-                            result_types=branch_types,
-                        )
+                    yielded = importer.visit(
+                        iter(child.graph.nodes),
+                        child,
+                        outputs,
+                        result_types=branch_types,
                     )
-            tvm_ffi_d.MonadYieldOp(conditional.results)
+                    terminator = scf.YieldOp(yielded)
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            terminator = tvm_ffi_d.MonadYieldOp(conditional.results)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         if node.meta["val"]:
             return tuple(operation.outputs)
         else:
@@ -319,37 +326,9 @@ class TridentFxImporter:
             assert (compiled_name, compiled_type) == (name, triton_type), (
                 f"compiled Triton signature does not match its source parameter order: expected {(name, triton_type)!r}, got {(compiled_name, compiled_type)!r}"
             )
-            if triton_type == "constexpr":
-                constexpr_value = self._constant_value_attribute(descriptor, name)
-                specialization_attr = ir.Attribute.parse(
-                    f"#tvm_ffi.constant_specialization<value = {constexpr_value}>"
-                )
-            else:
-                if triton_type.startswith("*"):
-                    abi_type = "!llvm.ptr"
-                elif triton_type in {
-                    "i1",
-                    "i16",
-                    "i32",
-                    "i64",
-                    "i8",
-                    "u1",
-                    "u16",
-                    "u32",
-                    "u64",
-                    "u8",
-                }:
-                    abi_type = f"i{triton_type[1:]}"
-                elif triton_type in {"fp32", "fp64"}:
-                    abi_type = f"f{triton_type[2:]}"
-                else:
-                    raise RuntimeError(
-                        f"unsupported Triton argument type: {triton_type}"
-                    )
-                divisibility = ", divisibility = 16" if descriptor == "D" else ""
-                specialization_attr = ir.Attribute.parse(
-                    f"#tvm_ffi.variable_specialization<kind = {abi_type}{divisibility}>"
-                )
+            specialization_attr = self._kernel_specialization(
+                name, triton_type, descriptor
+            )
             if name in arguments:
                 operand = arguments[name]
             elif name in bound_arguments:
@@ -375,9 +354,11 @@ class TridentFxImporter:
                     strict=True,
                 )
             }
-            tvm_ffi_d.MonadYieldOp(
-                self._build_launch(kernel, node, loc, operands, output_names, grid)
+            yielded = self._build_launch(
+                kernel, node, loc, operands, output_names, grid
             )
+            terminator = tvm_ffi_d.MonadYieldOp(yielded)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         if output_names:
             return dict(zip(output_names, operation.outputs, strict=True))
         else:
@@ -399,7 +380,7 @@ class TridentFxImporter:
             name = names[index]
             attribute, value = operands[name]
             with bind(
-                self.build_call(
+                checked_call(
                     "trident.aten.clone",
                     [value, constant(None)],
                     tvm_ffi_d.TensorType.get(),
@@ -408,51 +389,37 @@ class TridentFxImporter:
             ) as operation:
                 [tensor] = operation.arguments
                 cloned = {**operands, name: (attribute, tensor)}
-                tvm_ffi_d.MonadYieldOp(
-                    self._build_launch(
-                        kernel, node, loc, cloned, names, grid, index + 1
-                    )
+                yielded = self._build_launch(
+                    kernel, node, loc, cloned, names, grid, index + 1
                 )
+                terminator = tvm_ffi_d.MonadYieldOp(yielded)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
             return [*operation.outputs]
         with bind(self.build_arguments(grid), result_types=result_types) as operation:
-            cubin = kernel.asm["cubin"]
-            binary_name = f"_trident_s{self.specialization_id}_{node.name}"
-            module_op = self.module.operation
-            module_op.attributes["gpu.container_module"] = ir.UnitAttr.get()
-            if all(
-                not isinstance(op, gpu.BinaryOp) or op.sym_name != binary_name
-                for op in self.module.body.operations
-            ):
-                cubin_mlir: str = "".join(f"\\{byte:02X}" for byte in cubin)
-                gpu_object = ir.Attribute.parse(
-                    f'#gpu.object<#nvvm.target<chip = "sm_{kernel.metadata.target.arch}">, '
-                    f'"{cubin_mlir}">'
-                )
-                with ir.InsertionPoint(self.module.body):
-                    gpu.binary(
-                        binary_name,
-                        ir.ArrayAttr.get([gpu_object]),
-                        offloading_handler=ir.Attribute.parse("#gpu.select_object"),
-                        loc=loc,
-                    )
-            tvm_ffi_d.kernel_launch(
-                ir.Attribute.parse(f"@{binary_name}::@{kernel.metadata.name}"),
+            owned_op = tvm_ffi_d.KernelLaunchOp(
+                tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get()),
+                self._import_kernel_binary(kernel, node, loc),
                 *(native(value) for value in operation.arguments),
                 native_constant(kernel.metadata.num_warps * kernel.metadata.warp_size),
                 native_constant(1),
                 native_constant(1),
                 [value for _, value in operands.values()],
                 ir.ArrayAttr.get([attribute for attribute, _ in operands.values()]),
-                dynamic_shared_memory_size=arith.constant(
+                dynamicSharedMemorySize=arith.constant(
                     ir.IntegerType.get_signless(32), kernel.metadata.shared, loc=loc
                 ),
                 loc=loc,
             )
-            outputs: list[ir.Value] = []
-            for name in names:
-                _, value = operands[name]
-                outputs.append(value)
-            tvm_ffi_d.MonadYieldOp(pure(outputs, result_types=result_types))
+            owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+            launched = owned_op.result
+            outputs = [operands[name][1] for name in names]
+            with bind([launched], result_types=result_types) as launch:
+                terminator = tvm_ffi_d.MonadYieldOp(
+                    pure(outputs, result_types=result_types)
+                )
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            terminator = tvm_ffi_d.MonadYieldOp(launch.outputs)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         return [*operation.outputs]
 
     def _build_results(
@@ -465,10 +432,13 @@ class TridentFxImporter:
             if index == len(types):
                 return pure(values, result_types=result_types)
             with bind(
-                self.build_container_get(array, index, types[index]),
+                container_get(array, index, types[index]),
                 result_types=result_types,
             ) as operation:
-                tvm_ffi_d.MonadYieldOp(build([*values, *operation.arguments]))
+                terminator = tvm_ffi_d.MonadYieldOp(
+                    build([*values, *operation.arguments])
+                )
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
             return [*operation.outputs]
 
         return build([])
@@ -500,12 +470,12 @@ class TridentFxImporter:
         with bind(
             self.build_arguments(arguments), result_types=result_types
         ) as operation:
-            tvm_ffi_d.MonadYieldOp(
-                pure(
-                    [self._scalar(node, operation.arguments)],
-                    result_types=result_types,
-                )
+            yielded = pure(
+                [self._scalar(node, operation.arguments)],
+                result_types=result_types,
             )
+            terminator = tvm_ffi_d.MonadYieldOp(yielded)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         [result] = operation.outputs
         return result
 
@@ -517,9 +487,7 @@ class TridentFxImporter:
             if not isinstance(imported, ir.Value):
                 return imported[index]
             else:
-                [result] = self.build_container_get(
-                    imported, index, value_type(node.meta["val"])
-                )
+                [result] = container_get(imported, index, value_type(node.meta["val"]))
                 return result
         elif isinstance(target, torch._ops.OpOverload):
             return self._build_aten(node)
@@ -569,6 +537,35 @@ class TridentFxImporter:
     def _convert_torch_enum(self) -> tvm_ffi.Function:
         return tvm_ffi.get_global_func("trident.runtime.torch_enum_to_int")
 
+    def _import_kernel_binary(
+        self,
+        kernel: triton.compiler.CompiledKernel,
+        node: torch.fx.Node,
+        loc: ir.Location,
+    ) -> ir.Attribute:
+        """Install a specialization's binary once and return its kernel symbol."""
+        cubin = kernel.asm["cubin"]
+        binary_name = f"_trident_s{self.specialization_id}_{node.name}"
+        module_op = self.module.operation
+        module_op.attributes["gpu.container_module"] = ir.UnitAttr.get()
+        if all(
+            not isinstance(op, gpu.BinaryOp) or op.sym_name != binary_name
+            for op in self.module.body.operations
+        ):
+            cubin_mlir: str = "".join(f"\\{byte:02X}" for byte in cubin)
+            gpu_object = ir.Attribute.parse(
+                f'#gpu.object<#nvvm.target<chip = "sm_{kernel.metadata.target.arch}">, '
+                f'"{cubin_mlir}">'
+            )
+            with ir.InsertionPoint(self.module.body):
+                gpu.binary(
+                    binary_name,
+                    ir.ArrayAttr.get([gpu_object]),
+                    offloading_handler=ir.Attribute.parse("#gpu.select_object"),
+                    loc=loc,
+                )
+        return ir.Attribute.parse(f"@{binary_name}::@{kernel.metadata.name}")
+
     @staticmethod
     def _integer_power(base: ir.Value, exponent: int) -> ir.Value:
         base = native(base)
@@ -576,6 +573,44 @@ class TridentFxImporter:
         for _ in range(exponent):
             result = arith.muli(result, base)
         return result
+
+    @staticmethod
+    def _kernel_specialization(
+        name: str, triton_type: str, descriptor: Any
+    ) -> ir.Attribute:
+        """Translate a bound Triton parameter into its runtime launch contract."""
+        if triton_type == "constexpr":
+            constexpr_value = TridentFxImporter._constant_value_attribute(
+                descriptor, name
+            )
+            specialization_attr = ir.Attribute.parse(
+                f"#tvm_ffi.constant_specialization<value = {constexpr_value}>"
+            )
+        else:
+            if triton_type.startswith("*"):
+                abi_type = "!llvm.ptr"
+            elif triton_type in {
+                "i1",
+                "i16",
+                "i32",
+                "i64",
+                "i8",
+                "u1",
+                "u16",
+                "u32",
+                "u64",
+                "u8",
+            }:
+                abi_type = f"i{triton_type[1:]}"
+            elif triton_type in {"fp32", "fp64"}:
+                abi_type = f"f{triton_type[2:]}"
+            else:
+                raise RuntimeError(f"unsupported Triton argument type: {triton_type}")
+            divisibility = ", divisibility = 16" if descriptor == "D" else ""
+            specialization_attr = ir.Attribute.parse(
+                f"#tvm_ffi.variable_specialization<kind = {abi_type}{divisibility}>"
+            )
+        return specialization_attr
 
     @staticmethod
     def _resolve_triton_binder_value(
@@ -670,15 +705,7 @@ class TridentFxImporter:
                 )
             ]
             return tuple_type(types) if isinstance(value, tuple) else array_type(types)
-        return (
-            value.type
-            if isinstance(value, ir.Value)
-            else (
-                tvm_ffi_d.RawStrType.get()
-                if isinstance(value, str)
-                else native_type(value_type(value))
-            )
-        )
+        return value.type if isinstance(value, ir.Value) else constant_type(value)
 
     def build_arguments(self, arguments: Sequence[Any]) -> list[ir.Value]:
         """Construct arguments only; successful payloads never leave their bind."""
@@ -697,7 +724,7 @@ class TridentFxImporter:
             for index in range(start, len(arguments)):
                 argument = arguments[index]
                 if isinstance(argument, torch.dtype):
-                    current = self.build_call(
+                    current = checked_call(
                         "trident.runtime.tvm_ffi_to_torch_type",
                         [self.argument(argument)],
                         tvm_ffi_d.IntType.get(),
@@ -708,128 +735,23 @@ class TridentFxImporter:
                     with bind(
                         self.build_arguments(argument), result_types=element_types
                     ) as elements:
-                        tvm_ffi_d.MonadYieldOp(
-                            container_create(elements.arguments[: len(argument)], type_)
+                        yielded = container_create(
+                            elements.arguments[: len(argument)], type_
                         )
+                        terminator = tvm_ffi_d.MonadYieldOp(yielded)
+                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                     current = elements.outputs
                 else:
-                    values.append(self.argument(argument))
-                    continue
-                with bind(current, result_types=result_types) as operation:
-                    tvm_ffi_d.MonadYieldOp(
-                        build(index + 1, [*values, *operation.arguments])
-                    )
-                return [*operation.outputs]
-            return pure(values, result_types=result_types)
-
-        return build(0, [])
-
-    def build_call(
-        self, name: str, arguments: Sequence[ir.Value], result: ir.Type
-    ) -> list[ir.Value]:
-        """Return an asserting invocation wrapped as a successful Result."""
-        assert all(is_value_in_scope(value) for value in arguments), (
-            "call argument payload is outside its defining block"
-        )
-        handle = tvm_ffi_d.FunctionGetGlobalOp(name)
-        call = tvm_ffi_d.FunctionCallOp(
-            result, handle.result, [box(value) for value in arguments]
-        )
-        return pure([call.result])
-
-    def build_container_get(
-        self, container: ir.Value, index: int | ir.Value, target: ir.Type
-    ) -> list[ir.Value]:
-        type_ = container.type
-        if isinstance(type_, tvm_ffi_d.TupleType):
-            assert isinstance(index, int)
-            assert -len(type_.types) <= index < len(type_.types), (
-                "tuple index out of range"
-            )
-            payload = type_.types[index]
-            values = tvm_ffi_d.TupleUnconstructOp(type_.types, container).elements
-            [result] = pure([values[index]])
-        elif isinstance(type_, tvm_ffi_d.ArrayType):
-            payload = type_.element_type
-            [result] = pure(
-                [
-                    tvm_ffi_d.ArrayGetOp(
-                        container,
-                        native_constant(index) if isinstance(index, int) else index,
-                    ).result
-                ]
-            )
-        else:
-            return self.build_call(
-                "ffi.ArrayGetItem", [container, native_constant(index)], target
-            )
-        if payload == target:
-            return [result]
-        result_types = [tvm_ffi_d.ResultType.get(target)]
-        with bind([result], result_types=result_types) as extracted:
-            [value] = extracted.arguments
-            boxed = boxed_type(target)
-            if value.type != boxed:
-                if isinstance(
-                    boxed, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
-                ) and not isinstance(
-                    value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
-                ):
-                    value = tvm_ffi_d.upcast(boxed, value)
-                else:
-                    value = tvm_ffi_d.downcast(boxed, value)
-            if target != boxed:
-                value = native(value)
-            tvm_ffi_d.MonadYieldOp(pure([value], result_types=result_types))
-        return [*extracted.outputs]
-
-    def build_input(self, table: InputTable, path: InputPath) -> list[ir.Value]:
-        """Extract one structural path, caching only complete Results."""
-        node = table.node(path)
-        assert node is not None, f"input cannot be resolved: {path}"
-        if node.value is not None:
-            return pure(
-                [node.value], result_types=[tvm_ffi_d.ResultType.get(node.type)]
-            )
-        elif node.result is not None and all(
-            is_value_in_scope(value) for value in node.result
-        ):
-            return node.result
-        else:
-            assert len(path) > 1, f"input cannot be resolved: {path}"
-            types = [tvm_ffi_d.ResultType.get(node.type)]
-            *parent_path, index = path
-            with bind(
-                self.build_input(table, parent_path), result_types=types
-            ) as operation:
-                [array] = operation.arguments
-                tvm_ffi_d.MonadYieldOp(
-                    self.build_container_get(array, index, node.type)
-                )
-            node.result = [*operation.outputs]
-            return node.result
-
-    def build_inputs(
-        self, table: InputTable, paths: Sequence[InputPath] | None = None
-    ) -> list[ir.Value]:
-        paths = table.input_paths() if paths is None else paths
-        types = make_result_types(table.node(path).type for path in paths)
-
-        def build(start: int, values: list[ir.Value]) -> list[ir.Value]:
-            for index in range(start, len(paths)):
-                path = paths[index]
-                value = table[path]
-                if value is not None:
+                    value = self.argument(argument)
                     values.append(value)
                     continue
-                with bind(
-                    self.build_input(table, path), result_types=types
-                ) as operation:
-                    tvm_ffi_d.MonadYieldOp(
+                with bind(current, result_types=result_types) as operation:
+                    terminator = tvm_ffi_d.MonadYieldOp(
                         build(index + 1, [*values, *operation.arguments])
                     )
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                 return [*operation.outputs]
-            return pure(values, result_types=types)
+            return pure(values, result_types=result_types)
 
         return build(0, [])
 
@@ -911,16 +833,18 @@ class TridentFxImporter:
                         strict=True,
                     ):
                         self._bind(producers[spec.arg.name], value)
-                    tvm_ffi_d.MonadYieldOp(
-                        self.visit(
-                            iter(program.graph.nodes),
-                            program.graph_module,
-                            output_values,
-                            result_types=result_types,
-                        )
+                    yielded = self.visit(
+                        iter(program.graph.nodes),
+                        program.graph_module,
+                        output_values,
+                        result_types=result_types,
                     )
+                    terminator = tvm_ffi_d.MonadYieldOp(yielded)
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                 results = [*initialization.outputs]
-                func.ReturnOp(results)
+                yielded = results
+                terminator = func.ReturnOp(yielded)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         return function
 
     def symbolic(self, expression: Any) -> ir.Value:
@@ -1003,12 +927,17 @@ class TridentFxImporter:
                         else argument
                     )
                 self._bind(node, pytree.tree_unflatten(leaves, structure))
-                tvm_ffi_d.MonadYieldOp(
-                    self.visit(nodes, graph_module, outputs, result_types=result_types)
+                yielded = self.visit(
+                    nodes, graph_module, outputs, result_types=result_types
                 )
+                terminator = tvm_ffi_d.MonadYieldOp(yielded)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
             return [*operation.outputs]
         with bind(
             self.build_arguments(outputs), result_types=result_types
         ) as operation:
-            tvm_ffi_d.MonadYieldOp(pure(operation.arguments, result_types=result_types))
+            terminator = tvm_ffi_d.MonadYieldOp(
+                pure(operation.arguments, result_types=result_types)
+            )
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
         return [*operation.outputs]

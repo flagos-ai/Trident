@@ -73,21 +73,41 @@ handle and call status before using its result.
 Stateless scalar arithmetic, boxing and leaf constants live in
 `python/trident/ir.py` and return ordinary values, as do schema and metadata
 helpers. Independent fallible construction helpers return complete Results.
-Callers use explicit `with bind(..., result_types=...) as operation` and access
+Callers consuming owned Results use explicit
+`with bind(..., result_types=...) as operation` and access
 successful payloads through `operation.arguments`, one per input in input order,
 including None payloads. Only complete `operation.outputs` Results may leave a
 successful bind body. Do not return bare payloads from these scopes. MLIR verification
 checks `monad.yield` termination and matching Result types.
 
-`build_call` checks global lookup status, a non-null handle and call status,
+`trident.ir.checked_call` checks global lookup status, a non-null handle and call status,
 returning a complete Result without consuming a callback. `build_arguments`
 constructs nested list/tuple arguments in order and returns Results, leaving
 operator execution and subsequent graph traversal to its caller. Keep pure
-argument prefixes iterative. Wrap successful values with the shared `pure`
-builder. It infers types by default; with declared Result types it boxes native
-scalars and widens Any/Union payloads at the boundary. The shared
-`trident.ir.bind` function remains the only construction context manager and
-restores insertion points on exceptions.
+argument prefixes iterative. `pure` borrows payloads and requests an independent
+reference for each Result through `tvm_ffi.retain_payloads`, then marks it for
+cleanup. It infers types by default;
+with declared Result types it boxes native scalars and widens Any/Union payloads at the boundary. `bind` borrows
+its inputs; its builder unconditionally marks the bind operation for cleanup. For exits marked with `tvm_ffi.retain`, the cleanup pass retains
+region yields and function returns to establish independent references for the
+receiving scope before releasing local references. Result retains read
+payloads only on success; scalars need no references. The bind builder restores
+insertion points on exceptions.
+
+Frontend exits construct `func.ReturnOp`, `tvm_ffi_d.ReturnOp`,
+`scf.YieldOp` or `tvm_ffi_d.MonadYieldOp`, then set the attribute directly:
+
+```python
+from trident.ownership import CLEANUP_ATTR, RETAIN_ATTR
+
+terminator = tvm_ffi_d.MonadYieldOp(results)
+terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+```
+
+The cleanup pass consumes the UnitAttr, retaining each reference-bearing operand
+occurrence before releasing local references. Unmarked exits request no
+automatic retains. Do not manually retain outputs for marked exits. Payload
+retains requested by `pure` remain independent of export retains.
 
 `visit(nodes, graph_module, outputs, result_types=result_types)` consumes a
 shared FX iterator. Pure nodes stay in a loop. Node handlers return ordinary
@@ -97,14 +117,20 @@ nodes. None Result payloads become Python `None`, consuming their corresponding
 block arguments. Traversal keeps its working mappings, as does `import_program`. Use a fresh importer for
 each program. Preserve ATen argument conversion,
 result extraction and kernel clone/grid/launch order. Cond branches use
-independent child importers sharing the module. Input extraction caches
-complete, scope-checked Results retained until the table is discarded or
-explicitly cleared. Guards and backend input flattening use fresh tables;
+independent child importers sharing the module. `InputTable.extract` and
+`extract_many` own path extraction and ordered input reconstruction; `trident.ir.container_get` owns typed container extraction.
+Guards use these shared builders directly and do not create or receive a graph
+importer. Input extraction caches borrowed complete Results; reuse requires a
+cleanup-marked reference as well as lexical visibility. Returned resources get independent references. Guards and backend
+input flattening use fresh tables;
 construction helpers do not automatically clear caches on return or exception.
 Discard failed importers and their input tables; exceptional reuse is not
 guaranteed. Preserve insertion-point restoration. Guards and the backend
 explicitly bind their construction Results rather than passing continuation
-callbacks.
+callbacks. Bind accepts independent input and output counts, including zero.
+An empty input list executes the body unconditionally; an empty output list is
+for effects only and ends with an empty `monad.yield`. The Python `bind` helper
+supports the same counts; `pure([])` still constructs the existing None Result.
 
 FFI functions declare exactly one Result return type, and `tvm_ffi.return`
 matches that type exactly. Pack multiple values into a semantic tuple payload. Every Result requires one payload type. Use `monad.pure` for
@@ -130,12 +156,61 @@ and lowers `monad.pure`, `monad.fail` and `monad.unpack`. ABI return conversion
 uses unpack and restores widened payloads only in successful branches with
 `tvm_ffi.downcast`.
 
-Ownership deallocation is temporarily omitted from the default pipeline pending
-semantic Result support. Object lifetime correctness and CUDA leak verification
-are deferred to that refactor; the standalone ownership pass retains its legacy
-materialized-Result input contract. Ownership interfaces remain the intended
-place to describe allocations and transfers. Mark an allocation, borrow, alias or transfer accurately rather
-than inserting reference-count calls in the importer. Extend semantic operations
+For operations producing independent owned references, construct the Op and
+set `operation.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()` directly.
+The `tvm_ffi.cleanup` UnitAttr schedules one release per reference-bearing result; scalar results are ignored. There are no
+per-result count overrides. Semantic container construction and extraction
+acquire cleanup markers when decomposed; other operations have no default
+cleanup credits. Marking twice does not
+add another release. Borrowed casts, unpacked payloads, block arguments and
+metadata results must not acquire cleanup responsibility. Shared tensor storage
+does not imply a borrowed reference. Ownership interfaces describe operation
+contracts independently of explicit cleanup policy.
+
+Python does not classify reference-bearing types. Direct cleanup attribute
+assignment marks the operation, including scalar-only and zero-result
+operations. The C++ cleanup pass privately classifies types after semantic Array/Tuple decomposition to
+select results requiring releases, consuming scalar-only and zero-result markers
+without reference operations. Input caches require lexical visibility and an
+OpResult whose defining operation carries a cleanup UnitAttr before reuse,
+regardless of result type.
+
+`pure` requests a retain for each resource payload occurrence, including repeated values;
+callers do not retain payloads separately before wrapping them. The low-level
+`MonadPureOp` transfers references and requires explicit ownership management.
+Construct region yields and function returns, then directly assign their
+`tvm_ffi.retain` UnitAttr; the cleanup pass consumes the markers and
+retains their reference-bearing operands. `pure` defers payload
+retains until cleanup after container erasure. Result retains and releases use
+`monad.unpack` and one `scf.if` success branch per Result so that each successful
+payload is adjusted independently, even when other Results fail. Reference
+operations accept widened Any payloads directly; native handles keep their types.
+
+`decompose-tvm-ffi` erases containers and unconditionally marks container
+runtime calls and converted FunctionCall operations for cleanup before `materialize-tvm-ffi-cleanup` runs. Cleanup executes
+before inlining and SCF-to-CFG, directly emitting unpack and success branches
+for Result reference adjustments. No second decomposition is needed. Cleanup
+assumes well-formed input attributes and processes block exits only when their
+immediate parent region has one block. Separate
+payload-retain, export-retain and cleanup pattern stages run without folding or
+dead-code elimination. Export retention handles
+marked reference-bearing operands of `func.return`, `tvm_ffi.return`, `scf.yield` and
+`tvm_ffi.monad.yield` before releasing local references in reverse order. There is no scope operation whitelist. Empty and
+multi-block regions have no direct block-exit cleanup or export rewrites. Nested single-block
+regions are processed independently when visited by the walk driver, which skips
+unreachable blocks. Results of an operation owning a skipped region are still
+processed in its selected parent block. Scalar-only and empty exits need no
+retains. Only exits carrying `tvm_ffi.retain` request export retains.
+Consumed export and cleanup markers are removed for idempotence, including
+export markers on scalar-only and empty exits. Lowerings preserve cleanup
+markers on replacement resource Ops and pending export markers on converted
+exits. Generated failure exits need no export marker. Temporary references with explicit
+releases remain unmarked. Constant specialization helpers follow the same rule
+for their temporary containers.
+Ownership interfaces remain operation contracts; cleanup does not infer aliases,
+liveness or ownership across CFG edges.
+
+Extend semantic operations
 and their lowering under `core/include/trident/core/Dialect/TVMFFI/` and
 `core/lib/Conversion/` when an existing operation cannot represent the behavior.
 Prefer DRR, then PDLL, for ordinary rewrites; use a C++ conversion pattern for
@@ -157,9 +232,12 @@ unrestricted except for the existing prohibition on nested Results.
 ## Semantic containers
 
 Use `ArrayType.get(element_type)` for lists and `TupleType.get(types)` for tuples.
-Tuple element types must inherit `TVMFFIABIType`; semantic Array and Tuple
-types also inherit it, preserving nested containers. Array elements must be
-tagged FFI values or semantic containers. Native scalars and Results are not
+Array and Tuple element types must inherit `TVMFFICABIType`; native Object
+handles are outside CABI and cannot be container elements. Semantic Array and Tuple
+inherit `TVMFFICOpaqueABIType` (and therefore `TVMFFIABIType`), preserving nested
+containers. Decomposition erases both to the concrete Base `CArrayType`.
+Array's C++ element parameter and accessor use `TVMFFICABIType`; parsing and
+checked C/Python construction reject non-CABI elements. Native scalars and Results are not
 valid container elements. Box native scalars before construction; heterogeneous and
 empty lists use `ArrayType.get(AnyType.get())`. The ABI Array binding is
 `CArrayType.get()`.
@@ -193,8 +271,9 @@ select a kernel, but launch dimensions and runtime operands must use SSA values.
 `python/trident/importer.py` reuses the compiled Triton cache after warmup,
 imports `gpu.binary`, and emits `tvm_ffi.kernel_launch`.
 `TridentFxImporter._build_kernel` performs cache and autotuner lookup and
-builds parameter attributes. Its recursive `_build_launch` constructs
-clones in order, inserts the module-level binary and emits the launch. The
+delegates parameter contracts to `_kernel_specialization`. Its recursive
+`_build_launch` constructs clones in order, resolves grid operands and emits the
+launch; `_import_kernel_binary` installs the module-level binary once. The
 handler returns a dictionary of complete Results for cloned output tensors, or
 a unit Result for a launch without outputs; the graph visitor binds these leaves
 before importing subsequent nodes. Each source parameter has a constant or variable
@@ -203,14 +282,17 @@ divisibility; constexpr operands are checked and omitted from the native kernel
 call. Functional wrapper outputs clone only the specified tensors before launch.
 
 `ConvertTVMFFIToGPU` runs after inlining and SCF-to-CFG, before ABI and LLVM
-conversion. Its specialization rejection branch constructs a successful Result
-with `monad.pure`.
+conversion. The launch returns `Result<None>`: matching inputs launch and return success;
+rejection returns `monad.fail`, does not launch and does not exit the function.
+Bind the launch Result explicitly so rejection suppresses later effects and
+passes through normal cleanup.
 It extracts native tensor data pointers and scalars from semantic operands,
 validates specializations, obtains the current stream through TVM FFI, and emits
-`gpu.launch_func`. A specialization failure must return the existing GuardMatch
-exception through the enclosing wrapper's Any/union result. In a monadic wrapper,
-wrap that exception in a successful Result at the return boundary rather than
-reporting a runtime FFI failure.
+`gpu.launch_func`. At the Python-built graph-call boundary, map graph Result failure to a successful
+GuardMatch payload for the dispatcher. Keep private graph signatures unchanged;
+do not add Union payloads or generate function exits in GPU lowering. Graph failure
+currently means rejection because ordinary FFI calls assert on errors. Preserve
+generic ABI runtime-error propagation outside this boundary.
 
 Add a kernel launch or specialization Lit test and a cached Python execution
 test under `test/e2e` for changes to this path. Use hook-free `triton.Config`

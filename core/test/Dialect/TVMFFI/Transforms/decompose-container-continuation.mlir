@@ -13,7 +13,8 @@
 // CHECK: %[[BRANCH:[a-zA-Z0-9_]+]] = scf.if %[[OK]] -> (!tvm_ffi.monad.result<!tvm_ffi.c.array>) {
 // CHECK: %[[ARRAY:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ANY]] : !tvm_ffi.any -> !tvm_ffi.c.array
 // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array"
-// CHECK: %[[TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]](%[[ARRAY]], %[[CAPTURE]]) : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.c.array
+// CHECK: %[[TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]](%[[ARRAY]], %[[CAPTURE]]) {tvm_ffi.cleanup} : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.c.array
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[HANDLE]]
 // CHECK: %[[PURE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[TUPLE]] : (!tvm_ffi.c.array) -> !tvm_ffi.monad.result<!tvm_ffi.c.array>
 // CHECK: scf.yield %[[PURE]]
 // CHECK: } else {
@@ -41,16 +42,19 @@ func.func @container_continuation(%input: !tvm_ffi.monad.result<!tvm_ffi.array<!
 // CHECK: %[[ZERO:[a-zA-Z0-9_]+]] = arith.constant 0 : i64
 // CHECK: %[[FIRST:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[ZERO]]
 // CHECK: %[[FIRST_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"
-// CHECK: %[[ARRAY:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[FIRST_HANDLE]](%[[TUPLE]], %[[FIRST]]) : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.c.array
+// CHECK: %[[ARRAY:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[FIRST_HANDLE]](%[[TUPLE]], %[[FIRST]]) {tvm_ffi.cleanup} : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.c.array
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FIRST_HANDLE]]
 // CHECK: %[[ONE:[a-zA-Z0-9_]+]] = arith.constant 1 : i64
 // CHECK: %[[SECOND:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[ONE]]
 // CHECK: %[[SECOND_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"
-// CHECK: %[[CAPTURE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[SECOND_HANDLE]](%[[TUPLE]], %[[SECOND]]) : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.int
+// CHECK: %[[CAPTURE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[SECOND_HANDLE]](%[[TUPLE]], %[[SECOND]]) {tvm_ffi.cleanup} : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.int
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[SECOND_HANDLE]]
 // CHECK: %[[CHOSEN:[a-zA-Z0-9_]+]] = scf.if %[[PREDICATE]] -> (!tvm_ffi.c.array)
 // CHECK: scf.yield %[[ARRAY]]
 // CHECK: } else {
 // CHECK: %[[FALLBACK_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array"
 // CHECK: %[[FALLBACK:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[FALLBACK_HANDLE]](%[[CAPTURE]])
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FALLBACK_HANDLE]]
 // CHECK: scf.yield %[[FALLBACK]]
 // CHECK: %[[SCALAR_OK:[a-zA-Z0-9_]+]], %[[SCALAR_ANY:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[SCALAR]]
 // CHECK: %[[INNER:[a-zA-Z0-9_]+]] = scf.if %[[SCALAR_OK]]
@@ -58,8 +62,10 @@ func.func @container_continuation(%input: !tvm_ffi.monad.result<!tvm_ffi.array<!
 // CHECK: %[[BOXED_INDEX:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[INDEX]]
 // CHECK: %[[GET:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"
 // CHECK: %[[ITEM:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[GET]](%[[CHOSEN]], %[[BOXED_INDEX]])
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[GET]]
 // CHECK: %[[CREATE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array"
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[CREATE]](%[[ITEM]], %[[VALUE]], %[[CAPTURE]])
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[CREATE]]
 // CHECK: %[[PURE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[RESULT]]
 // CHECK: scf.yield %[[PURE]]
 // CHECK: } else {

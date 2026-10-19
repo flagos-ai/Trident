@@ -1,3 +1,7 @@
+# Part of the Trident project, under the MIT License.
+#
+# SPDX-License-Identifier: MIT
+
 if(NOT LLVM_EXTERNAL_LIT OR NOT EXISTS "${LLVM_EXTERNAL_LIT}")
   find_program(TRIDENT_EXTERNAL_LIT NAMES llvm-lit lit REQUIRED)
   set(LLVM_EXTERNAL_LIT "${TRIDENT_EXTERNAL_LIT}")

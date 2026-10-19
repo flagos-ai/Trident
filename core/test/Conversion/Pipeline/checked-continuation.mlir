@@ -51,65 +51,67 @@
 // CFG: tvm_ffi.monad.fail
 // CFG: cf.br ^[[EXIT]]
 // CFG: ^[[EXIT]](%[[RETURN:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.none>):
-// CFG: tvm_ffi.return %[[RETURN]]
+// CFG: tvm_ffi.return {tvm_ffi.retain} %[[RETURN]]
 // LLVM-LABEL: llvm.func @none_continuation(
 // LLVM: llvm.call @TVMFFIFunctionCall
 // LLVM: llvm.return
 
+// Calls transfer their owned payloads into Results. Explicit cleanup releases
+// each Result after the receiving scope acquires its own export reference.
 tvm_ffi.func @checked_continuation(%tensor: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> attributes {emit_tvm_ffi_abi} {
   %handle, %lookup = func.call @lookup() : () -> (!tvm_ffi.function, i1)
   %ready = scf.if %lookup -> (!tvm_ffi.monad.result<!tvm_ffi.function>) {
-    %pure = tvm_ffi.monad.pure %handle : (!tvm_ffi.function) -> !tvm_ffi.monad.result<!tvm_ffi.function>
-    scf.yield %pure : !tvm_ffi.monad.result<!tvm_ffi.function>
+    %pure = tvm_ffi.monad.pure %handle {tvm_ffi.cleanup} : (!tvm_ffi.function) -> !tvm_ffi.monad.result<!tvm_ffi.function>
+    scf.yield {tvm_ffi.retain} %pure : !tvm_ffi.monad.result<!tvm_ffi.function>
   } else {
     %failed = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.function>
-    scf.yield %failed : !tvm_ffi.monad.result<!tvm_ffi.function>
-  }
+    scf.yield {tvm_ffi.retain} %failed : !tvm_ffi.monad.result<!tvm_ffi.function>
+  } {tvm_ffi.cleanup}
   %output = tvm_ffi.monad.bind %ready : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
   ^bb0(%callee: !tvm_ffi.function):
     %value, %status = func.call @checked_call(%callee, %tensor) : (!tvm_ffi.function, !tvm_ffi.tensor) -> (!tvm_ffi.tensor, i1)
     %first = scf.if %status -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>) {
-      %pure = tvm_ffi.monad.pure %value : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
-      scf.yield %pure : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+      %pure = tvm_ffi.monad.pure %value {tvm_ffi.cleanup} : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+      scf.yield {tvm_ffi.retain} %pure : !tvm_ffi.monad.result<!tvm_ffi.tensor>
     } else {
       %failed = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.tensor>
-      scf.yield %failed : !tvm_ffi.monad.result<!tvm_ffi.tensor>
-    }
+      scf.yield {tvm_ffi.retain} %failed : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+    } {tvm_ffi.cleanup}
     %continued = tvm_ffi.monad.bind %first : (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
     ^bb0(%unused: !tvm_ffi.tensor):
       // Deliberately independent of the first payload: effects still short-circuit.
       %second, %second_status = func.call @checked_call(%callee, %tensor) : (!tvm_ffi.function, !tvm_ffi.tensor) -> (!tvm_ffi.tensor, i1)
       %last = scf.if %second_status -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>) {
-        %pure = tvm_ffi.monad.pure %second : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
-        scf.yield %pure : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+        %pure = tvm_ffi.monad.pure %second {tvm_ffi.cleanup} : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+        scf.yield {tvm_ffi.retain} %pure : !tvm_ffi.monad.result<!tvm_ffi.tensor>
       } else {
         %failed = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.tensor>
-        scf.yield %failed : !tvm_ffi.monad.result<!tvm_ffi.tensor>
-      }
-      tvm_ffi.monad.yield %last : !tvm_ffi.monad.result<!tvm_ffi.tensor>
-    }
-    tvm_ffi.monad.yield %continued : !tvm_ffi.monad.result<!tvm_ffi.tensor>
-  }
-  tvm_ffi.return %output : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+        scf.yield {tvm_ffi.retain} %failed : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+      } {tvm_ffi.cleanup}
+      tvm_ffi.monad.yield {tvm_ffi.retain} %last : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+    } {tvm_ffi.cleanup}
+    tvm_ffi.monad.yield {tvm_ffi.retain} %continued : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  } {tvm_ffi.cleanup}
+  tvm_ffi.return {tvm_ffi.retain} %output : !tvm_ffi.monad.result<!tvm_ffi.tensor>
 }
 
 // A None payload preserves the status dependency for independent side effects.
 tvm_ffi.func @none_continuation(%ready: i1, %source: !tvm_ffi.tensor, %destination: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
   %none = tvm_ffi.constant.none
   %input = scf.if %ready -> (!tvm_ffi.monad.result<!tvm_ffi.none>) {
-    %pure = tvm_ffi.monad.pure %none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
-    scf.yield %pure : !tvm_ffi.monad.result<!tvm_ffi.none>
+    %pure = tvm_ffi.monad.pure %none {tvm_ffi.cleanup} : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+    scf.yield {tvm_ffi.retain} %pure : !tvm_ffi.monad.result<!tvm_ffi.none>
   } else {
     %fail = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.none>
-    scf.yield %fail : !tvm_ffi.monad.result<!tvm_ffi.none>
+    scf.yield {tvm_ffi.retain} %fail : !tvm_ffi.monad.result<!tvm_ffi.none>
   }
   %output = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.none>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
   ^bb0(%payload: !tvm_ffi.none):
     tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.tensor
-    %pure = tvm_ffi.monad.pure %payload : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
-    tvm_ffi.monad.yield %pure : !tvm_ffi.monad.result<!tvm_ffi.none>
-  }
-  tvm_ffi.return %output : !tvm_ffi.monad.result<!tvm_ffi.none>
+    %pure = tvm_ffi.monad.pure %payload {tvm_ffi.cleanup} : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+    tvm_ffi.monad.yield {tvm_ffi.retain} %pure : !tvm_ffi.monad.result<!tvm_ffi.none>
+  } {tvm_ffi.cleanup}
+  tvm_ffi.return {tvm_ffi.retain} %output : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
 
 func.func private @lookup() -> (!tvm_ffi.function, i1)

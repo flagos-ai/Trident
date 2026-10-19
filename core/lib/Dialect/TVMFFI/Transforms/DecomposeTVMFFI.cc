@@ -34,6 +34,7 @@
 #include <mlir/Support/LLVM.h>
 #include <mlir/Support/LogicalResult.h>
 #include <mlir/Transforms/DialectConversion.h>
+#include <type_traits>
 #include <utility>
 
 namespace trident::tvm_ffi {
@@ -55,9 +56,13 @@ public:
     mlir::Type const resultType = getTypeConverter()->convertType(op.getType());
     mlir::Value const handle =
         FunctionGetGlobalOp::create(rewriter, op.getLoc(), "ffi.ArrayGetItem");
-    rewriter.replaceOpWithNewOp<FunctionCallOp>(
+
+    FunctionCallOp call = rewriter.replaceOpWithNewOp<FunctionCallOp>(
         op, resultType, handle,
         mlir::ValueRange{adaptor.getContainer(), index});
+    call->setAttr("tvm_ffi.cleanup", rewriter.getUnitAttr());
+    rewriter.setInsertionPointAfter(call);
+    ObjectDecRefOp::create(rewriter, call.getLoc(), handle);
     return mlir::success();
   }
 };
@@ -72,8 +77,12 @@ public:
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value const handle =
         FunctionGetGlobalOp::create(rewriter, op.getLoc(), "ffi.ArraySize");
-    rewriter.replaceOpWithNewOp<FunctionCallOp>(
+
+    FunctionCallOp call = rewriter.replaceOpWithNewOp<FunctionCallOp>(
         op, op.getType(), handle, mlir::ValueRange{adaptor.getContainer()});
+    call->setAttr("tvm_ffi.cleanup", rewriter.getUnitAttr());
+    rewriter.setInsertionPointAfter(call);
+    ObjectDecRefOp::create(rewriter, call.getLoc(), handle);
     return mlir::success();
   }
 };
@@ -104,10 +113,16 @@ public:
         });
     // TODO: Eliminate the redundant Any selection and downcasts introduced by
     // unpacking typed Results when expanding this standard bind form.
-    mlir::scf::IfOp branch =
-        mlir::scf::IfOp::create(rewriter, loc, resultTypes, ready, true);
+    mlir::scf::IfOp branch = mlir::scf::IfOp::create(
+        rewriter, loc, resultTypes, ready, !resultTypes.empty());
+    if (resultTypes.empty()) {
+      rewriter.eraseOp(branch.thenBlock()->getTerminator());
+    }
+    if (mlir::Attribute const cleanup = bind->getAttr("tvm_ffi.cleanup")) {
+      branch->setAttr("tvm_ffi.cleanup", cleanup);
+    }
     rewriter.setInsertionPointToStart(branch.thenBlock());
-    mlir::Block &body = bind.getBody().front();
+    mlir::Block &body = *bind.getEntryBlock();
     llvm::SmallVector<mlir::Value> const payloads = llvm::map_to_vector(
         llvm::zip_equal(unpacked, body.getArguments()),
         [&](const auto &entry) -> mlir::Value {
@@ -120,9 +135,12 @@ public:
     // Move rather than clone the continuation, as in SCF structural conversion.
     // Its yield is converted separately using the remapped operands.
     rewriter.mergeBlocks(&body, branch.thenBlock(), payloads);
-    rewriter.setInsertionPointToStart(branch.elseBlock());
-    MonadFailOp failed = MonadFailOp::create(rewriter, loc, resultTypes);
-    mlir::scf::YieldOp::create(rewriter, loc, failed.getResults());
+    if (!resultTypes.empty()) {
+      rewriter.setInsertionPointToStart(branch.elseBlock());
+      MonadFailOp failed = MonadFailOp::create(rewriter, loc, resultTypes);
+      // Failed Results carry no references and request no export retains.
+      mlir::scf::YieldOp::create(rewriter, loc, failed.getResults());
+    }
     rewriter.replaceOp(bind, branch.getResults());
     return mlir::success();
   }
@@ -142,8 +160,12 @@ public:
         this->getTypeConverter()->convertType(op.getType());
     mlir::Value const handle =
         FunctionGetGlobalOp::create(rewriter, op.getLoc(), "ffi.Array");
-    rewriter.replaceOpWithNewOp<FunctionCallOp>(op, resultType, handle,
-                                                adaptor.getElements());
+
+    FunctionCallOp call = rewriter.replaceOpWithNewOp<FunctionCallOp>(
+        op, resultType, handle, adaptor.getElements());
+    call->setAttr("tvm_ffi.cleanup", rewriter.getUnitAttr());
+    rewriter.setInsertionPointAfter(call);
+    ObjectDecRefOp::create(rewriter, call.getLoc(), handle);
     return mlir::success();
   }
 };
@@ -162,14 +184,16 @@ public:
       }
       return mlir::FunctionType::get(context, inputs, outputs);
     });
-    addConversion([context](ArrayType) -> mlir::Type {
-      return CArrayType::get(context);
-    });
     addConversion([this, context](ResultType type) -> mlir::Type {
       return ResultType::get(context, convertType(type.getPayloadType()));
     });
-    addConversion([context](TupleType) -> mlir::Type {
-      return CArrayType::get(context);
+    addConversion([context](TVMFFICOpaqueABIType type) -> mlir::Type {
+      // Containers erase to the concrete Array ABI. Other opaque types retain
+      // their specialized ABI/LLVM lowering paths.
+      if (mlir::isa<ArrayType, TupleType>(type)) {
+        return CArrayType::get(context);
+      }
+      return type;
     });
   }
 };
@@ -193,9 +217,14 @@ public:
                            IntType::get(rewriter.getContext()), offset);
           mlir::Value const handle = FunctionGetGlobalOp::create(
               rewriter, op.getLoc(), "ffi.ArrayGetItem");
-          return FunctionCallOp::create(
+          mlir::Value const value = FunctionCallOp::create(
               rewriter, op.getLoc(), getTypeConverter()->convertType(type),
               handle, mlir::ValueRange{adaptor.getContainer(), boxed});
+
+          value.getDefiningOp()->setAttr("tvm_ffi.cleanup",
+                                         rewriter.getUnitAttr());
+          ObjectDecRefOp::create(rewriter, op.getLoc(), handle);
+          return value;
         });
     rewriter.replaceOp(op, elements);
     return mlir::success();
@@ -209,7 +238,11 @@ public:
   mlir::LogicalResult
   matchAndRewrite(MonadYieldOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<mlir::scf::YieldOp>(op, adaptor.getValues());
+    mlir::DictionaryAttr const attributes = op->getAttrDictionary();
+    mlir::scf::YieldOp const replacement =
+        rewriter.replaceOpWithNewOp<mlir::scf::YieldOp>(op,
+                                                        adaptor.getValues());
+    replacement->setAttrs(attributes);
     return mlir::success();
   }
 };
@@ -228,6 +261,9 @@ public:
         op, adaptor.getOperands(), *this->getTypeConverter(), rewriter);
     if (mlir::failed(replacement)) {
       return mlir::failure();
+    }
+    if constexpr (std::is_same_v<OpTy, FunctionCallOp>) {
+      (*replacement)->setAttr("tvm_ffi.cleanup", rewriter.getUnitAttr());
     }
     rewriter.replaceOp(op, (*replacement)->getResults());
     return mlir::success();
@@ -266,16 +302,20 @@ class DecomposeTVMFFIPass final
                     DecomposeTupleUnconstructOp, DecomposeYieldOp>(
         converter, op->getContext());
     conversions
-        .add<GenericOpPattern<DowncastOp>, GenericOpPattern<FunctionCallOp>,
+        .add<GenericOpPattern<mlir::func::ReturnOp>,
+             GenericOpPattern<DowncastOp>, GenericOpPattern<FunctionCallOp>,
              GenericOpPattern<MonadFailOp>, GenericOpPattern<MonadPureOp>,
              GenericOpPattern<MonadUnpackOp>, GenericOpPattern<ReturnOp>,
              GenericOpPattern<UpcastOp>>(converter, op->getContext());
+    // Prefer the attribute-preserving yield rewrite over SCF's structural
+    // fallback, which rebuilds yields without their pending export retains.
+    conversions.add<GenericOpPattern<mlir::scf::YieldOp>>(
+        converter, op->getContext(), mlir::PatternBenefit(2));
     mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(conversions,
                                                                    converter);
     mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(
         conversions, converter);
     mlir::populateCallOpTypeConversionPattern(conversions, converter);
-    mlir::populateReturnOpTypeConversionPattern(conversions, converter);
     mlir::scf::populateSCFStructuralTypeConversionsAndLegality(
         converter, conversions, target);
     mlir::cf::populateCFStructuralTypeConversionsAndLegality(

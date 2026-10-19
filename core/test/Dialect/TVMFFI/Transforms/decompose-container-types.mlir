@@ -49,6 +49,25 @@ func.func @conditional_branch(%value: !tvm_ffi.array<!tvm_ffi.int>, %predicate: 
   return %value : !tvm_ffi.array<!tvm_ffi.int>
 }
 
+// CHECK-LABEL: func.func @nested_containers(
+// CHECK-SAME: %[[NESTED:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array) -> !tvm_ffi.monad.result<!tvm_ffi.c.array>
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[NESTED]] {test.types = [!tvm_ffi.c.array, !tvm_ffi.monad.result<!tvm_ffi.c.array>]} : (!tvm_ffi.c.array) -> !tvm_ffi.monad.result<!tvm_ffi.c.array>
+// CHECK: return %[[RESULT]] : !tvm_ffi.monad.result<!tvm_ffi.c.array>
+func.func @nested_containers(%nested: !tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.tuple<!tvm_ffi.int>>>) -> !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.tuple<!tvm_ffi.int>>>> {
+  %result = tvm_ffi.monad.pure %nested {test.types = [!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.int>>]} : (!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.tuple<!tvm_ffi.int>>>) -> !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.tuple<!tvm_ffi.int>>>>
+  return %result : !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.tuple<!tvm_ffi.int>>>>
+}
+
+// CHECK-LABEL: func.func @opaque_passthrough(
+// CHECK-SAME: %[[ANY:[a-zA-Z0-9_]+]]: !tvm_ffi.any,
+// CHECK-SAME: %[[EXCEPTION:[a-zA-Z0-9_]+]]: !tvm_ffi.exception,
+// CHECK-SAME: %[[OBJECT:[a-zA-Z0-9_]+]]: !tvm_ffi.object,
+// CHECK-SAME: %[[UNION:[a-zA-Z0-9_]+]]: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>)
+// CHECK: return %[[ANY]], %[[EXCEPTION]], %[[OBJECT]], %[[UNION]] : !tvm_ffi.any, !tvm_ffi.exception, !tvm_ffi.object, !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>
+func.func @opaque_passthrough(%any: !tvm_ffi.any, %exception: !tvm_ffi.exception, %object: !tvm_ffi.object, %union: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>) -> (!tvm_ffi.any, !tvm_ffi.exception, !tvm_ffi.object, !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>) {
+  return %any, %exception, %object, %union : !tvm_ffi.any, !tvm_ffi.exception, !tvm_ffi.object, !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>
+}
+
 // CHECK-LABEL: func.func @while_container(
 // CHECK-SAME: %[[INITIAL:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array,
 // CHECK-SAME: %[[READY:[a-zA-Z0-9_]+]]: i1)

@@ -1,30 +1,26 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --convert-scf-to-cf --convert-tvm-ffi-to-gpu --verify-each | FileCheck %s
+// RUN: trident-core-opt %s --convert-tvm-ffi-to-gpu --verify-each | FileCheck %s --implicit-check-not='tvm_ffi.exception' --implicit-check-not='tvm_ffi.return'
 
 module attributes {gpu.container_module} {
   gpu.binary @kernel [#gpu.object<#nvvm.target, "">]
 
-  // CHECK-LABEL: tvm_ffi.func @monadic_launch(
-  // CHECK-SAME: %[[TENSOR:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
-  // CHECK: cf.cond_br %[[READY:[a-zA-Z0-9_]+]], ^[[LAUNCH:bb[0-9]+]], ^[[FAILURE:bb[0-9]+]]
-  // CHECK: ^[[LAUNCH]]:
+  // CHECK-LABEL: func.func @monadic_launch(
+  // CHECK: %[[OUTCOME:[a-zA-Z0-9_]+]] = scf.if %[[READY:[a-zA-Z0-9_]+]] -> (!tvm_ffi.monad.result<!tvm_ffi.none>) {
   // CHECK: gpu.launch_func
-  // CHECK: tvm_ffi.return %[[SUCCESS_RESULT:[a-zA-Z0-9_]+]]
-  // CHECK: ^[[FAILURE]]:
-  // CHECK: %[[EXCEPTION:[a-zA-Z0-9_]+]] = tvm_ffi.exception "GuardMatch"
-  // CHECK: %[[WIDENED:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[EXCEPTION]] : !tvm_ffi.exception -> !tvm_ffi.any
-  // CHECK: %[[REJECTION:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[WIDENED]] : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
-  // CHECK: tvm_ffi.return %[[REJECTION]]
-  tvm_ffi.func @monadic_launch(%tensor: !tvm_ffi.tensor, %scalar: i64) -> !tvm_ffi.monad.result<!tvm_ffi.any> {
+  // CHECK: %[[NONE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.none
+  // CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[NONE]]
+  // CHECK: scf.yield %[[SUCCESS]]
+  // CHECK: } else {
+  // CHECK: %[[REJECTION:[a-zA-Z0-9_]+]] = tvm_ffi.monad.fail
+  // CHECK: scf.yield %[[REJECTION]]
+  // CHECK: return %[[OUTCOME]]
+  func.func @monadic_launch(%tensor: !tvm_ffi.tensor, %scalar: i64) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
     %one = arith.constant 1 : i64
-    tvm_ffi.kernel_launch @kernel::@entry
+    %launch = tvm_ffi.kernel_launch @kernel::@entry
       blocks in (%one, %one, %one) : i64 threads in (%one, %one, %one)
-      args (%tensor : !tvm_ffi.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr>, %scalar : i64 #tvm_ffi.variable_specialization<kind = i64, divisibility = 16>)
-    %widened = tvm_ffi.upcast %tensor : !tvm_ffi.tensor -> !tvm_ffi.any
-    %result = tvm_ffi.monad.pure %widened : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
-
-    tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.any>
+      args (%tensor : !tvm_ffi.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr>, %scalar : i64 #tvm_ffi.variable_specialization<kind = i64, divisibility = 16>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+    func.return %launch : !tvm_ffi.monad.result<!tvm_ffi.none>
   }
 }

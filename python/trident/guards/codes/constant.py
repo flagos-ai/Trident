@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Hashable
-from typing import TYPE_CHECKING, Final
+from typing import Final
 from typing_extensions import Self, override
 
 from trident.core import ir
@@ -14,9 +14,6 @@ from trident.input import InputTable
 from ..ast import ASTVisitor, GuardExpressionVisitor
 from ..local import Local
 from .base import GuardCode
-
-if TYPE_CHECKING:
-    from trident.importer import TridentFxImporter
 
 
 class ConstantCode(GuardCode):
@@ -31,13 +28,9 @@ class ConstantCode(GuardCode):
         self.supported: Final[bool] = ASTVisitor.supports(expression)
 
     @override
-    def build_result(
-        self, tree: InputTable, context: ir.Context, importer: TridentFxImporter
-    ) -> list[ir.Value]:
+    def build_result(self, tree: InputTable, context: ir.Context) -> list[ir.Value]:
         assert self.supported, f"guard expression cannot be lowered: {self.text!r}"
-        return GuardExpressionVisitor(self.text, tree, context, importer).build(
-            self.expression
-        )
+        return GuardExpressionVisitor(self.text, tree, context).build(self.expression)
 
     @property
     def key(self) -> Hashable:

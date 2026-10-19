@@ -66,26 +66,32 @@ rounds precede ten measured rounds. The helper collects garbage, synchronizes
 CUDA and records `torch.cuda.memory_allocated` at the baseline and after each
 measured round.
 
-The allocation-equality assertion is temporarily commented out with a TODO
-until ownership deallocation supports semantic Results. Re-enable the assertion
-with ownership support; passing tests currently do not establish leak freedom.
-
 Run these checks serially in the current process without `empty_cache` or reserved
-memory comparisons. When enabled, the assertion detects cached-execution leaks in
+memory comparisons. The assertion detects cached-execution leaks in
 PyTorch-managed CUDA allocations, not CPU, native FFI objects or allocations
 outside that allocator.
 
 ## Coverage
 
 `unit/test_guards.py` covers guard parsing, supported expression IR, invalid
-comparisons, tensor metadata and the conservative `_base` fallback.
+comparisons, tensor metadata, nested container-length extraction without an FX
+importer, and the conservative `_base` fallback.
+`unit/test_cleanup.py` checks UnitAttr cleanup markers, explicit operation
+cleanup intent for scalars and zero-result operations, borrowed Result
+construction with repeated payloads, deferred container cleanup
+and payload retains after decomposition, borrowed exports,
+direct terminator export attributes, success-only retains and cache
+reuse through lexical block lifetimes. C++ retain/release ordering and the four
+supported terminators are covered by Lit.
 `unit/test_importer.py` checks C ABI type spellings and Python type registration,
 semantic container bindings and construction, Result binding, payload type registration, parsed
 OpView payload access, shared Result type inference and boundary
 boxing/widening, insertion-point restoration, empty argument construction,
 explicit None positions and diagnostics for unsupported symbolic powers. The
 e2e suites cover public JIT execution, container reconstruction, conditional
-branches, symbolic shapes, specialization reuse, aliases and mutations.
+branches, symbolic shapes, specialization reuse, aliases and mutations. Container
+execution tests also return borrowed inputs and repeated resource outputs, then
+drop one alias and continue using another to check independent output references.
 `e2e/test_kernel_launch.py` covers mutation-only Triton launches and their None
 Result payloads; container tests include empty containers and consecutive None
 outputs. Verifier diagnostics and Result lowering belong to the focused Lit
@@ -134,7 +140,7 @@ The following table maps the former flat test layout to current tests.
 | Pipeline all-dims, overwrite and tensor-literal duplicated graph bodies | One public FFI function per semantic case, preserving pipeline checks and runtime semantics. |
 | GPU scalar get fixture | `TVMFFIToLLVM/scalar-extraction.mlir`, running only its owning conversion. |
 | Combined GPU/ABI/LLVM and metadata tests | `Pipeline/kernel-launch.mlir` and `Pipeline/metadata.mlir`; the local GPU fixture checks semantic operands separately. |
-| Ownership `Transforms/ops.mlir` | Basic borrowed-object and return-retain cases merged into `ownership-deallocation.mlir`. |
+| Legacy ownership pass tests | Block-local cleanup pass tests and `unit/test_cleanup.py` cover marked ownership; CFG inference is removed. |
 | Conversion bool/int pure printing | Existing dialect get/to tests; bool-to-int LLVM data flow remains in the conversion test. |
 | Scalar min/max pure printing and unrelated arith folding | Pure printing and upstream-only folding checks are removed; no standalone scalar execution suite remains. |
 | Full-pipeline ABI checks mixed with pass-local CFG tests | Dedicated `Pipeline/packed-abi.mlir`; local scalar/multi-result and CFG checks remain in `TVMFFIToFunc/abi-and-cfg.mlir`. |

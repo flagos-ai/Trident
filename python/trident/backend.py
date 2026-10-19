@@ -8,7 +8,7 @@ import gc
 import inspect
 import operator
 from collections.abc import Callable, Hashable, Sequence
-from typing import Any, Final, TypeAlias
+from typing import Any, Final
 
 import torch
 import tvm_ffi
@@ -31,6 +31,7 @@ from trident.core import (
     register_all_passes,
 )
 from trident.core.dialects import (
+    arith,
     func,
     llvm,
     scf,
@@ -41,16 +42,12 @@ from trident.core.dialects import (
 )
 from trident.core.execution_engine import ExecutionEngine
 from trident.ffi import Exception
+from trident.ownership import CLEANUP_ATTR, RETAIN_ATTR
 
 from .guards import parse_guards
 from .importer import TridentFxImporter
 from .input import InputTableBuilder
 from .ir import bind, container_create, pure, tuple_type
-
-RuntimeValue: TypeAlias = Any
-RuntimeArguments: TypeAlias = tuple[RuntimeValue, ...]
-RuntimeKeywords: TypeAlias = dict[str, RuntimeValue]
-RuntimeCallable: TypeAlias = Callable[..., RuntimeValue]
 
 
 class TridentGraphModule:
@@ -63,7 +60,7 @@ class TridentGraphModule:
     order - the first one that returns 0 (guard match) wins.
     """
 
-    def __call__(self, *args: RuntimeValue, **kwargs: RuntimeValue) -> RuntimeValue:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         result = self.executor(*args, **kwargs)
         if isinstance(result, Exception):
             # The dispatcher returned an Exception ObjectRef
@@ -74,18 +71,18 @@ class TridentGraphModule:
 
     def __init__(
         self,
-        fn: RuntimeCallable,
+        fn: Callable[..., Any],
         *,
         dynamic: bool = True,
     ) -> None:
         super().__init__()
-        self.fn: Final[RuntimeCallable] = fn
+        self.fn: Final[Callable[..., Any]] = fn
         self.dynamic: Final[bool] = dynamic
         self.ctx: Final[ir.Context] = ir.Context()
         register_all_dialects(self.ctx)
         register_all_passes()
         self._sub_modules: list[ir.Module] = []
-        self.executor: RuntimeCallable = self.stub_compile()
+        self.executor: Callable[..., Any] = self.stub_compile()
 
     def __name__(self) -> str:
         return self.fn.__name__
@@ -117,6 +114,63 @@ class TridentGraphModule:
             result = llvm.insertvalue(result, value, [position])
         llvm.store(result, slot)
         return slot
+
+    @staticmethod
+    def _build_graph_result(
+        function: func.FuncOp,
+        arguments: Sequence[ir.Value],
+        rejection: ir.Value,
+        result_type: ir.Type,
+    ) -> list[ir.Value]:
+        """Pack owned graph outputs or translate specialization rejection to GuardMatch."""
+        graph_call = func.CallOp(function, arguments)
+        graph_call.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+        graph_results = graph_call.results
+        ready = arith.constant(ir.IntegerType.get_signless(1), True)
+        for result in graph_results:
+            unpack = tvm_ffi_d.MonadUnpackOp(result)
+            ready = arith.andi(ready, unpack.success)
+        outcome = scf.IfOp(ready, [result_type], has_else=True)
+        outcome.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+        with ir.InsertionPoint(outcome.then_block):
+            with bind(
+                graph_results,
+                result_types=[result_type],
+            ) as invocation:
+                if len(invocation.arguments) == 1:
+                    results = pure(
+                        invocation.arguments,
+                        result_types=[result_type],
+                    )
+                else:
+                    with bind(
+                        container_create(
+                            invocation.arguments,
+                            tuple_type(
+                                [value.type for value in invocation.arguments],
+                            ),
+                        ),
+                        result_types=[result_type],
+                    ) as packing:
+                        yielded = pure(
+                            packing.arguments,
+                            result_types=[result_type],
+                        )
+                        terminator = tvm_ffi_d.MonadYieldOp(yielded)
+                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    results = [*packing.outputs]
+                terminator = tvm_ffi_d.MonadYieldOp(results)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            terminator = scf.YieldOp(invocation.outputs)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+        with ir.InsertionPoint(outcome.else_block):
+            yielded = pure(
+                [rejection],
+                result_types=[result_type],
+            )
+            terminator = scf.YieldOp(yielded)
+            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+        return [*outcome.results]
 
     def _register_shape(
         self,
@@ -186,12 +240,12 @@ class TridentGraphModule:
                         shape[index] = dimension
             dynamic_shapes[value] = shape
 
-    def compile(self, *args: RuntimeValue, **kwargs: RuntimeValue) -> RuntimeValue:
+    def compile(self, *args: Any, **kwargs: Any) -> Any:
         """Export, import and wrap one specialization, then rebuild its dispatcher."""
         index = len(self._sub_modules)
 
         signature: inspect.Signature = inspect.signature(self.fn)
-        trace_args: RuntimeArguments = tuple(args)
+        trace_args: tuple[Any, ...] = tuple(args)
         bound: inspect.BoundArguments = signature.bind(*trace_args, **kwargs)
         bound.apply_defaults()
         exported_gm, gs = torch._dynamo.export(
@@ -272,22 +326,22 @@ class TridentGraphModule:
             entry_block: ir.Block = ir.Block.create_at_start(ffi_func.body, param_types)
 
             with ir.InsertionPoint(entry_block):
-                rejection = tvm_ffi_d.upcast(
-                    abi_result_type, tvm_ffi_d.exception("GuardMatch")
-                )
+                owned_op = tvm_ffi_d.ExceptionOp("GuardMatch")
+                owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+                exception = owned_op.result
+                rejection = tvm_ffi_d.upcast(abi_result_type, exception)
                 with bind(
                     parse_guards(gs).build(
-                        input_builder, entry_block.arguments, self.ctx, importer
+                        input_builder, entry_block.arguments, self.ctx
                     ),
                     result_types=[ffi_result_type],
                 ) as guards:
                     [predicate] = guards.arguments
                     branch = scf.IfOp(predicate, [ffi_result_type], has_else=True)
+                    branch.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
                     with ir.InsertionPoint(branch.then_block):
                         with bind(
-                            importer.build_inputs(
-                                input_builder.build(entry_block.arguments)
-                            ),
+                            input_builder.build(entry_block.arguments).extract_many(),
                             result_types=[ffi_result_type],
                         ) as inputs:
                             input_specs = exported_program.graph_signature.input_specs
@@ -314,49 +368,31 @@ class TridentGraphModule:
                             assert len(main_inputs) == len(flat_types), (
                                 "unexpected number of reconstructed MLIR inputs"
                             )
-                            with bind(
-                                func.CallOp(main_func, main_inputs).results,
-                                result_types=[ffi_result_type],
-                            ) as invocation:
-                                if len(invocation.arguments) == 1:
-                                    results = pure(
-                                        invocation.arguments,
-                                        result_types=[ffi_result_type],
-                                    )
-                                else:
-                                    with bind(
-                                        container_create(
-                                            invocation.arguments,
-                                            tuple_type(
-                                                [
-                                                    value.type
-                                                    for value in invocation.arguments
-                                                ],
-                                            ),
-                                        ),
-                                        result_types=[ffi_result_type],
-                                    ) as packing:
-                                        tvm_ffi_d.MonadYieldOp(
-                                            pure(
-                                                packing.arguments,
-                                                result_types=[ffi_result_type],
-                                            )
-                                        )
-                                    results = [*packing.outputs]
-                                tvm_ffi_d.MonadYieldOp(results)
-                            tvm_ffi_d.MonadYieldOp(invocation.outputs)
-                        scf.YieldOp(inputs.outputs)
+                            yielded = self._build_graph_result(
+                                main_func,
+                                main_inputs,
+                                rejection,
+                                ffi_result_type,
+                            )
+                            terminator = tvm_ffi_d.MonadYieldOp(yielded)
+                            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                        terminator = scf.YieldOp(inputs.outputs)
+                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                     with ir.InsertionPoint(branch.else_block):
-                        scf.YieldOp(pure([rejection], result_types=[ffi_result_type]))
-                    tvm_ffi_d.MonadYieldOp(branch.results)
-                tvm_ffi_d.return_(guards.outputs)
+                        yielded = pure([rejection], result_types=[ffi_result_type])
+                        terminator = scf.YieldOp(yielded)
+                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    terminator = tvm_ffi_d.MonadYieldOp(branch.results)
+                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                terminator = tvm_ffi_d.ReturnOp(guards.outputs)
+                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
 
         self._sub_modules.append(module)
         self.executor = self.stub_compile()
         gc.collect()
         return warmup_result
 
-    def stub_compile(self) -> RuntimeCallable:
+    def stub_compile(self) -> Callable[..., Any]:
         """Build the combined module, lower it, add the LLVM dispatcher,
         JIT-compile, and return a callable executor.
 
@@ -543,7 +579,7 @@ class TridentGraphModule:
             keep_alive_object=engine,
         )
 
-        def invoke(*values: RuntimeValue) -> RuntimeValue:
+        def invoke(*values: Any) -> Any:
             result = normalize(
                 fn(
                     *(
@@ -573,9 +609,9 @@ class TridentGraphModule:
             return pytree.tree_unflatten(leaves, self._output_spec)
 
         def normalize(
-            value: RuntimeValue,
-            convert: Callable[[RuntimeValue], RuntimeValue],
-        ) -> RuntimeValue:
+            value: Any,
+            convert: Callable[[Any], Any],
+        ) -> Any:
             if isinstance(value, (tvm_ffi.Array, list)):
                 return [normalize(element, convert) for element in value]
             elif isinstance(value, tuple):

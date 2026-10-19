@@ -18,5 +18,5 @@
 // CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[SLOT]]
 func.func @array_size(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.int {
   %size = tvm_ffi.array.size %array : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.int
-  return %size : !tvm_ffi.int
+  return {tvm_ffi.retain} %size : !tvm_ffi.int
 }

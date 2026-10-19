@@ -31,11 +31,11 @@
 tvm_ffi.func @short_circuit(%ready: i1, %counter: !llvm.ptr) -> !tvm_ffi.monad.result<i64> {
   %input = scf.if %ready -> !tvm_ffi.monad.result<i64> {
     %seven = arith.constant 7 : i64
-    %pure = tvm_ffi.monad.pure %seven : (i64) -> !tvm_ffi.monad.result<i64>
-    scf.yield %pure : !tvm_ffi.monad.result<i64>
+    %pure = tvm_ffi.monad.pure %seven {tvm_ffi.cleanup} : (i64) -> !tvm_ffi.monad.result<i64>
+    scf.yield {tvm_ffi.retain} %pure : !tvm_ffi.monad.result<i64>
   } else {
     %failed = tvm_ffi.monad.fail : !tvm_ffi.monad.result<i64>
-    scf.yield %failed : !tvm_ffi.monad.result<i64>
+    scf.yield {tvm_ffi.retain} %failed : !tvm_ffi.monad.result<i64>
   }
   %output = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<i64>) -> !tvm_ffi.monad.result<i64> {
   ^bb0(%value: i64):
@@ -43,8 +43,8 @@ tvm_ffi.func @short_circuit(%ready: i1, %counter: !llvm.ptr) -> !tvm_ffi.monad.r
     %one = arith.constant 1 : i64
     %new = arith.addi %old, %one : i64
     llvm.store %new, %counter : i64, !llvm.ptr
-    %result = tvm_ffi.monad.pure %value : (i64) -> !tvm_ffi.monad.result<i64>
-    tvm_ffi.monad.yield %result : !tvm_ffi.monad.result<i64>
-  }
-  tvm_ffi.return %output : !tvm_ffi.monad.result<i64>
+    %result = tvm_ffi.monad.pure %value {tvm_ffi.cleanup} : (i64) -> !tvm_ffi.monad.result<i64>
+    tvm_ffi.monad.yield {tvm_ffi.retain} %result : !tvm_ffi.monad.result<i64>
+  } {tvm_ffi.cleanup}
+  tvm_ffi.return {tvm_ffi.retain} %output : !tvm_ffi.monad.result<i64>
 }

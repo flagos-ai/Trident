@@ -21,6 +21,7 @@ import tvm_ffi as runtime
 from trident.core import ir
 from trident.core.dialects import arith, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.ownership import CLEANUP_ATTR, RETAIN_ATTR, is_value_in_scope
 
 
 def _is_native_scalar(type_: ir.Type) -> bool:
@@ -177,17 +178,13 @@ def bind(
     inputs: Sequence[ir.Value], *, result_types: Sequence[ir.Type]
 ) -> Iterator[tvm_ffi_d.MonadBindOp]:
     """Expose one payload per Result inside its successful continuation."""
-    assert inputs and all(
-        isinstance(value.type, tvm_ffi_d.ResultType) for value in inputs
-    ), "bind inputs must be nonempty Results"
-    assert result_types and all(
-        isinstance(type_, tvm_ffi_d.ResultType) for type_ in result_types
+    assert all(isinstance(value.type, tvm_ffi_d.ResultType) for value in inputs), (
+        "bind inputs must be Results"
     )
+    assert all(isinstance(type_, tvm_ffi_d.ResultType) for type_ in result_types)
     operation = tvm_ffi_d.MonadBindOp(result_types, inputs)
-    block = ir.Block.create_at_start(
-        operation.body, [value.type.payload_type for value in inputs]
-    )
-    with ir.InsertionPoint(block):
+    operation.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+    with ir.InsertionPoint(operation.add_entry_block()):
         yield operation
 
 
@@ -205,14 +202,32 @@ def boxed_type(type_: ir.Type) -> ir.Type:
     return type_
 
 
+def checked_call(
+    name: str, arguments: Sequence[ir.Value], result: ir.Type
+) -> list[ir.Value]:
+    """Return an asserting invocation wrapped as a successful Result."""
+    assert all(is_value_in_scope(value) for value in arguments), (
+        "call argument payload is outside its defining block"
+    )
+    owned_op = tvm_ffi_d.FunctionGetGlobalOp(name)
+    owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+    handle = owned_op.result
+    call = tvm_ffi_d.FunctionCallOp(result, handle, [box(value) for value in arguments])
+    call.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+    return pure([call.result])
+
+
 def checked_result(value: ir.Value, success: ir.Value) -> ir.Value:
-    """Wrap a fallible payload without consuming it on failure."""
+    """Wrap a borrowed fallible payload, retaining it only on success."""
     type_ = tvm_ffi_d.ResultType.get(value.type)
     branch = scf.IfOp(success, [type_], has_else=True)
+    branch.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
     with ir.InsertionPoint(branch.then_block):
-        scf.YieldOp(pure([value]))
+        terminator = scf.YieldOp(pure([value]))
+        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
     with ir.InsertionPoint(branch.else_block):
-        scf.YieldOp(tvm_ffi_d.MonadFailOp([type_]).outputs)
+        terminator = scf.YieldOp(tvm_ffi_d.MonadFailOp([type_]).outputs)
+        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
     (result,) = branch.results
     return result
 
@@ -245,9 +260,20 @@ def constant(value: Any) -> ir.Value:
             )
         else:
             elements = ir.DenseElementsAttr.get(cpu.numpy())
-        return tvm_ffi_d.tensor_literal(elements)
+        owned_op = tvm_ffi_d.TensorLiteralOp(elements)
+        owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+        return owned_op.result
     else:
         raise NotImplementedError(f"unsupported FX constant: {value!r}")
+
+
+def constant_type(value: Any) -> ir.Type:
+    """Type produced by a leaf constant, before boxing at an FFI boundary."""
+    return (
+        tvm_ffi_d.RawStrType.get()
+        if isinstance(value, str)
+        else native_type(value_type(value))
+    )
 
 
 def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Value]:
@@ -262,8 +288,58 @@ def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Valu
         for value, target in zip(elements, types, strict=True)
     ]
     if isinstance(type_, tvm_ffi_d.TupleType):
-        return pure([tvm_ffi_d.TupleConstructOp(type_, elements).result])
-    return pure([tvm_ffi_d.ArrayCreateOp(type_, elements).result])
+        owned_op = tvm_ffi_d.TupleConstructOp(type_, elements)
+        owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+        value = owned_op.result
+    else:
+        owned_op = tvm_ffi_d.ArrayCreateOp(type_, elements)
+        owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+        value = owned_op.result
+    return pure([value])
+
+
+def container_get(
+    container: ir.Value, index: int | ir.Value, target: ir.Type
+) -> list[ir.Value]:
+    type_ = container.type
+    if isinstance(type_, tvm_ffi_d.TupleType):
+        assert isinstance(index, int)
+        assert -len(type_.types) <= index < len(type_.types), "tuple index out of range"
+        payload = type_.types[index]
+        owned_op = tvm_ffi_d.TupleUnconstructOp(type_.types, container)
+        owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+        values = owned_op.elements
+        [result] = pure([values[index]])
+    elif isinstance(type_, tvm_ffi_d.ArrayType):
+        payload = type_.element_type
+        owned_op = tvm_ffi_d.ArrayGetOp(
+            container, native_constant(index) if isinstance(index, int) else index
+        )
+        owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+        value = owned_op.result
+        [result] = pure([value])
+    else:
+        return checked_call(
+            "ffi.ArrayGetItem", [container, native_constant(index)], target
+        )
+    if payload == target:
+        return [result]
+    result_types = [tvm_ffi_d.ResultType.get(target)]
+    with bind([result], result_types=result_types) as extracted:
+        [value] = extracted.arguments
+        boxed = boxed_type(target)
+        if value.type != boxed:
+            if isinstance(
+                boxed, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+            ) and not isinstance(value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)):
+                value = tvm_ffi_d.upcast(boxed, value)
+            else:
+                value = tvm_ffi_d.downcast(boxed, value)
+        if target != boxed:
+            value = native(value)
+        terminator = tvm_ffi_d.MonadYieldOp(pure([value], result_types=result_types))
+        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+    return [*extracted.outputs]
 
 
 def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
@@ -281,19 +357,6 @@ def ffi_type(name: str) -> ir.Type:
 def is_binary_operation(operation: Any) -> bool:
     """Whether a callable has a native binary scalar implementation."""
     return operation in _BINARY_ARITHMETIC
-
-
-def is_value_in_scope(value: ir.Value) -> bool:
-    """Check lexical block ancestry before reusing a frontend SSA value."""
-    owner = value.owner
-    defining_block = owner if isinstance(owner, ir.Block) else owner.operation.block
-    block = ir.InsertionPoint.current.block
-    while block != defining_block:
-        operation = block.owner.operation
-        if operation.parent is None:
-            return False
-        block = operation.block
-    return True
 
 
 def make_result_types(payload_types: Iterable[ir.Type]) -> list[ir.Type]:
@@ -340,7 +403,7 @@ def native_type(type_: ir.Type) -> ir.Type:
 def pure(
     values: Sequence[ir.Value], *, result_types: Sequence[ir.Type] | None = None
 ) -> list[ir.Value]:
-    """Wrap successful values, boxing and widening only at typed boundaries."""
+    """Wrap borrowed payloads in successful Results with independent references."""
     assert all(is_value_in_scope(value) for value in values), (
         "pure payload is outside its defining block"
     )
@@ -366,7 +429,10 @@ def pure(
                 )
                 value = tvm_ffi_d.upcast(target, value)
         payloads.append(value)
-    return [*tvm_ffi_d.MonadPureOp(result_types, payloads).outputs]
+    operation = tvm_ffi_d.MonadPureOp(result_types, payloads)
+    operation.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+    operation.attributes["tvm_ffi.retain_payloads"] = ir.UnitAttr.get()
+    return [*operation.outputs]
 
 
 def tuple_type(types: Sequence[ir.Type]) -> tvm_ffi_d.TupleType:
