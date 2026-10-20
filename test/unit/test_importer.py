@@ -8,6 +8,7 @@ import unittest
 import sympy
 import torch
 from trident.core import ir
+from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.importer import TridentFxImporter
 from trident.ir import (
@@ -77,6 +78,38 @@ class ImporterTest(unittest.TestCase):
             parsed_result = ir.Type.parse(f"{result}")
             self.assertIsInstance(parsed_result, tvm_ffi_d.ResultType)
             self.assertEqual(parsed_result.payload_type, union)
+
+    def test_local_call_bindings(self) -> None:
+        context = new_context()
+        with context, ir.Location.unknown(context):
+            module = ir.Module.create()
+            payload = tvm_ffi_d.TensorType.get()
+            result = tvm_ffi_d.ResultType.get(payload)
+            success = tvm_ffi_d.BoolType.get()
+            value = tvm_ffi_d.AnyType.get()
+            with ir.InsertionPoint(module.body):
+                tvm_ffi_d.FuncOp(
+                    "callee",
+                    ir.TypeAttr.get(ir.FunctionType.get([payload], [payload])),
+                    emit_tvm_ffi_abi=True,
+                )
+                caller = func.FuncOp("caller", ([payload], [result, success, value]))
+                with ir.InsertionPoint(caller.add_entry_block()):
+                    arguments = list(caller.arguments)
+                    monad_call = tvm_ffi_d.MonadCallOp(result, "callee", arguments)
+                    call = tvm_ffi_d.CallOp("callee", arguments)
+                    self.assertIsInstance(monad_call.result.type, tvm_ffi_d.ResultType)
+                    self.assertEqual(monad_call.result.type.payload_type, payload)
+                    self.assertIsInstance(call.success.type, tvm_ffi_d.BoolType)
+                    self.assertIsInstance(call.value.type, tvm_ffi_d.AnyType)
+                    func.ReturnOp([monad_call.result, call.success, call.value])
+            self.assertTrue(module.operation.verify())
+            parsed = ir.Module.parse(f"{module}")
+            calls = list(parsed.body.operations[1].regions[0].blocks[0].operations)
+            self.assertIsInstance(calls[0], tvm_ffi_d.MonadCallOp)
+            self.assertIsInstance(calls[1], tvm_ffi_d.CallOp)
+            self.assertIsInstance(calls[1].success.type, tvm_ffi_d.BoolType)
+            self.assertIsInstance(calls[1].value.type, tvm_ffi_d.AnyType)
 
     def test_bind_result_contract(self) -> None:
         context = new_context()
@@ -166,7 +199,10 @@ class ImporterTest(unittest.TestCase):
                 ((), "!tvm_ffi.tuple<>"),
                 ([1, 2], "!tvm_ffi.array<!tvm_ffi.int>"),
                 ([1, None], "!tvm_ffi.array<!tvm_ffi.any>"),
-                (["a", "b"], "!tvm_ffi.array<!tvm_ffi.raw_str>"),
+                (
+                    ["a", "b"],
+                    "!tvm_ffi.array<!tvm_ffi.union<!tvm_ffi.raw_str, !tvm_ffi.small_str, !tvm_ffi.str>>",
+                ),
                 ([torch.float32, torch.float64], "!tvm_ffi.array<!tvm_ffi.int>"),
                 ((torch.float32, 1), "!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.int>"),
                 ([[1], [2]], "!tvm_ffi.array<!tvm_ffi.array<!tvm_ffi.int>>"),
@@ -331,6 +367,28 @@ class ImporterTest(unittest.TestCase):
                         self.assertEqual(unpacked.value.type, expected)
                 self.assertTrue(module.operation.verify())
 
+    def test_owned_string_boundaries(self) -> None:
+        context = new_context()
+        with context, ir.Location.unknown(context):
+            module = ir.Module.create()
+            string = tvm_ffi_d.UnionType.get(
+                [
+                    tvm_ffi_d.RawStrType.get(),
+                    tvm_ffi_d.SmallStrType.get(),
+                    tvm_ffi_d.StrType.get(),
+                ]
+            )
+            with ir.InsertionPoint(module.body):
+                for text in ("", "1234567", "12345678"):
+                    with self.subTest(text=text):
+                        value = constant(text)
+                        self.assertIsInstance(value.type, tvm_ffi_d.RawStrType)
+                        [result] = pure([value])
+                        self.assertEqual(result.type.payload_type, string)
+                        self.assertEqual(make_result_types([value.type]), [result.type])
+                        self.assertEqual(result.owner.opview.values[0].type, string)
+            self.assertTrue(module.operation.verify())
+
     def test_pure_inference_and_typed_boundaries(self) -> None:
         context = new_context()
         with context, ir.Location.unknown(context):
@@ -351,16 +409,13 @@ class ImporterTest(unittest.TestCase):
                         [result] = pure([value], result_types=result_types)
                         operation = result.owner.opview
                         self.assertEqual(operation.values[0].type, target)
-                        if target != boxed:
-                            widened = operation.values[0]
-                            self.assertIsInstance(
-                                widened.owner.opview, tvm_ffi_d.UpcastOp
-                            )
-                            narrowed = tvm_ffi_d.downcast(boxed, widened)
-                            self.assertEqual(narrowed.type, boxed)
-                            self.assertIsInstance(
-                                narrowed.owner.opview, tvm_ffi_d.DowncastOp
-                            )
+                        widened = operation.values[0]
+                        self.assertIsInstance(widened.owner.opview, tvm_ffi_d.UpcastOp)
+                        narrowed = tvm_ffi_d.downcast(boxed, widened)
+                        self.assertEqual(narrowed.type, boxed)
+                        self.assertIsInstance(
+                            narrowed.owner.opview, tvm_ffi_d.DowncastOp
+                        )
                 with self.assertRaisesRegex(AssertionError, "payload count"):
                     pure([value, value], result_types=make_result_types([integer]))
                 with self.assertRaisesRegex(AssertionError, "payload type"):

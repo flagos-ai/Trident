@@ -1,9 +1,9 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
 
-// Decomposition marks independent references; temporary handles are explicitly
+// Decomposition propagates explicit cleanup for independent references; temporary handles are explicitly
 // released and must not acquire another release on the second cleanup pass.
 // CHECK-LABEL: func.func @array(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
@@ -23,7 +23,7 @@ func.func @array(%input: !tvm_ffi.tensor) {
   return {tvm_ffi.retain}
 }
 
-// Each unconstructed result preserves its own override through decomposition.
+// Each unconstructed result inherits the operation cleanup marker.
 // CHECK-LABEL: func.func @tuple(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array
 // CHECK: %[[FIRST_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"

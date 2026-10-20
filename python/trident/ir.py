@@ -199,6 +199,15 @@ def boxed_type(type_: ir.Type) -> ir.Type:
         return tvm_ffi_d.IntType.get()
     elif isinstance(type_, ir.F64Type):
         return tvm_ffi_d.FloatType.get()
+    elif isinstance(type_, tvm_ffi_d.RawStrType):
+        # Owning FFI containers normalize RawStr views to SmallStr or Str.
+        return tvm_ffi_d.UnionType.get(
+            [
+                tvm_ffi_d.RawStrType.get(),
+                tvm_ffi_d.SmallStrType.get(),
+                tvm_ffi_d.StrType.get(),
+            ]
+        )
     return type_
 
 
@@ -286,7 +295,7 @@ def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Valu
         else [type_.element_type] * len(elements)
     )
     elements = [
-        value if value.type == target else tvm_ffi_d.upcast(target, value)
+        tvm_ffi_d.upcast(target, value)
         for value, target in zip(elements, types, strict=True)
     ]
     if isinstance(type_, tvm_ffi_d.TupleType):
@@ -330,13 +339,12 @@ def container_get(
     result_types = make_result_types([target])
     with bind([result], result_types=result_types) as extracted:
         [value] = extracted.arguments
-        if value.type != target:
-            if isinstance(
-                target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
-            ) and not isinstance(value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)):
-                value = tvm_ffi_d.upcast(target, value)
-            else:
-                value = tvm_ffi_d.downcast(target, value)
+        if isinstance(
+            target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+        ) and not isinstance(value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)):
+            value = tvm_ffi_d.upcast(target, value)
+        else:
+            value = tvm_ffi_d.downcast(target, value)
         terminator = tvm_ffi_d.MonadYieldOp(pure([value], result_types=result_types))
         terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
     return [*extracted.outputs]
@@ -421,13 +429,11 @@ def pure(
     payloads: list[ir.Value] = []
     for value, result in zip(values, result_types, strict=True):
         target = result.payload_type
-        if value.type != target:
-            value = box(value)
-            if value.type != target:
-                assert isinstance(target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)), (
-                    "payload type must match Result type"
-                )
-                value = tvm_ffi_d.upcast(target, value)
+        value = box(value)
+        assert value.type == target or isinstance(
+            target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+        ), "payload type must match Result type"
+        value = tvm_ffi_d.upcast(target, value)
         payloads.append(value)
     operation = tvm_ffi_d.MonadPureOp(result_types, payloads)
     operation.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
@@ -449,13 +455,7 @@ def value_type(value: Any) -> ir.Type:
     elif isinstance(value, (float, torch.SymFloat)):
         return tvm_ffi_d.FloatType.get()
     elif isinstance(value, str):
-        return tvm_ffi_d.UnionType.get(
-            [
-                tvm_ffi_d.RawStrType.get(),
-                tvm_ffi_d.SmallStrType.get(),
-                tvm_ffi_d.StrType.get(),
-            ]
-        )
+        return boxed_type(tvm_ffi_d.RawStrType.get())
     elif isinstance(value, torch.device):
         return tvm_ffi_d.DeviceType.get()
     elif isinstance(value, torch.dtype):

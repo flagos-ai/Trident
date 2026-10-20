@@ -159,37 +159,6 @@ func.func @global_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
 
 // -----
 
-// CHECK-LABEL: func.func @local_call(
-// CHECK-SAME: %[[LOCAL_ARG:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>) -> !llvm.struct<(i32, i32, i64)> {
-// CHECK: %[[LOCAL_NARGS:[a-zA-Z0-9_]+]] = llvm.mlir.constant(1 : i32) : i32
-// CHECK: %[[LOCAL_ARGS:[a-zA-Z0-9_]+]] = llvm.alloca
-// CHECK: %[[LOCAL_ARG_SLOT:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[LOCAL_ARGS]][0]
-// CHECK: llvm.store %[[LOCAL_ARG]], %[[LOCAL_ARG_SLOT]]
-// CHECK: %[[LOCAL_RESULT_SLOT:[a-zA-Z0-9_]+]] = llvm.alloca
-// CHECK: %[[LOCAL_INITIAL_RESULT:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.store %[[LOCAL_INITIAL_RESULT]], %[[LOCAL_RESULT_SLOT]]
-// CHECK: %[[LOCAL_CONTEXT:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.ptr
-// CHECK: %[[LOCAL_STATUS:[a-zA-Z0-9_]+]] = call @__tvm_ffi_callee(%[[LOCAL_CONTEXT]], %[[LOCAL_ARGS]], %[[LOCAL_NARGS]], %[[LOCAL_RESULT_SLOT]])
-// CHECK: %[[LOCAL_ZERO:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
-// CHECK: %[[LOCAL_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[LOCAL_STATUS]], %[[LOCAL_ZERO]] : i32
-// CHECK: llvm.cond_br %[[LOCAL_SUCCESS]], ^[[LOCAL_OK:bb[0-9]+]], ^[[LOCAL_FAILED:bb[0-9]+]]
-// CHECK: ^[[LOCAL_FAILED]]:
-// CHECK-NEXT: llvm.call @abort() : () -> ()
-// CHECK-NEXT: llvm.unreachable
-// CHECK: ^[[LOCAL_OK]]:
-// CHECK: %[[LOCAL_RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[LOCAL_RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: return %[[LOCAL_RESULT]] : !llvm.struct<(i32, i32, i64)>
-func.func private @__tvm_ffi_callee(
-    !llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
-
-func.func @local_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
-  %result = tvm_ffi.call @callee(%arg)
-      : (!tvm_ffi.int) -> !tvm_ffi.int
-  return %result : !tvm_ffi.int
-}
-
-// -----
-
 // CHECK-LABEL: func.func @object_refs(
 // CHECK-SAME: %[[OBJECT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>) {
 // CHECK: %[[INC_BITS:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[OBJECT]][2]

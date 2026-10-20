@@ -2,19 +2,60 @@
 // SPDX-License-Identifier: MIT
 
 // RUN: trident-core-opt %s --verify-each | FileCheck %s --check-prefix=IR
-// RUN: trident-core-opt %s --decompose-tvm-ffi --verify-each | FileCheck %s --check-prefix=LOWER --implicit-check-not='tvm_ffi.monad.bind' --implicit-check-not='tvm_ffi.monad.yield'
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --verify-each | FileCheck %s --check-prefix=LOWER --implicit-check-not='tvm_ffi.monad.bind' --implicit-check-not='tvm_ffi.monad.yield'
 // RUN: trident-core-opt %s --trident-lowering-pipeline --verify-each | FileCheck %s --check-prefix=LLVM --implicit-check-not='tvm_ffi.'
+
+// LOWER-LABEL:   func.func @empty() {
+// LOWER:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = arith.constant true
+// LOWER:           scf.if %[[CONSTANT_0]] {
+// LOWER:             func.call @record() : () -> ()
+// LOWER:           return {tvm_ffi.retain}
+// LOWER-LABEL:   func.func @no_inputs(
+// LOWER-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.int) -> (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) {
+// LOWER:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = arith.constant true
+// LOWER:           %[[IF_0:[a-zA-Z0-9_$.-]+]]:2 = scf.if %[[CONSTANT_0]] -> (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) {
+// LOWER:             %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.int -> !tvm_ffi.any
+// LOWER:             %[[CONSTANT_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// LOWER:             %[[TUPLE_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_1]], %[[UPCAST_0]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// LOWER:             tvm_ffi.ObjectDecRef %[[UPCAST_0]] : !tvm_ffi.any
+// LOWER:             %[[UPCAST_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.int -> !tvm_ffi.any
+// LOWER:             %[[CONSTANT_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// LOWER:             %[[TUPLE_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_2]], %[[UPCAST_1]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// LOWER:             tvm_ffi.ObjectDecRef %[[UPCAST_1]] : !tvm_ffi.any
+// LOWER:             scf.yield {tvm_ffi.retain} %[[TUPLE_0]], %[[TUPLE_1]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// LOWER:           } else {
+// LOWER:             %[[CONSTANT_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.none
+// LOWER:             %[[CONSTANT_4:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool false
+// LOWER:             %[[UPCAST_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[CONSTANT_3]] : !tvm_ffi.none -> !tvm_ffi.any
+// LOWER:             %[[TUPLE_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_4]], %[[UPCAST_2]]) {tvm_ffi.cleanup} : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// LOWER:             %[[CONSTANT_5:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool false
+// LOWER:             %[[UPCAST_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[CONSTANT_3]] : !tvm_ffi.none -> !tvm_ffi.any
+// LOWER:             %[[TUPLE_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_5]], %[[UPCAST_3]]) {tvm_ffi.cleanup} : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// LOWER:             scf.yield {tvm_ffi.retain} %[[TUPLE_2]], %[[TUPLE_3]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// LOWER:           return {tvm_ffi.retain} %[[VAL_0:[a-zA-Z0-9_$.-]+]]#0, %[[VAL_0]]#1 : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// LOWER-LABEL:   func.func @no_outputs(
+// LOWER-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>,
+// LOWER-SAME:      %[[ARG1:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) {
+// LOWER:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// LOWER:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
+// LOWER:           %[[TUPLE_1:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG1]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// LOWER:           %[[GET_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_1]]#0 : !tvm_ffi.bool -> i1
+// LOWER:           %[[ANDI_0:[a-zA-Z0-9_$.-]+]] = arith.andi %[[GET_0]], %[[GET_1]] : i1
+// LOWER:           scf.if %[[ANDI_0]] {
+// LOWER:             %[[DOWNCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.downcast %[[TUPLE_0]]#1 : !tvm_ffi.any -> !tvm_ffi.int
+// LOWER:             %[[DOWNCAST_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.downcast %[[TUPLE_1]]#1 : !tvm_ffi.any -> !tvm_ffi.int
+// LOWER:             func.call @record_values(%[[DOWNCAST_0]], %[[DOWNCAST_1]]) : (!tvm_ffi.int, !tvm_ffi.int) -> ()
+// LOWER:           return {tvm_ffi.retain}
+
+
+
+
+
 
 // IR-LABEL: func.func @empty(
 // IR: tvm_ffi.monad.bind : () -> () {
 // IR-NEXT: call @record()
 // IR-NEXT: tvm_ffi.monad.yield
-// LOWER-LABEL: func.func @empty(
-// LOWER: %[[TRUE:[a-zA-Z0-9_]+]] = arith.constant true
-// LOWER-NEXT: scf.if %[[TRUE]] {
-// LOWER-NEXT: call @record()
-// LOWER-NEXT: }
-// LOWER-NEXT: return
 // LLVM-LABEL: llvm.func @empty(
 // LLVM: llvm.call @record()
 // LLVM: llvm.return
@@ -30,13 +71,6 @@ func.func @empty() {
 // any number of Results.
 // IR-LABEL: func.func @no_inputs(
 // IR: tvm_ffi.monad.bind : () -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>) {
-// LOWER-LABEL: func.func @no_inputs(
-// LOWER-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.int
-// LOWER: %[[TRUE:[a-zA-Z0-9_]+]] = arith.constant true
-// LOWER-NEXT: %[[OUTPUT:[a-zA-Z0-9_]+]]:2 = scf.if %[[TRUE]]
-// LOWER-NEXT: %[[PURE:[a-zA-Z0-9_]+]]:2 = tvm_ffi.monad.pure %[[VALUE]], %[[VALUE]]
-// LOWER-NEXT: scf.yield {tvm_ffi.retain} %[[PURE]]#0, %[[PURE]]#1
-// LOWER: return {tvm_ffi.retain} %[[OUTPUT]]#0, %[[OUTPUT]]#1
 // LLVM-LABEL: llvm.func @no_inputs(
 // LLVM: llvm.return
 func.func @no_inputs(%value: !tvm_ffi.int) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>) {
@@ -52,24 +86,9 @@ func.func @no_inputs(%value: !tvm_ffi.int) -> (!tvm_ffi.monad.result<!tvm_ffi.in
 // IR-LABEL: func.func @no_outputs(
 // IR: tvm_ffi.monad.bind
 // IR-SAME: -> () {
-// LOWER-LABEL: func.func @no_outputs(
-// LOWER-SAME: %[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.int>, %[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.int>
-// LOWER: %[[OK0:[a-zA-Z0-9_]+]], %[[VALUE0:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[FIRST]]
-// LOWER: %[[OK1:[a-zA-Z0-9_]+]], %[[VALUE1:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[SECOND]]
-// LOWER-NEXT: %[[READY:[a-zA-Z0-9_]+]] = arith.andi %[[OK0]], %[[OK1]]
-// LOWER-NEXT: scf.if %[[READY]] {
-// LOWER-NEXT: %[[ARG0:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[VALUE0]] : !tvm_ffi.any -> !tvm_ffi.int
-// LOWER-NEXT: %[[ARG1:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[VALUE1]] : !tvm_ffi.any -> !tvm_ffi.int
-// LOWER-NEXT: call @record_values(%[[ARG0]], %[[ARG1]])
-// LOWER-NEXT: }
-// LOWER-NEXT: return
 // LLVM-LABEL: llvm.func @no_outputs(
-// LLVM: llvm.cond_br %[[READY:[a-zA-Z0-9_]+]], ^[[SUCCESS:bb[0-9]+]], ^[[EXIT:bb[0-9]+]]
-// LLVM: ^[[SUCCESS]]:
 // LLVM: llvm.call @record_values
-// LLVM-NEXT: llvm.br ^[[EXIT]]
-// LLVM: ^[[EXIT]]:
-// LLVM-NEXT: llvm.return
+// LLVM: llvm.return
 func.func @no_outputs(%first: !tvm_ffi.monad.result<!tvm_ffi.int>, %second: !tvm_ffi.monad.result<!tvm_ffi.int>) {
   tvm_ffi.monad.bind %first, %second : (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>) -> () {
   ^bb0(%a: !tvm_ffi.int, %b: !tvm_ffi.int):

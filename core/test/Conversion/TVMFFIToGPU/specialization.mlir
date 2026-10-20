@@ -7,7 +7,7 @@
 
 // RUN: trident-core-opt %s -split-input-file --inline --convert-tvm-ffi-to-gpu | FileCheck %s
 
-// CHECK-LABEL: tvm_ffi.func @validate
+// CHECK-LABEL: func.func @validate
 // CHECK-SAME: %[[TENSOR:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
 // CHECK-SAME: %[[SPECIALIZED:[a-zA-Z0-9_]+]]: !tvm_ffi.int
 // CHECK-NOT: call @launch
@@ -53,20 +53,20 @@ module attributes {gpu.container_module} {
     return %result : !tvm_ffi.int
   }
 
-  tvm_ffi.func @validate(%tensor: !tvm_ffi.tensor, %value: !tvm_ffi.float,
+  func.func @validate(%tensor: !tvm_ffi.tensor, %value: !tvm_ffi.float,
       %specialized: !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.any> {
     %result = func.call @launch(%tensor, %specialized, %value)
         : (!tvm_ffi.tensor, !tvm_ffi.int, !tvm_ffi.float) -> !tvm_ffi.int
     %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.any
 
     %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.any) -> !tvm_ffi.monad.result<!tvm_ffi.any>
-    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.any>
+    return %returned : !tvm_ffi.monad.result<!tvm_ffi.any>
   }
 }
 
 // -----
 
-// CHECK-LABEL: tvm_ffi.func @validate_scalar_constants
+// CHECK-LABEL: func.func @validate_scalar_constants
 // CHECK-SAME: %[[FLAG:[a-zA-Z0-9_]+]]: !tvm_ffi.bool
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.int
 // CHECK-SAME: %[[SCALE:[a-zA-Z0-9_]+]]: !tvm_ffi.float
@@ -99,20 +99,20 @@ module attributes {gpu.container_module} {
     return %result : !tvm_ffi.int
   }
 
-  tvm_ffi.func @validate_scalar_constants(%flag: !tvm_ffi.bool,
+  func.func @validate_scalar_constants(%flag: !tvm_ffi.bool,
       %value: !tvm_ffi.int, %scale: !tvm_ffi.float) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
     %result = func.call @launch_scalar_constants(%flag, %value, %scale)
         : (!tvm_ffi.bool, !tvm_ffi.int, !tvm_ffi.float) -> !tvm_ffi.int
     %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
 
     %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
-    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
+    return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
   }
 }
 
 // -----
 
-// CHECK-LABEL: tvm_ffi.func @validate_string
+// CHECK-LABEL: func.func @validate_string
 // CHECK-SAME: %[[ACTIVATION:[a-zA-Z0-9_]+]]: !tvm_ffi.raw_str
 // CHECK: %[[INITIAL_STRING:[a-zA-Z0-9_]+]] = arith.constant true
 // CHECK: %[[EXPECTED_STRING:[a-zA-Z0-9_]+]] = tvm_ffi.constant.raw_str "leaky_relu"
@@ -137,19 +137,19 @@ module attributes {gpu.container_module} {
     return %result : !tvm_ffi.int
   }
 
-  tvm_ffi.func @validate_string(%activation: !tvm_ffi.raw_str) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
+  func.func @validate_string(%activation: !tvm_ffi.raw_str) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
     %result = func.call @launch_string(%activation)
         : (!tvm_ffi.raw_str) -> !tvm_ffi.int
     %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
 
     %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
-    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
+    return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
   }
 }
 
 // -----
 
-// CHECK-LABEL: tvm_ffi.func @validate_tuple
+// CHECK-LABEL: func.func @validate_tuple
 // CHECK-SAME: %[[TUPLE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array
 // CHECK: %[[INITIAL_TUPLE:[a-zA-Z0-9_]+]] = arith.constant true
 // CHECK: %[[ONE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
@@ -181,13 +181,13 @@ module attributes {gpu.container_module} {
     return %result : !tvm_ffi.int
   }
 
-  tvm_ffi.func @validate_tuple(
+  func.func @validate_tuple(
       %value: !tvm_ffi.c.array) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
     %result = func.call @launch_tuple(%value)
         : (!tvm_ffi.c.array) -> !tvm_ffi.int
     %success = tvm_ffi.upcast %result : !tvm_ffi.int -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>
 
     %returned = tvm_ffi.monad.pure %success : (!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
-    tvm_ffi.return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
+    return %returned : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
   }
 }

@@ -1,9 +1,9 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
-// RUN: trident-core-opt %s --materialize-tvm-ffi-cleanup > %t
-// RUN: trident-core-opt %t --materialize-tvm-ffi-cleanup --verify-each | diff %t -
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup > %t
+// RUN: trident-core-opt %t --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --verify-each | diff %t -
 
 // Retain every exported occurrence before releasing any local, even when the
 // export order differs from definition order and the last local is not exported.

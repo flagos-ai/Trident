@@ -1,31 +1,45 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
-// RUN: trident-core-opt %s --materialize-tvm-ffi-cleanup > %t.once
-// RUN: trident-core-opt %t.once --materialize-tvm-ffi-cleanup --verify-each | diff %t.once -
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup > %t.once
+// RUN: trident-core-opt %t.once --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --verify-each | diff %t.once -
+
+// CHECK-LABEL:   func.func private @external() -> !tvm_ffi.tensor
+// CHECK-LABEL:   func.func @multiple_blocks(
+// CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: i1) -> !tvm_ffi.exception {
+// CHECK:           %[[EXCEPTION_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup} : !tvm_ffi.exception
+// CHECK:           %[[IF_0:[a-zA-Z0-9_$.-]+]] = scf.if %[[ARG0]] -> (!tvm_ffi.exception) {
+// CHECK:             %[[EXCEPTION_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectIncRef %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectDecRef %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:             scf.yield %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:           } else {
+// CHECK:             tvm_ffi.ObjectIncRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:             scf.yield %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:           cf.br ^[[BLOCK_bb1:bb[0-9]+]]
+// CHECK:           return {tvm_ffi.retain} %[[IF_0]] : !tvm_ffi.exception
+// CHECK-LABEL:   func.func @pure_in_multiple_blocks(
+// CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tensor) -> !tvm_ffi.c.array {
+// CHECK:           %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.tensor -> !tvm_ffi.any
+// CHECK:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// CHECK:           %[[VAL_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
+// CHECK:           %[[VAL_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_0]](%[[CONSTANT_0]], %[[UPCAST_0]]) {tvm_ffi.cleanup} : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_0]] : !tvm_ffi.object
+// CHECK:           cf.br ^[[BLOCK_bb1:bb[0-9]+]](%[[VAL_1]] : !tvm_ffi.c.array)
+// CHECK:         ^[[BLOCK_bb1]](%[[VAL_2:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.array):
+// CHECK:           return {tvm_ffi.retain} %[[VAL_2]] : !tvm_ffi.c.array
+
+
+
+
+
 
 // An empty function region requires no processing.
-// CHECK-LABEL: func.func private @external()
 func.func private @external() -> !tvm_ffi.tensor
 
 // Direct operations in the multi-block function remain unchanged. Each visited
 // nested single-block region independently acquires exports and releases locals.
-// CHECK-LABEL: func.func @multiple_blocks(
-// CHECK-SAME: %[[PREDICATE:[a-zA-Z0-9_]+]]: i1
-// CHECK-NEXT: %[[LOCAL:[a-zA-Z0-9_]+]] = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup}
-// CHECK-NEXT: %[[OUTPUT:[a-zA-Z0-9_]+]] = scf.if %[[PREDICATE]] -> (!tvm_ffi.exception) {
-// CHECK-NEXT: %[[INNER:[a-zA-Z0-9_]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
-// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[INNER]]
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[INNER]]
-// CHECK-NEXT: scf.yield %[[INNER]]
-// CHECK-NEXT: } else {
-// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[LOCAL]]
-// CHECK-NEXT: scf.yield %[[LOCAL]]
-// CHECK-NEXT: } {tvm_ffi.cleanup}
-// CHECK-NEXT: cf.br ^[[EXIT:bb[0-9]+]]
-// CHECK: ^[[EXIT]]:
-// CHECK-NEXT: return {tvm_ffi.retain} %[[OUTPUT]] : !tvm_ffi.exception
 func.func @multiple_blocks(%predicate: i1) -> !tvm_ffi.exception {
   %local = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup} : !tvm_ffi.exception
   %output = scf.if %predicate -> !tvm_ffi.exception {
@@ -41,13 +55,6 @@ func.func @multiple_blocks(%predicate: i1) -> !tvm_ffi.exception {
 
 // Pure retains do not require a single-block region. Local cleanup and export
 // markers remain pending, and a second pass must not retain the payload again.
-// CHECK-LABEL: func.func @pure_in_multiple_blocks(
-// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
-// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[INPUT]] : !tvm_ffi.tensor
-// CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure %[[INPUT]] {tvm_ffi.cleanup}
-// CHECK-NEXT: cf.br ^[[PURE_EXIT:bb[0-9]+]](%[[RESULT]] : !tvm_ffi.monad.result<!tvm_ffi.tensor>)
-// CHECK-NEXT: ^[[PURE_EXIT]](%[[OUTPUT_RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.tensor>):
-// CHECK-NEXT: return {tvm_ffi.retain} %[[OUTPUT_RESULT]] : !tvm_ffi.monad.result<!tvm_ffi.tensor>
 func.func @pure_in_multiple_blocks(%input: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> {
   %result = tvm_ffi.monad.pure %input {tvm_ffi.cleanup, tvm_ffi.retain} : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
   cf.br ^exit(%result : !tvm_ffi.monad.result<!tvm_ffi.tensor>)

@@ -65,14 +65,21 @@ def TVMFFI_AsOp : TVMFFI_Op<"as", [Pure]> {
 }
 
 def TVMFFI_CallOp : TVMFFI_Op<"call", [TVMFFI_ObjectOwnershipOpInterface]> {
-  let summary = "Call a TVM FFI function defined in the current module";
+  let summary = "Call a local TVM FFI function and return success and payload";
+  let description = [{
+    Returns separate Bool and Any values: (true, payload) on success or
+    (false, None) on failure. Failure preserves the runtime error. The payload
+    owns the returned reference; the success flag needs no reference management.
+    LLVM conversion expands the packed ABI without constructing a container.
+  }];
   let arguments = (ins FlatSymbolRefAttr:$callee,
                        Variadic<AnyTVMFFIAnyABIType>:$operands,
                        OptionalAttr<DictArrayAttr>:$arg_attrs,
                        OptionalAttr<DictArrayAttr>:$res_attrs);
-  let results = (outs AnyTVMFFIAnyABIType:$result);
+  let results = (outs TVMFFI_BoolType:$success, TVMFFI_AnyType:$value);
+  let hasVerifier = 1;
   let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` "
-                       "functional-type($operands, $result)";
+                       "functional-type($operands, results)";
 }
 
 class TVMFFI_ConstantOp<string mnemonic, Type resultType, Attr valueType>
@@ -129,10 +136,15 @@ def TVMFFI_DowncastOp
     : TVMFFI_Op<"downcast", [DeclareOpInterfaceMethods<CastOpInterface>,
         DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
                                   ["getObjectResultOwnership"]>]> {
-  let summary = "Check and narrow an any or union TVM FFI value";
-  let arguments = (ins AnyTVMFFICastResultType : $value);
+  let summary = "Check and narrow a TVM FFI value, or preserve its type";
+  let description = [{
+    Identical source and result types are a no-op. Otherwise the source must
+    be Any or Union and the result must narrow it; a runtime tag mismatch traps.
+  }];
+  let arguments = (ins AnyTVMFFIAnyABIType : $value);
   let results = (outs AnyTVMFFIAnyABIType : $result);
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
+  let hasFolder = 1;
 }
 
 def TVMFFI_EqOp : TVMFFI_Op<"eq", [Pure,
@@ -158,16 +170,16 @@ def TVMFFI_FuncOp : TVMFFI_Op<"func", [
   AffineScope, AutomaticAllocationScope, FunctionOpInterface, IsolatedFromAbove,
   OpAsmOpInterface
 ]> {
-  let summary = "A TVM FFI function with one monadic Result return";
+  let summary = "A TVM FFI function with one C ABI return";
   let description = [{
     Defines a function that can be called through the TVM FFI interface.
-    The function must return exactly one monadic Result. Pack multiple values
+    The function must return exactly one C ABI value. Pack multiple values
     into a tuple payload and use a None payload for functions with no value.
 
     Example:
 
     ```mlir
-    tvm_ffi.func @add(%a: !tvm_ffi.int, %b: !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+    tvm_ffi.func @add(%a: !tvm_ffi.int, %b: !tvm_ffi.int) -> !tvm_ffi.int {
       ...
     }
     ```
@@ -321,6 +333,18 @@ def TVMFFI_MonadBindOp : TVMFFI_Op<"monad.bind", [SingleBlock, RecursiveMemoryEf
   let hasVerifier = 1;
 }
 
+def TVMFFI_MonadCallOp : TVMFFI_Op<"monad.call", [TVMFFI_ObjectOwnershipOpInterface]> {
+  let summary = "Call a local TVM FFI function and return its Result";
+  let arguments = (ins FlatSymbolRefAttr:$callee,
+                       Variadic<AnyTVMFFIAnyABIType>:$operands,
+                       OptionalAttr<DictArrayAttr>:$arg_attrs,
+                       OptionalAttr<DictArrayAttr>:$res_attrs);
+  let results = (outs TVMFFI_ResultType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` "
+                       "functional-type($operands, $result)";
+}
+
 def TVMFFI_MonadFailOp : TVMFFI_Op<"monad.fail", [Pure]> {
   let summary = "Construct failed Results without changing the runtime error";
   let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
@@ -380,22 +404,15 @@ def TVMFFI_ObjectIncRefOp : TVMFFI_Op<"ObjectIncRef", [
 
 def TVMFFI_ReturnOp
     : TVMFFI_Op<"return", [HasParent<"FuncOp">, ReturnLike, Terminator]> {
-  let summary = "Return successful Result payloads or propagate failure to the ABI";
+  let summary = "Return explicit success and an Any payload from a C ABI function";
   let description = [{
-    Returns monadic Results from a TVM FFI function. The operand count and
-    types must match the function signature result types.
-
-    Example:
-
-    ```mlir
-    tvm_ffi.return %result : !tvm_ffi.monad.result<!tvm_ffi.int>
-    ```
+    The function signature declares the successful C ABI payload type. Return
+    carries a boxed success flag and an Any payload of that type on success,
+    or None on failure. ABI lowering stores the payload only on success and
+    preserves the runtime error on failure.
   }];
-
-  let arguments = (ins Variadic<TVMFFI_ResultType> : $operands);
-
-  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
-  let hasVerifier = 1;
+  let arguments = (ins TVMFFI_BoolType:$success, TVMFFI_AnyType:$value);
+  let assemblyFormat = "attr-dict $success `,` $value `:` type($success) `,` type($value)";
 }
 
 def TVMFFI_TensorCloneOp
@@ -504,10 +521,15 @@ def TVMFFI_UpcastOp
     : TVMFFI_Op<"upcast", [Pure, DeclareOpInterfaceMethods<CastOpInterface>,
         DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
                                   ["getObjectResultOwnership"]>]> {
-  let summary = "Widen a TVM FFI value into an any or union ABI type";
+  let summary = "Widen a TVM FFI value, or preserve its type";
+  let description = [{
+    Identical source and result types are a no-op. Otherwise the result must
+    be Any or a Union containing the source type.
+  }];
   let arguments = (ins AnyTVMFFIAnyABIType : $value);
-  let results = (outs AnyTVMFFICastResultType : $result);
+  let results = (outs AnyTVMFFIAnyABIType : $result);
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
+  let hasFolder = 1;
 }
 
 #endif // TRIDENT_CORE_DIALECT_TVMFFI_IR_TVMFFIOPS_TD_

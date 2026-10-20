@@ -1,7 +1,7 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: not trident-core-opt %s --allow-unregistered-dialect --decompose-tvm-ffi 2>&1 | FileCheck %s
+// RUN: not trident-core-opt %s --allow-unregistered-dialect --lower-tvm-ffi-monad --decompose-tvm-ffi 2>&1 | FileCheck %s
 
 // CHECK: error: failed to legalize operation 'test.container'
 func.func @unsupported(%input: !tvm_ffi.array<!tvm_ffi.int>) {

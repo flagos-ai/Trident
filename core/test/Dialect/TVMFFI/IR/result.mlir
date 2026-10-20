@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // RUN: trident-core-opt %s | trident-core-opt | FileCheck %s
-// CHECK-LABEL: tvm_ffi.func @results(
+// CHECK-LABEL: func.func @results(
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: i64, %[[READY:[a-zA-Z0-9_]+]]: i1) -> !tvm_ffi.monad.result<!tvm_ffi.int>
 // CHECK: %[[INPUT:[a-zA-Z0-9_]+]]:2 = scf.if %[[READY]] -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>) {
 // CHECK: %[[OUTPUT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.bind %[[INPUT]]#0, %[[INPUT]]#1
@@ -11,8 +11,8 @@
 // CHECK: %[[SUM:[a-zA-Z0-9_]+]] = arith.addi %[[PAYLOAD]], %[[VALUE]] : i64
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = scf.if %[[READY]]
 // CHECK: tvm_ffi.monad.yield %[[RESULT]]
-// CHECK: tvm_ffi.return %[[OUTPUT]]
-tvm_ffi.func @results(%value: i64, %ready: i1) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
+// CHECK: return %[[OUTPUT]]
+func.func @results(%value: i64, %ready: i1) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
   %input:2 = scf.if %ready -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>) {
     %input_pure_none = tvm_ffi.constant.none
     %value_boxed = tvm_ffi.to %value : i64 -> !tvm_ffi.int
@@ -37,5 +37,5 @@ tvm_ffi.func @results(%value: i64, %ready: i1) -> !tvm_ffi.monad.result<!tvm_ffi
     tvm_ffi.monad.yield %result : !tvm_ffi.monad.result<!tvm_ffi.int>
   }
 
-  tvm_ffi.return %output : !tvm_ffi.monad.result<!tvm_ffi.int>
+  return %output : !tvm_ffi.monad.result<!tvm_ffi.int>
 }

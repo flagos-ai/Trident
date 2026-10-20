@@ -41,34 +41,27 @@
 // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[HANDLE_ADDR]] : !llvm.ptr -> !llvm.ptr
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[ARGS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RESULT_SLOT:[a-zA-Z0-9_]+]])
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: %[[SELECTED:[a-zA-Z0-9_]+]] = llvm.select %[[OK:[a-zA-Z0-9_]+]], %[[RESULT]], %[[NONE:[a-zA-Z0-9_]+]]
-// CHECK: %[[RELEASED:[a-zA-Z0-9_]+]] = llvm.select %[[OK]], %[[RESULT]], %[[NONE]]
-// CHECK: %[[RELEASE_BITS:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[RELEASED]][2]
-// CHECK: %[[RELEASE_POINTER:[a-zA-Z0-9_]+]] = llvm.inttoptr %[[RELEASE_BITS]]
-// CHECK: llvm.call @TVMFFIObjectDecRef(%[[RELEASE_POINTER]])
-// CHECK: %[[EXPORTED:[a-zA-Z0-9_]+]] = llvm.select %[[OK]], %[[RESULT]], %[[NONE]]
-// CHECK: llvm.store %[[EXPORTED]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
-// CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
+// CHECK: llvm.store %[[RESULT]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK-LABEL: llvm.func @__tvm_ffi_tensor_literal_splat(
 // CHECK: llvm.call @tensor_literal_splat(%[[SLOT:[a-zA-Z0-9_]+]]) : (!llvm.ptr) -> i32
 // The wrapper passes through the lowered TVMFFIAny result from the inner
 // function and stores it into the return slot expected by tvm_ffi.func.
-tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.monad.result<!tvm_ffi.tensor> attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
   %0 = tvm_ffi.tensor.literal dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32> {tvm_ffi.cleanup} : !tvm_ffi.tensor
 
-  // Retain the payload for Result construction; cleanup retains the export.
-  tvm_ffi.ObjectIncRef %0 : !tvm_ffi.tensor
-  %returned = tvm_ffi.monad.pure %0 {tvm_ffi.cleanup} : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
-  tvm_ffi.return {tvm_ffi.retain} %returned : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  // The marked return retains its payload before local cleanup.
+  %return_value_1 = tvm_ffi.upcast %0 : !tvm_ffi.tensor -> !tvm_ffi.any
+  %return_flag_1 = tvm_ffi.constant.bool true
+  tvm_ffi.return {tvm_ffi.retain} %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }
 
 // The wrapper passes through the lowered TVMFFIAny result from the inner
 // function and stores it into the return slot expected by tvm_ffi.func.
-tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.monad.result<!tvm_ffi.tensor> attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
   %0 = tvm_ffi.tensor.literal dense<1.250000e+00> : tensor<2x3xf32> {tvm_ffi.cleanup} : !tvm_ffi.tensor
 
-  // Retain the payload for Result construction; cleanup retains the export.
-  tvm_ffi.ObjectIncRef %0 : !tvm_ffi.tensor
-  %returned = tvm_ffi.monad.pure %0 {tvm_ffi.cleanup} : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
-  tvm_ffi.return {tvm_ffi.retain} %returned : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  // The marked return retains its payload before local cleanup.
+  %return_value_2 = tvm_ffi.upcast %0 : !tvm_ffi.tensor -> !tvm_ffi.any
+  %return_flag_2 = tvm_ffi.constant.bool true
+  tvm_ffi.return {tvm_ffi.retain} %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.any
 }

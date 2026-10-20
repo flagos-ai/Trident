@@ -116,7 +116,7 @@ class CleanupTest(unittest.TestCase):
                 self.assertTrue(module.operation.verify())
                 register_all_passes()
                 pipeline = passmanager.PassManager.parse(
-                    "builtin.module(materialize-tvm-ffi-cleanup,decompose-tvm-ffi)"
+                    "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
                 )
                 pipeline.run(module.operation)
                 self.assertTrue(module.operation.verify())
@@ -337,14 +337,17 @@ class CleanupTest(unittest.TestCase):
             self.assertTrue(module.operation.verify())
             register_all_passes()
             pipeline = passmanager.PassManager.parse(
-                "builtin.module(materialize-tvm-ffi-cleanup)"
+                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
             )
             pipeline.run(module.operation)
             materialized = f"{module}"
             self.assertNotIn(CLEANUP_ATTR, materialized)
             self.assertNotIn(RETAIN_ATTR, materialized)
-            self.assertNotIn("ObjectIncRef", materialized)
-            self.assertNotIn("ObjectDecRef", materialized)
+            self.assertIn("ObjectDecRef", materialized)
+            self.assertNotIn("tvm_ffi.monad.", materialized)
+            for op in block.operations:
+                if isinstance(op, (ffi.ObjectIncRefOp, ffi.ObjectDecRefOp)):
+                    self.assertNotEqual(op.object, scalar)
             self.assertTrue(module.operation.verify())
             pipeline.run(module.operation)
             self.assertEqual(f"{module}", materialized)
@@ -406,7 +409,7 @@ class CleanupTest(unittest.TestCase):
             self.assertNotIn("ObjectIncRef", f"{module}")
             register_all_passes()
             pipeline = passmanager.PassManager.parse(
-                "builtin.module(decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
+                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
             )
             pipeline.run(module.operation)
             self.assertTrue(module.operation.verify())
@@ -445,42 +448,42 @@ class CleanupTest(unittest.TestCase):
                 [],
             )
             self.assertIn(RETAIN_ATTR, results[0].owner.attributes)
+            payloads = list(results[0].owner.opview.values)
+            for payload in payloads[:2]:
+                cast = payload.owner.opview
+                self.assertIsInstance(cast, ffi.UpcastOp)
+                self.assertEqual(cast.value, value)
+                self.assertEqual(payload.type, value.type)
             self.assertTrue(module.operation.verify())
             register_all_passes()
-            passmanager.PassManager.parse(
-                "builtin.module(materialize-tvm-ffi-cleanup)"
-            ).run(module.operation)
+            passmanager.PassManager.parse("builtin.module(lower-tvm-ffi-monad)").run(
+                module.operation
+            )
+            tuples = [
+                op for op in block.operations if isinstance(op, ffi.TupleConstructOp)
+            ]
+            self.assertEqual(len(tuples), 4)
+            for op, payload in zip(tuples[:2], payloads[:2], strict=True):
+                cast = op.elements[1].owner.opview
+                self.assertIsInstance(cast, ffi.UpcastOp)
+                self.assertEqual(cast.value, payload)
+            # Borrowing pure must not consume either occurrence of the input.
+            self.assertFalse(
+                any(isinstance(op, ffi.ObjectDecRefOp) for op in block.operations)
+            )
+            pipeline = passmanager.PassManager.parse(
+                "builtin.module(decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
+            )
+            pipeline.run(module.operation)
             self.assertTrue(module.operation.verify())
-            self.assertEqual(
-                [
-                    op.object
-                    for op in block.operations
-                    if isinstance(op, ffi.ObjectIncRefOp)
-                ],
-                [value, value],
-            )
-            self.assertNotIn(RETAIN_ATTR, results[0].owner.attributes)
-            # Both Results and the source retain their own cleanup responsibility.
-            self.assertEqual(
-                len([op for op in block.operations if isinstance(op, scf.IfOp)]),
-                2,
-            )
-            self.assertEqual(
-                [
-                    op.object
-                    for op in block.operations
-                    if isinstance(op, ffi.ObjectDecRefOp)
-                ],
-                [value],
-            )
-
+            self.assertNotIn(RETAIN_ATTR, f"{module}")
+            self.assertNotIn(CLEANUP_ATTR, f"{module}")
+            self.assertIn("tvm_ffi.ObjectDecRef", f"{module}")
             materialized = f"{module}"
-            passmanager.PassManager.parse(
-                "builtin.module(materialize-tvm-ffi-cleanup)"
-            ).run(module.operation)
+            pipeline.run(module.operation)
             self.assertEqual(f"{module}", materialized)
 
-    def test_result_exports_retain_only_on_success(self) -> None:
+    def test_result_tuple_exports_retain_both_branches(self) -> None:
         with new_context(), ir.Location.unknown():
             module = ir.Module.create()
             result_type = ffi.ResultType.get(ffi.TensorType.get())
@@ -521,7 +524,7 @@ class CleanupTest(unittest.TestCase):
             self.assertIn(RETAIN_ATTR, f"{module}")
             register_all_passes()
             pipeline = passmanager.PassManager.parse(
-                "builtin.module(materialize-tvm-ffi-cleanup)"
+                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
             )
             pipeline.run(module.operation)
             self.assertTrue(module.operation.verify())
@@ -530,9 +533,21 @@ class CleanupTest(unittest.TestCase):
             pipeline.run(module.operation)
             self.assertEqual(f"{module}", materialized)
             module.operation.walk(collect)
-            actions = [
-                [op.operation.name for op in branch.regions[0].blocks[0].operations]
-                for branch in branches
-            ]
-            self.assertEqual(actions.count(["tvm_ffi.ObjectIncRef", "scf.yield"]), 4)
-            self.assertEqual(actions.count(["tvm_ffi.ObjectDecRef", "scf.yield"]), 5)
+            self.assertEqual(len(branches), 1)
+            success, failure = branches[0].regions
+            for region in (success, failure):
+                body = region.blocks[0]
+                exit_values = list(body.operations[-1].operands)
+                retains = [
+                    op.object
+                    for op in body.operations
+                    if isinstance(op, ffi.ObjectIncRefOp)
+                ]
+                self.assertEqual(retains, exit_values)
+                releases = [
+                    op.object
+                    for op in body.operations
+                    if isinstance(op, ffi.ObjectDecRefOp)
+                ]
+                for value in exit_values:
+                    self.assertIn(value, releases)
