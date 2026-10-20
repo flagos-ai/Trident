@@ -63,7 +63,9 @@ structure is restored from its pytree specification.
 
 FFI operations accept semantic FFI operands. Use `tvm_ffi.to` for native scalar
 boxing, `tvm_ffi.get` for scalar extraction, and `tvm_ffi.upcast` for widening an ABI
-value to Any or a compatible union. Use `tvm_ffi.downcast` to narrow Any/Union;
+value to Any or a compatible union. Both casts accept conversion to the same
+type as a no-op.
+Use `tvm_ffi.downcast` to narrow Any/Union;
 its result type determines the runtime type-tag assertion. A mismatch calls `abort()`.
 The casts exclude native Function/Object handles and unions containing them.
 Do not introduce frontend types into these
@@ -134,14 +136,15 @@ An empty input list executes the body unconditionally; an empty output list is
 for effects only and ends with an empty `monad.yield`. The Python `bind` helper
 supports the same counts; `pure([])` still constructs the existing None Result.
 
-FFI functions declare exactly one Result return type, and `tvm_ffi.return`
-matches that type exactly. Pack multiple values into a semantic tuple payload.
-Every Result requires one CABI payload type. Use `monad.pure` for successful values and `Result<!tvm_ffi.none>` with `tvm_ffi.constant.none` for
-no-data returns. Empty argument builders retain a None Result success marker;
+FFI functions declare exactly one C ABI payload type. `tvm_ffi.return` takes
+a boxed success boolean and an Any payload. Pack multiple values into a semantic
+tuple payload; no-data functions declare `!tvm_ffi.none`. Private graph helpers
+and construction helpers continue to use complete Results. Every Result requires
+one CABI payload type; use `monad.pure` for success and explicit None payloads
+for no-data Results. Empty argument builders retain a None Result success marker;
 pass only the original number of arguments to calls, including zero for empty
-lists. Actual None arguments remain ordinary arguments. Use typed `pure`
-construction for Any/Union widening. Runtime errors propagate through return
-and packed ABI status.
+lists. Actual None arguments retain their positions. Runtime errors propagate
+through return and packed ABI status.
 
 Use the concrete Python type bindings when constructing or inspecting MLIR
 types: for example, `tvm_ffi_d.TensorType.get()` and
@@ -151,20 +154,36 @@ signless width. Build unions with `UnionType.get(types, context=...)`; invalid,
 duplicate or cross-context members raise `ValueError`. Type printing is for IR
 text and diagnostics, not type dispatch.
 
-The lowering pipeline decomposes binds into `monad.unpack` and `scf.if`,
-retaining semantic Results until LLVM conversion. LLVM conversion lowers each
-Result to one struct containing its converted payload and an i1 success bit,
-and lowers `monad.pure`, `monad.fail` and `monad.unpack`. ABI return conversion
-uses unpack and restores widened payloads only in successful branches with
-`tvm_ffi.downcast`.
+`lower-tvm-ffi-monad` converts Results to semantic `tuple<bool, any>` and
+binds to tuple extraction and `scf.if`. `tvm_ffi.monad.call` returns a complete
+`Result<T>` matching its local callee's return type. Its lowering emits
+`tvm_ffi.call` with separate `!tvm_ffi.bool` and `!tvm_ffi.any` results, explicitly
+constructs a tuple, and releases the call's payload reference after the tuple
+retains it. The original cleanup marker moves to that tuple; without it, the
+tuple remains unmanaged without a transfer attribute. Result attributes apply
+to the call's payload, with an empty success-result entry. Both call operations require
+a `tvm_ffi.func` callee with `emit_tvm_ffi_abi` and matching arguments. Registry
+calls continue to use `tvm_ffi.FunctionCall`.
+
+`decompose-tvm-ffi` preserves the call's two results and converts container
+operands and explicit tuples to CArrays. `TVMFFIToLLVM` requires this decomposition
+and expands packed wrappers directly into LLVM control flow. Success returns
+separate `(true, payload)` results; failure returns `(false, None)` without
+reading the output slot or clearing the runtime error. The Any result owns the
+returned payload reference; marked calls receive ordinary Any cleanup, while
+Bool needs none. Local call lowering constructs no Array and performs no
+registry lookup or temporary reference adjustment. Monad lowering and
+`TVMFFIToFunc` contain no packed call expansion, and LLVM conversion receives no
+Result types.
 
 For operations producing independent owned references, construct the Op and
 set `operation.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()` directly.
 The `tvm_ffi.cleanup` UnitAttr schedules one release per reference-bearing result; scalar results are ignored. There are no
 per-result count overrides. Semantic container construction and extraction
-acquire cleanup markers when decomposed; other operations have no default
-cleanup credits. Marking twice does not
-add another release. Borrowed casts, unpacked payloads, block arguments and
+require explicit cleanup markers, which decomposition propagates to runtime calls.
+A marked tuple unconstruct marks every element extraction call. No operation
+receives default cleanup credits during decomposition. Marking twice
+does not add another release. Borrowed casts, unpacked payloads, block arguments and
 metadata results must not acquire cleanup responsibility. Shared tensor storage
 does not imply a borrowed reference. Ownership interfaces describe operation
 contracts independently of explicit cleanup policy.
@@ -183,21 +202,22 @@ callers do not retain payloads separately before wrapping them. The low-level
 Construct region yields and function returns, then directly assign their
 `tvm_ffi.retain` UnitAttr; the cleanup pass consumes the markers and
 retains their reference-bearing operands. `pure` defers payload
-retains until cleanup after container erasure. Result retains and releases use
-`monad.unpack` and one `scf.if` success branch per Result so that each successful
-payload is adjusted independently, even when other Results fail. Reference
-operations accept widened Any payloads directly; native handles keep their types.
+retains through tuple construction during monad lowering. Cleanup adjusts each
+lowered Result tuple as an ordinary CArray; the runtime container manages its
+payload references. Reference operations accept widened Any payloads directly.
 
-`decompose-tvm-ffi` erases containers and unconditionally marks container
-runtime calls and converted FunctionCall operations for cleanup before `materialize-tvm-ffi-cleanup` runs. Cleanup executes
-before inlining and SCF-to-CFG, directly emitting unpack and success branches
-for Result reference adjustments. No second decomposition is needed. Cleanup
+`decompose-tvm-ffi` erases containers and preserves explicit cleanup markers on
+container runtime calls and converted FunctionCall operations before
+`materialize-tvm-ffi-cleanup` runs. Monad lowering explicitly marks its temporary
+tuple extractions, whose FFI calls return independently owned references. Cleanup
+executes before inlining and SCF-to-CFG, adjusting the references of the lowered Result
+containers directly. No second decomposition is needed. Cleanup
 assumes well-formed input attributes and processes block exits only when their
-immediate parent region has one block. Pure retains are processed regardless of
-the parent region's block count. Separate retain and cleanup pattern stages run
+immediate parent region has one block. Pure borrowing intent has already been
+handled during monad lowering. Separate retain and cleanup pattern stages run
 without folding or dead-code elimination. Export retention handles
 marked reference-bearing operands of `func.return`, `tvm_ffi.return`, `scf.yield` and
-`tvm_ffi.monad.yield` before releasing local references in reverse order. There is no scope operation whitelist. Empty and
+lowered monadic yields before releasing local references in reverse order. There is no scope operation whitelist. Empty and
 multi-block regions have no direct block-exit cleanup or export rewrites. Nested single-block
 regions are processed independently when visited by the walk driver, which skips
 unreachable blocks. Results of an operation owning a skipped region are still
@@ -206,7 +226,7 @@ retains. Only exits carrying `tvm_ffi.retain` request export retains.
 Consumed export and cleanup markers are removed for idempotence, including
 export markers on scalar-only and empty exits. Lowerings preserve cleanup
 markers on replacement resource Ops and pending export markers on converted
-exits. Generated failure exits need no export marker. Temporary references with explicit
+exits. Generated failure exits retain their owned failure tuples. Temporary references with explicit
 releases remain unmarked. Constant specialization helpers follow the same rule
 for their temporary containers.
 Ownership interfaces remain operation contracts; cleanup does not infer aliases,
@@ -243,7 +263,10 @@ inherit `TVMFFICOpaqueABIType` (and therefore `TVMFFIABIType`), preserving neste
 containers. Decomposition erases both to the concrete Base `CArrayType`.
 Array's C++ element parameter and accessor use `TVMFFICABIType`; parsing and
 checked C/Python construction reject non-CABI elements. Native scalars and Results are not
-valid container elements. Box native scalars before construction; heterogeneous and
+valid container elements. Owning containers normalize RawStr to SmallStr or Str;
+use the shared boxed string union at container and Result boundaries so
+extraction accepts each runtime representation. Box native scalars before
+construction; heterogeneous and
 empty lists use `ArrayType.get(AnyType.get())`. The ABI Array binding is
 `CArrayType.get()`.
 
@@ -256,8 +279,7 @@ Use unconstruct results for static indexing and type information for static
 length. Input guards must still check runtime arity through checked
 `ffi.ArraySize` calls. Container decomposition asserts lookup status, a non-null
 handle and call status, terminating on failure.
-`decompose-tvm-ffi` uses one dialect conversion to expand checked runtime calls
-and monadic binds while erasing container types to `c.array` throughout
+`decompose-tvm-ffi` preserves local calls and uses a dialect conversion to expand checked container runtime calls while erasing container types to `c.array` throughout
 signatures and regions.
 Keep this pass before ABI and LLVM conversion. Direct runtime
 ABI helpers may continue using `c.array`; frontend code uses semantic types.
@@ -286,8 +308,8 @@ specialization attribute. The latter records native ABI type and optional
 divisibility; constexpr operands are checked and omitted from the native kernel
 call. Functional wrapper outputs clone only the specified tensors before launch.
 
-`ConvertTVMFFIToGPU` runs after inlining and SCF-to-CFG, before ABI and LLVM
-conversion. The launch returns `Result<None>`: matching inputs launch and return success;
+`ConvertTVMFFIToGPU` runs before monad lowering, container decomposition and
+cleanup. The launch returns `Result<None>`: matching inputs launch and return success;
 rejection returns `monad.fail`, does not launch and does not exit the function.
 Bind the launch Result explicitly so rejection suppresses later effects and
 passes through normal cleanup.

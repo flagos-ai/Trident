@@ -73,7 +73,7 @@ bool isTaggedCastType(mlir::Type type) {
   if (UnionType const unionType = mlir::dyn_cast<UnionType>(type)) {
     return llvm::all_of(unionType.getTypes(), isTaggedCastType);
   }
-  return !mlir::isa<FunctionType>(type) && mlir::isa<TVMFFICABIType>(type) &&
+  return mlir::isa<TVMFFICABIType>(type) &&
          mlir::isa<TVMFFITypeIndexInterface>(type);
 }
 
@@ -90,8 +90,13 @@ ArrayType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
 bool DowncastOp::areCastCompatible(mlir::TypeRange inputs,
                                    mlir::TypeRange outputs) {
   if (inputs.size() != 1 || outputs.size() != 1 ||
-      !isTaggedCastType(inputs[0]) || !isTaggedCastType(outputs[0]) ||
-      mlir::isa<AnyType>(outputs[0]) || inputs[0] == outputs[0]) {
+      !isTaggedCastType(inputs[0]) || !isTaggedCastType(outputs[0])) {
+    return false;
+  }
+  if (inputs[0] == outputs[0]) {
+    return true;
+  }
+  if (mlir::isa<AnyType>(outputs[0])) {
     return false;
   }
   if (mlir::isa<AnyType>(inputs[0])) {
@@ -279,10 +284,11 @@ bool UpcastOp::areCastCompatible(mlir::TypeRange inputs,
   }
   mlir::Type const input = inputs[0];
   mlir::Type output = outputs[0];
-  return mlir::isa<AnyType, UnionType>(output) && isTaggedCastType(input) &&
-         isTaggedCastType(output) &&
-         (mlir::isa<AnyType>(output) || mlir::cast<UnionType>(output).contains(
-                                            mlir::cast<TVMFFICABIType>(input)));
+  return isTaggedCastType(input) && isTaggedCastType(output) &&
+         (input == output || mlir::isa<AnyType>(output) ||
+          (mlir::isa<UnionType>(output) &&
+           mlir::cast<UnionType>(output).contains(
+               mlir::cast<TVMFFICABIType>(input))));
 }
 
 } // namespace trident::tvm_ffi

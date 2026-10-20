@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s --convert-tvm-ffi-to-gpu --convert-tvm-ffi-to-func --convert-tvm-ffi-to-llvm --convert-dlpack-to-llvm -split-input-file | FileCheck %s
+// RUN: trident-core-opt %s --convert-tvm-ffi-to-gpu --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --convert-tvm-ffi-to-func --convert-scf-to-cf --convert-tvm-ffi-to-llvm --convert-dlpack-to-llvm -split-input-file | FileCheck %s
 
 // CHECK-LABEL: module attributes {gpu.container_module}
 // CHECK: gpu.binary @kernel

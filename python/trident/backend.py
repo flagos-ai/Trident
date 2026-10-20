@@ -313,7 +313,7 @@ class TridentGraphModule:
             abi_result_type = tvm_ffi_d.AnyType.get(context=self.ctx)
             ffi_result_type = tvm_ffi_d.ResultType.get(abi_result_type)
             ffi_type: ir.FunctionType = ir.FunctionType.get(
-                param_types, [ffi_result_type]
+                param_types, [abi_result_type]
             )
 
         tvm_ffi_name: Final[str] = f"{self.fn.__name__}_{index}"
@@ -386,7 +386,9 @@ class TridentGraphModule:
                         terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
                     terminator = tvm_ffi_d.MonadYieldOp(branch.results)
                     terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                terminator = tvm_ffi_d.ReturnOp(guards.outputs)
+                unpacked = tvm_ffi_d.MonadUnpackOp(guards.outputs[0])
+                success = tvm_ffi_d.to(unpacked.success)
+                terminator = tvm_ffi_d.ReturnOp(success, unpacked.value)
                 terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
 
         self._sub_modules.append(module)

@@ -1,20 +1,125 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
-// RUN: trident-core-opt %s --materialize-tvm-ffi-cleanup --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --materialize-tvm-ffi-cleanup --materialize-tvm-ffi-cleanup --verify-each | FileCheck %s
+
+// CHECK-LABEL:   func.func @aliases() -> !tvm_ffi.any {
+// CHECK:           %[[EXCEPTION_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:           %[[EXCEPTION_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:           %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[EXCEPTION_0]] : !tvm_ffi.exception -> !tvm_ffi.any
+// CHECK:           tvm_ffi.ObjectIncRef %[[UPCAST_0]] : !tvm_ffi.any
+// CHECK:           tvm_ffi.ObjectDecRef %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:           tvm_ffi.ObjectDecRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:           return %[[UPCAST_0]] : !tvm_ffi.any
+// CHECK-LABEL:   func.func @container_results(
+// CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.array) {
+// CHECK:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = arith.constant 0 : i64
+// CHECK:           %[[TO_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.to %[[CONSTANT_0]] : i64 -> !tvm_ffi.int
+// CHECK:           %[[VAL_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem" : !tvm_ffi.object
+// CHECK:           %[[VAL_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_0]](%[[ARG0]], %[[TO_0]]) : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.tensor
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_0]] : !tvm_ffi.object
+// CHECK:           %[[CONSTANT_1:[a-zA-Z0-9_$.-]+]] = arith.constant 1 : i64
+// CHECK:           %[[TO_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.to %[[CONSTANT_1]] : i64 -> !tvm_ffi.int
+// CHECK:           %[[VAL_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem" : !tvm_ffi.object
+// CHECK:           %[[VAL_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_2]](%[[ARG0]], %[[TO_1]]) : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.tensor
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_2]] : !tvm_ffi.object
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_3]] : !tvm_ffi.tensor
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_1]] : !tvm_ffi.tensor
+// CHECK:           return
+// CHECK-LABEL:   func.func @continuation(
+// CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.array) -> !tvm_ffi.c.array {
+// CHECK:           %[[CONSTANT_1:[a-zA-Z0-9_$.-]+]] = arith.constant 0 : i64
+// CHECK:           %[[TO_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.to %[[CONSTANT_1]] : i64 -> !tvm_ffi.int
+// CHECK:           %[[VAL_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem" : !tvm_ffi.object
+// CHECK:           %[[VAL_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_0]](%[[ARG0]], %[[TO_0]]) : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.bool
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_0]] : !tvm_ffi.object
+// CHECK:           %[[CONSTANT_2:[a-zA-Z0-9_$.-]+]] = arith.constant 1 : i64
+// CHECK:           %[[TO_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.to %[[CONSTANT_2]] : i64 -> !tvm_ffi.int
+// CHECK:           %[[VAL_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem" : !tvm_ffi.object
+// CHECK:           %[[VAL_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_2]](%[[ARG0]], %[[TO_1]]) : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.any
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_2]] : !tvm_ffi.object
+// CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[VAL_1]] : !tvm_ffi.bool -> i1
+// CHECK:           %[[IF_0:[a-zA-Z0-9_$.-]+]] = scf.if %[[GET_0]] -> (!tvm_ffi.c.array) {
+// CHECK:             %[[DOWNCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.downcast %[[VAL_3]] : !tvm_ffi.any -> !tvm_ffi.tensor
+// CHECK:             %[[EXCEPTION_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:             %[[CONSTANT_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.none
+// CHECK:             %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[CONSTANT_3]] : !tvm_ffi.none -> !tvm_ffi.any
+// CHECK:             %[[CONSTANT_4:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// CHECK:             %[[VAL_4:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
+// CHECK:             %[[VAL_5:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_4]](%[[CONSTANT_4]], %[[UPCAST_0]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.c.array
+// CHECK:             tvm_ffi.ObjectDecRef %[[VAL_4]] : !tvm_ffi.object
+// CHECK:             tvm_ffi.ObjectDecRef %[[UPCAST_0]] : !tvm_ffi.any
+// CHECK:             tvm_ffi.ObjectIncRef %[[VAL_5]] : !tvm_ffi.c.array
+// CHECK:             tvm_ffi.ObjectDecRef %[[VAL_5]] : !tvm_ffi.c.array
+// CHECK:             tvm_ffi.ObjectDecRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:             scf.yield %[[VAL_5]] : !tvm_ffi.c.array
+// CHECK:           } else {
+// CHECK:             %[[CONSTANT_5:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.none
+// CHECK:             %[[CONSTANT_6:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool false
+// CHECK:             %[[UPCAST_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[CONSTANT_5]] : !tvm_ffi.none -> !tvm_ffi.any
+// CHECK:             %[[VAL_6:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
+// CHECK:             %[[VAL_7:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_6]](%[[CONSTANT_6]], %[[UPCAST_1]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.c.array
+// CHECK:             tvm_ffi.ObjectDecRef %[[VAL_6]] : !tvm_ffi.object
+// CHECK:             tvm_ffi.ObjectIncRef %[[VAL_7]] : !tvm_ffi.c.array
+// CHECK:             tvm_ffi.ObjectDecRef %[[VAL_7]] : !tvm_ffi.c.array
+// CHECK:             scf.yield %[[VAL_7]] : !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectIncRef %[[IF_0]] : !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectDecRef %[[IF_0]] : !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_3]] : !tvm_ffi.any
+// CHECK:           return %[[IF_0]] : !tvm_ffi.c.array
+// CHECK-LABEL:   func.func @independent_results() {
+// CHECK:           %[[VAL_0:[a-zA-Z0-9_$.-]+]]:2 = call @produce() : () -> (!tvm_ffi.c.array, !tvm_ffi.c.array)
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_0]]#1 : !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_0]]#0 : !tvm_ffi.c.array
+// CHECK:           return
+// CHECK-LABEL:   func.func @native_handles() {
+// CHECK:           %[[VAL_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
+// CHECK:           %[[VAL_1:[a-zA-Z0-9_$.-]+]] = call @produce_handle() : () -> !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_1]] : !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_0]] : !tvm_ffi.object
+// CHECK:           return
+// CHECK-LABEL:   func.func @nested(
+// CHECK-SAME:                      %[[ARG0:[a-zA-Z0-9_$.-]+]]: i1) {
+// CHECK:           %[[EXCEPTION_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:           scf.if %[[ARG0]] {
+// CHECK:             %[[EXCEPTION_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectIncRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectDecRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectDecRef %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:           } else {
+// CHECK:             %[[EXCEPTION_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectDecRef %[[EXCEPTION_2]] : !tvm_ffi.exception
+// CHECK:           tvm_ffi.ObjectDecRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:           return
+// CHECK-LABEL:   func.func @region_output(
+// CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: i1) {
+// CHECK:           %[[IF_0:[a-zA-Z0-9_$.-]+]] = scf.if %[[ARG0]] -> (!tvm_ffi.exception) {
+// CHECK:             %[[EXCEPTION_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectIncRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectDecRef %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:             scf.yield %[[EXCEPTION_0]] : !tvm_ffi.exception
+// CHECK:           } else {
+// CHECK:             %[[EXCEPTION_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectIncRef %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:             tvm_ffi.ObjectDecRef %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:             scf.yield %[[EXCEPTION_1]] : !tvm_ffi.exception
+// CHECK:           tvm_ffi.ObjectDecRef %[[IF_0]] : !tvm_ffi.exception
+// CHECK:           return
+// CHECK-LABEL:   func.func @semantic_container() {
+// CHECK:           %[[VAL_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
+// CHECK:           %[[VAL_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.FunctionCall %[[VAL_0]]() : () -> !tvm_ffi.c.array
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_0]] : !tvm_ffi.object
+// CHECK:           tvm_ffi.ObjectDecRef %[[VAL_1]] : !tvm_ffi.c.array
+// CHECK:           return
+
+
+
+
+
 
 // Retain the exported alias before releasing local references in reverse order.
 // Unmarked references are unmanaged by this pass.
-// CHECK-LABEL: func.func @aliases(
-// CHECK: %[[FIRST:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK: %[[SECOND:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK: %[[UNMANAGED:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK: %[[ALIAS:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[FIRST]]
-// CHECK: tvm_ffi.ObjectIncRef %[[ALIAS]]
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[SECOND]]
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FIRST]]
-// CHECK-NEXT: return %[[ALIAS]]
 func.func @aliases() -> !tvm_ffi.any {
   %first = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup} : !tvm_ffi.exception
   %second = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup} : !tvm_ffi.exception
@@ -23,27 +128,12 @@ func.func @aliases() -> !tvm_ffi.any {
   return {tvm_ffi.retain} %alias : !tvm_ffi.any
 }
 
-// CHECK-LABEL: func.func @container_results(
-// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor>
-// CHECK: %[[ELEMENTS:[a-zA-Z0-9_]+]]:2 = tvm_ffi.tuple.unconstruct %[[INPUT]]
-// CHECK: tvm_ffi.ObjectDecRef %[[ELEMENTS]]#1
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[ELEMENTS]]#0
-// CHECK-NEXT: return
 func.func @container_results(%input: !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor>) {
   %elements:2 = tvm_ffi.tuple.unconstruct %input {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor>) -> (!tvm_ffi.tensor, !tvm_ffi.tensor)
   return {tvm_ffi.retain}
 }
 
-// CHECK-LABEL: tvm_ffi.func @continuation(
-// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.tensor>
-// CHECK: %[[OUTPUT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.bind %[[INPUT]]
-// CHECK: ^bb0(%[[BORROWED:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor):
-// CHECK: %[[LOCAL:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK: %[[UNIT:[a-zA-Z0-9_]+]] = tvm_ffi.monad.pure
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[LOCAL]]
-// CHECK-NEXT: tvm_ffi.monad.yield %[[UNIT]]
-// CHECK: tvm_ffi.return %[[OUTPUT]]
-tvm_ffi.func @continuation(%input: !tvm_ffi.monad.result<!tvm_ffi.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+func.func @continuation(%input: !tvm_ffi.monad.result<!tvm_ffi.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
   %output = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
   ^bb0(%borrowed: !tvm_ffi.tensor):
     %local = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup} : !tvm_ffi.exception
@@ -51,21 +141,10 @@ tvm_ffi.func @continuation(%input: !tvm_ffi.monad.result<!tvm_ffi.tensor>) -> !t
     %unit = tvm_ffi.monad.pure %none {tvm_ffi.cleanup} : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     tvm_ffi.monad.yield {tvm_ffi.retain} %unit : !tvm_ffi.monad.result<!tvm_ffi.none>
   } {tvm_ffi.cleanup}
-  tvm_ffi.return {tvm_ffi.retain} %output : !tvm_ffi.monad.result<!tvm_ffi.none>
+  return {tvm_ffi.retain} %output : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
 
 // Each Result has its own success condition, including partial failures.
-// CHECK-LABEL: func.func @independent_results(
-// CHECK: %[[RESULTS:[a-zA-Z0-9_]+]]:2 = call @produce
-// CHECK: %[[PAYLOAD1_OK:[a-zA-Z0-9_]+]], %[[PAYLOAD1:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[RESULTS]]#1
-// CHECK-NEXT: scf.if %[[PAYLOAD1_OK]] {
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[PAYLOAD1]]
-// CHECK-NEXT: }
-// CHECK-NEXT: %[[PAYLOAD0_OK:[a-zA-Z0-9_]+]], %[[PAYLOAD0:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[RESULTS]]#0
-// CHECK-NEXT: scf.if %[[PAYLOAD0_OK]] {
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[PAYLOAD0]]
-// CHECK-NEXT: }
-// CHECK-NEXT: return
 func.func @independent_results() {
   %results:2 = call @produce() {tvm_ffi.cleanup} : () -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>)
   return {tvm_ffi.retain}
@@ -73,15 +152,6 @@ func.func @independent_results() {
 func.func private @produce() -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>)
 
 // Native handle Results retain their payload types when unpacked for cleanup.
-// CHECK-LABEL: func.func @native_handles(
-// CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal
-// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = call @produce_handle
-// CHECK: %[[PAYLOAD_OK:[a-zA-Z0-9_]+]], %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[RESULT]]
-// CHECK-NEXT: scf.if %[[PAYLOAD_OK]] {
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[PAYLOAD]] : !tvm_ffi.function
-// CHECK-NEXT: }
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[HANDLE]] : !tvm_ffi.object
-// CHECK-NEXT: return
 func.func @native_handles() {
   %handle = tvm_ffi.FunctionGetGlobal "ffi.Array" {tvm_ffi.cleanup} : !tvm_ffi.object
   %result = call @produce_handle() {tvm_ffi.cleanup} : () -> !tvm_ffi.monad.result<!tvm_ffi.function>
@@ -91,20 +161,6 @@ func.func private @produce_handle() -> !tvm_ffi.monad.result<!tvm_ffi.function>
 
 
 // Child scopes borrow captures; cleanup for child locals precedes their yield.
-// CHECK-LABEL: func.func @nested(
-// CHECK-SAME: %[[PREDICATE:[a-zA-Z0-9_]+]]: i1
-// CHECK: %[[OUTER:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK: scf.if %[[PREDICATE]] {
-// CHECK: %[[INNER:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK: tvm_ffi.ObjectIncRef %[[OUTER]]
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OUTER]]
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[INNER]]
-// CHECK-NEXT: } else {
-// CHECK: %[[OTHER:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OTHER]]
-// CHECK-NEXT: }
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OUTER]]
-// CHECK-NEXT: return
 func.func @nested(%predicate: i1) {
   %outer = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup} : !tvm_ffi.exception
   scf.if %predicate {
@@ -118,20 +174,6 @@ func.func @nested(%predicate: i1) {
 }
 
 // Parent results own independent references retained before child cleanup.
-// CHECK-LABEL: func.func @region_output(
-// CHECK-SAME: %[[PREDICATE:[a-zA-Z0-9_]+]]: i1
-// CHECK: %[[OUTPUT:[a-zA-Z0-9_]+]] = scf.if %[[PREDICATE]]
-// CHECK: %[[THEN:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[THEN]]
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[THEN]]
-// CHECK-NEXT: scf.yield %[[THEN]]
-// CHECK: } else {
-// CHECK: %[[ELSE:[a-zA-Z0-9_]+]] = tvm_ffi.exception
-// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[ELSE]]
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[ELSE]]
-// CHECK-NEXT: scf.yield %[[ELSE]]
-// CHECK: tvm_ffi.ObjectDecRef %[[OUTPUT]]
-// CHECK-NEXT: return
 func.func @region_output(%predicate: i1) {
   %output = scf.if %predicate -> !tvm_ffi.exception {
     %then = tvm_ffi.exception "GuardMatch" {tvm_ffi.cleanup} : !tvm_ffi.exception
@@ -144,11 +186,6 @@ func.func @region_output(%predicate: i1) {
 }
 
 // Semantic container references are deferred until decomposition.
-// CHECK-LABEL: func.func @semantic_container(
-// CHECK: %[[TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.tuple.construct
-// CHECK: %[[NONE:[a-zA-Z0-9_]+]] = tvm_ffi.constant.none
-// CHECK-NOT: tvm_ffi.ObjectDecRef
-// CHECK-NEXT: return
 func.func @semantic_container() {
   %tuple = tvm_ffi.tuple.construct() {tvm_ffi.cleanup} : () -> !tvm_ffi.tuple<>
   %none = tvm_ffi.constant.none

@@ -14,7 +14,7 @@
 // and preserve-format clones through the public frontend.
 
 // CHECK-LABEL: llvm.func @clone(
-// CHECK-SAME: %[[ARG0:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[OUTPUT_SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 {
+// CHECK-SAME: %[[ARG0:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[OUTPUT_SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 attributes {emit_tvm_ffi_abi} {
 // The callee is resolved once at load time, so the dispatch reads the cached
 // handle rather than calling TVMFFIFunctionGetGlobal per invocation. The
 // module owns the cached reference.
@@ -31,8 +31,7 @@
 // CHECK: %[[RET:[a-zA-Z0-9_]+]] = llvm.load %[[RET_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // The frontend cleanup marker becomes a release before exporting the payload.
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
-// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = llvm.select %[[SUCCESS:[a-zA-Z0-9_]+]], %[[RET]], %[[NONE:[a-zA-Z0-9_]+]]
-// CHECK: llvm.store %[[PAYLOAD]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
+// CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 // CHECK-LABEL: llvm.func @__tvm_ffi_clone(
 // CHECK-SAME: %[[WRAP_CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAP_ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAP_NARGS:[a-zA-Z0-9_]+]]: i32, %[[WRAP_RESULT:[a-zA-Z0-9_]+]]: !llvm.ptr)
@@ -41,13 +40,13 @@
 // CHECK: %[[WRAP_RET:[a-zA-Z0-9_]+]] = llvm.load %[[WRAP_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: llvm.store %[[WRAP_RET]], %[[WRAP_RESULT]]
 
-tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor> attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
   %memory_format = tvm_ffi.constant.int 0
   %clone_handle = tvm_ffi.FunctionGetGlobal "trident.aten.clone" {tvm_ffi.cleanup} : !tvm_ffi.object
   %clone = tvm_ffi.FunctionCall %clone_handle(%arg0, %memory_format) {tvm_ffi.cleanup} : (!tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.tensor
 
-  // Retain the payload for Result construction; cleanup retains the export.
-  tvm_ffi.ObjectIncRef %clone : !tvm_ffi.tensor
-  %returned = tvm_ffi.monad.pure %clone {tvm_ffi.cleanup} : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
-  tvm_ffi.return {tvm_ffi.retain} %returned : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  // The marked return retains its payload before local cleanup.
+  %return_value_1 = tvm_ffi.upcast %clone : !tvm_ffi.tensor -> !tvm_ffi.any
+  %return_flag_1 = tvm_ffi.constant.bool true
+  tvm_ffi.return {tvm_ffi.retain} %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }

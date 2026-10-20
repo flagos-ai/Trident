@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "trident/core/Dialect/TVMFFI/Transforms/MaterializeOwnershipMark.h" // NOLINT(misc-include-cleaner)
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h" // NOLINT(misc-include-cleaner)
+#include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIOps.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <llvm/ADT/STLExtras.h>
@@ -28,13 +28,7 @@ namespace trident::tvm_ffi {
 
 namespace {
 
-constexpr llvm::StringLiteral cleanupAttributeName = "tvm_ffi.cleanup";
-constexpr llvm::StringLiteral retainAttributeName = "tvm_ffi.retain";
-
 bool needsReference(mlir::Type type) {
-  if (ResultType const result = mlir::dyn_cast<ResultType>(type)) {
-    type = result.getPayloadType();
-  }
   return type && (mlir::isa<ObjectType>(type) ||
                   type.hasTrait<mlir::TypeTrait::HasObject>() ||
                   type.hasTrait<mlir::TypeTrait::Contains>());
@@ -45,13 +39,6 @@ void adjustReference(mlir::OpBuilder &builder, mlir::Value value) {
   if (needsReference(value.getType())) {
     mlir::Location const loc = value.getLoc();
     mlir::OpBuilder::InsertionGuard const guard(builder);
-    if (mlir::isa<ResultType>(value.getType())) {
-      MonadUnpackOp unpack = MonadUnpackOp::create(builder, loc, value);
-      mlir::scf::IfOp branch = mlir::scf::IfOp::create(
-          builder, loc, mlir::TypeRange{}, unpack.getSuccess(), false);
-      builder.setInsertionPoint(branch.thenBlock()->getTerminator());
-      value = unpack.getValue();
-    }
     Op::create(builder, loc, value);
   }
 }
@@ -66,23 +53,21 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *operation,
                   mlir::PatternRewriter &rewriter) const final {
-    if (!operation->hasAttr(retainAttributeName)) {
+    if (!operation->hasAttr(kRetainAttributeName)) {
       return mlir::failure();
     }
-    if (!mlir::isa<MonadPureOp>(operation)) {
-      mlir::Region *region = operation->getParentRegion();
-      if (!region || !region->hasOneBlock() ||
-          !mlir::isa<mlir::func::ReturnOp, ReturnOp, MonadYieldOp,
-                     mlir::scf::YieldOp>(operation)) {
-        return mlir::failure();
-      }
+    mlir::Region *region = operation->getParentRegion();
+    if (!region || !region->hasOneBlock() ||
+        !mlir::isa<mlir::func::ReturnOp, ReturnOp, mlir::scf::YieldOp>(
+            operation)) {
+      return mlir::failure();
     }
     rewriter.setInsertionPoint(operation);
     for (mlir::Value const value : operation->getOperands()) {
       adjustReference<ObjectIncRefOp>(rewriter, value);
     }
     rewriter.modifyOpInPlace(
-        operation, [&] { operation->removeAttr(retainAttributeName); });
+        operation, [&] { operation->removeAttr(kRetainAttributeName); });
     return mlir::success();
   }
 };
@@ -104,12 +89,12 @@ public:
     rewriter.setInsertionPoint(operation);
     bool changed = false;
     for (mlir::Operation &local : llvm::reverse(*operation->getBlock())) {
-      if (local.hasAttr(cleanupAttributeName)) {
+      if (local.hasAttr(kCleanupAttributeName)) {
         for (mlir::Value const value : llvm::reverse(local.getResults())) {
           adjustReference<ObjectDecRefOp>(rewriter, value);
         }
         rewriter.modifyOpInPlace(
-            &local, [&] { local.removeAttr(cleanupAttributeName); });
+            &local, [&] { local.removeAttr(kCleanupAttributeName); });
         changed = true;
       }
     }

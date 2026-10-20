@@ -1,6 +1,7 @@
 add_mlir_library(
   TVMFFITransforms
   DecomposeTVMFFI.cc
+  LowerTVMFFIMonad.cc
   MaterializeOwnershipMark.cc
   DEPENDS
   MLIRTVMFFITransformsPassIncGen
@@ -14,7 +15,6 @@ add_mlir_library(
   MLIRFuncDialect
   MLIRFuncTransforms
   MLIRIR
-  MLIRLLVMDialect
   MLIRPass
   MLIRSCFDialect
   MLIRSCFTransforms

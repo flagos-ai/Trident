@@ -19,15 +19,17 @@ Test directories mirror their owning implementation directories under `core/lib`
   `-verify-diagnostics`.
 - `Dialect/<Dialect>/Transforms/` covers dialect transformation passes.
 
-`Dialect/TVMFFI/Transforms/` covers `decompose-tvm-ffi`, which expands
-binds throughout the module into unpack and SCF branches while retaining Result
-types.
-`Conversion/TVMFFIToLLVM/result.mlir` covers lowering Results to single LLVM
-structs, construction, unpacking, failures, function boundaries and CFG values.
-Both the dedicated conversion pass and the generic ConvertToLLVM interface
-share this implementation. Tests consuming binds run decomposition first.
-`Conversion/Pipeline/checked-continuation.mlir` covers their integration with
-checked calls and the full lowering pipeline.
+`Dialect/TVMFFI/Transforms/` covers `lower-tvm-ffi-monad`, which converts
+Results to Bool/Any tuples and binds to SCF branches. `monad.call` becomes a
+two-result `call` followed by explicit tuple construction and payload release.
+`decompose-tvm-ffi` preserves local calls and erases semantic containers. `TVMFFIToLLVM` expands local calls through the packed ABI.
+`lower-monad-call.mlir` checks the monadic interface boundary;
+`decompose-call.mlir` checks call preservation, container type conversion and
+attributes. `Conversion/TVMFFIToLLVM/call.mlir` checks packed call status,
+output-slot gating and the absence of runtime Array construction; `call-invalid.mlir` checks
+missing decomposition.
+`Conversion/Pipeline/checked-continuation.mlir` covers integration with checked
+calls and the full lowering pipeline. No Result types reach LLVM conversion.
 
 Keep each file focused on one operation family or lowering concern. Use
 descriptive filenames, `CHECK-LABEL` for each function, and named FileCheck
@@ -57,8 +59,10 @@ verifier tests retain argument and yield matching checks for these cases.
 Python ownership tests cover explicit operation cleanup, explicit exports and
 independent Bind input/output counts. `explicit-cleanup.mlir` checks UnitAttr
 markers, mixed results and transfers;
-`decompose-cleanup.mlir` checks that decomposition marks independent call
-references before cleanup without duplicating temporary-handle releases.
+`decompose-cleanup.mlir` checks explicit cleanup propagation to independent call
+references without duplicating temporary-handle releases.
+`decompose-explicit-cleanup.mlir` checks marked and unmarked construction,
+extraction and calls, including empty tuples and scalar results.
 `deferred-container-ownership.mlir` checks borrowed CArray exports, independent
 nested extraction, repeated borrowed pure payload retains and idempotence through
 decomposition and cleanup without a second bind expansion.
@@ -83,6 +87,6 @@ function exit. CUDA e2e allocation checks enforce cached-execution leak freedom.
 Python tests never load these files as executable fixtures. Lit regressions
 can be minimized or renamed independently of Python test setup.
 
-TVM FFI functions declare exactly one Result and return that Result through
-`tvm_ffi.return`. Return coverage includes None and tuple payloads, output-slot
+TVM FFI functions declare exactly one C ABI payload type and return a boxed
+success flag and Any payload through `tvm_ffi.return`. Return coverage includes None and tuple payloads, output-slot
 status gating. Result reference operations access payloads only in successful branches.

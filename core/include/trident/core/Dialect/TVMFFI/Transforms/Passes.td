@@ -8,15 +8,32 @@
 include "mlir/Pass/PassBase.td"
 
 def DecomposeTVMFFI : Pass<"decompose-tvm-ffi", "mlir::ModuleOp"> {
-  let summary = "Erase semantic containers and decompose TVM FFI binds";
+  let summary = "Erase semantic container types";
   let description = [{
-    Convert semantic containers to CArray and mark independently owned
-    construction and extraction results with tvm_ffi.cleanup. Run before
+    Preserve local calls while converting semantic containers to CArray.
+    Propagate explicit tvm_ffi.cleanup attributes from construction and extraction
+    operations to their runtime calls without adding cleanup responsibility. Run before
     materialize-tvm-ffi-cleanup.
   }];
   let dependentDialects = [
-    "mlir::LLVM::LLVMDialect", "mlir::arith::ArithDialect",
-    "mlir::cf::ControlFlowDialect", "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::cf::ControlFlowDialect", "mlir::func::FuncDialect",
+    "mlir::scf::SCFDialect",
+    "trident::tvm_ffi::TVMFFIDialect"
+  ];
+}
+
+def LowerTVMFFIMonad : Pass<"lower-tvm-ffi-monad", "mlir::ModuleOp"> {
+  let summary = "Lower Results to semantic Bool/Any tuples";
+  let description = [{
+    Lower monadic calls to separate Bool/Any results followed by explicit tuple
+    construction, and expand monadic control flow, converting every Result to
+    tuple<bool, any>. Run after kernel lowering and before container decomposition
+    and cleanup. No monadic operations or Result types remain.
+  }];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
+    "mlir::func::FuncDialect", "mlir::scf::SCFDialect",
     "trident::tvm_ffi::TVMFFIDialect"
   ];
 }

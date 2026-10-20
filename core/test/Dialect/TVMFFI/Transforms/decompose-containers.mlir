@@ -1,8 +1,8 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --decompose-tvm-ffi | FileCheck %s --implicit-check-not='!tvm_ffi.array<' --implicit-check-not='!tvm_ffi.tuple<' --implicit-check-not='tvm_ffi.array.' --implicit-check-not='tvm_ffi.tuple.' --implicit-check-not='tvm_ffi.monad.'
-// RUN: trident-core-opt %s | trident-core-opt --decompose-tvm-ffi | FileCheck %s --implicit-check-not='!tvm_ffi.array<' --implicit-check-not='!tvm_ffi.tuple<' --implicit-check-not='tvm_ffi.array.' --implicit-check-not='tvm_ffi.tuple.' --implicit-check-not='tvm_ffi.monad.'
+// RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi | FileCheck %s --implicit-check-not='!tvm_ffi.array<' --implicit-check-not='!tvm_ffi.tuple<' --implicit-check-not='tvm_ffi.array.' --implicit-check-not='tvm_ffi.tuple.' --implicit-check-not='tvm_ffi.monad.'
+// RUN: trident-core-opt %s | trident-core-opt --lower-tvm-ffi-monad --decompose-tvm-ffi | FileCheck %s --implicit-check-not='!tvm_ffi.array<' --implicit-check-not='!tvm_ffi.tuple<' --implicit-check-not='tvm_ffi.array.' --implicit-check-not='tvm_ffi.tuple.' --implicit-check-not='tvm_ffi.monad.'
 
 // CHECK-LABEL: func.func @container_attributes(
 // CHECK-SAME: attributes {test.types = [!tvm_ffi.c.array, {nested = !tvm_ffi.c.array}]}
@@ -16,7 +16,7 @@ func.func @container_attributes() attributes {test.types = [!tvm_ffi.array<!tvm_
 // CHECK: %[[CALLED:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]](%[[VALUE]]) {tvm_ffi.cleanup} : (!tvm_ffi.int) -> !tvm_ffi.c.array
 // CHECK: return %[[CALLED]]
 func.func @create_array(%value: !tvm_ffi.int) -> !tvm_ffi.array<!tvm_ffi.int> {
-  %result = tvm_ffi.array.create(%value) : (!tvm_ffi.int) -> !tvm_ffi.array<!tvm_ffi.int>
+  %result = tvm_ffi.array.create(%value) {tvm_ffi.cleanup} : (!tvm_ffi.int) -> !tvm_ffi.array<!tvm_ffi.int>
   return %result : !tvm_ffi.array<!tvm_ffi.int>
 }
 
@@ -26,7 +26,7 @@ func.func @create_array(%value: !tvm_ffi.int) -> !tvm_ffi.array<!tvm_ffi.int> {
 // CHECK: %[[EXCEPTION_ARRAY:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[EXCEPTION_HANDLE]](%[[EXCEPTION]]) {tvm_ffi.cleanup} : (!tvm_ffi.exception) -> !tvm_ffi.c.array
 // CHECK: return %[[EXCEPTION_ARRAY]]
 func.func @create_exception(%exception: !tvm_ffi.exception) -> !tvm_ffi.array<!tvm_ffi.exception> {
-  %result = tvm_ffi.array.create(%exception) : (!tvm_ffi.exception) -> !tvm_ffi.array<!tvm_ffi.exception>
+  %result = tvm_ffi.array.create(%exception) {tvm_ffi.cleanup} : (!tvm_ffi.exception) -> !tvm_ffi.array<!tvm_ffi.exception>
   return %result : !tvm_ffi.array<!tvm_ffi.exception>
 }
 // CHECK-LABEL: func.func @empty_tuple(
@@ -34,8 +34,8 @@ func.func @create_exception(%exception: !tvm_ffi.exception) -> !tvm_ffi.array<!t
 // CHECK: %[[EMPTY:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[EMPTY_HANDLE]]() {tvm_ffi.cleanup} : () -> !tvm_ffi.c.array
 // CHECK: return %[[EMPTY]] : !tvm_ffi.c.array
 func.func @empty_tuple() -> !tvm_ffi.tuple<> {
-  %result = tvm_ffi.tuple.construct() : () -> !tvm_ffi.tuple<>
-  tvm_ffi.tuple.unconstruct %result : (!tvm_ffi.tuple<>) -> ()
+  %result = tvm_ffi.tuple.construct() {tvm_ffi.cleanup} : () -> !tvm_ffi.tuple<>
+  tvm_ffi.tuple.unconstruct %result {tvm_ffi.cleanup} : (!tvm_ffi.tuple<>) -> ()
   return %result : !tvm_ffi.tuple<>
 }
 
@@ -46,7 +46,7 @@ func.func @empty_tuple() -> !tvm_ffi.tuple<> {
 // CHECK: %[[ITEM:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[GET]](%[[ARRAY]], %[[BOXED]]) {tvm_ffi.cleanup} : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.int
 // CHECK: return %[[ITEM]]
 func.func @get_array(%array: !tvm_ffi.array<!tvm_ffi.int>, %index: i64) -> !tvm_ffi.int {
-  %result = tvm_ffi.array.get %array[%index] : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.int
+  %result = tvm_ffi.array.get %array[%index] {tvm_ffi.cleanup} : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.int
   return %result : !tvm_ffi.int
 }
 
@@ -98,7 +98,7 @@ func.func @regions(%array: !tvm_ffi.array<!tvm_ffi.int>, %tuple: !tvm_ffi.tuple<
 // CHECK: %[[LENGTH:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[SIZE]](%[[SIZED]]) {tvm_ffi.cleanup} : (!tvm_ffi.c.array) -> !tvm_ffi.int
 // CHECK: return %[[LENGTH]]
 func.func @size_array(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.int {
-  %result = tvm_ffi.array.size %array : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.int
+  %result = tvm_ffi.array.size %array {tvm_ffi.cleanup} : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.int
   return %result : !tvm_ffi.int
 }
 
@@ -114,6 +114,6 @@ func.func @size_array(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.int {
 // CHECK: %[[SECOND:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[SECOND_GET]](%[[TUPLE]], %[[SECOND_OFFSET]]) {tvm_ffi.cleanup} : (!tvm_ffi.c.array, !tvm_ffi.int) -> !tvm_ffi.int
 // CHECK: return %[[NESTED]], %[[SECOND]] : !tvm_ffi.c.array, !tvm_ffi.int
 func.func @tuple_ops(%tuple: !tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.int>) -> (!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.int) {
-  %nested, %integer = tvm_ffi.tuple.unconstruct %tuple : (!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.int>) -> (!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.int)
+  %nested, %integer = tvm_ffi.tuple.unconstruct %tuple {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.int>) -> (!tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.int)
   return %nested, %integer : !tvm_ffi.array<!tvm_ffi.int>, !tvm_ffi.int
 }

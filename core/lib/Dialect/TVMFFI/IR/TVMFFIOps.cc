@@ -14,6 +14,8 @@
 #include <llvm/ADT/SmallVectorExtras.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/TypeSwitch.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
@@ -24,6 +26,7 @@
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Region.h>
+#include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
@@ -31,6 +34,14 @@
 #include <optional>
 
 namespace trident::tvm_ffi {
+
+mlir::OpFoldResult DowncastOp::fold(FoldAdaptor) {
+  return getValue().getType() == getType() ? getValue() : mlir::OpFoldResult{};
+}
+
+mlir::OpFoldResult UpcastOp::fold(FoldAdaptor) {
+  return getValue().getType() == getType() ? getValue() : mlir::OpFoldResult{};
+}
 
 namespace {
 
@@ -75,8 +86,8 @@ mlir::LogicalResult FuncOp::verify() {
       visibility && *visibility != "public") {
     return emitOpError("must have public visibility");
   } else if (getResultTypes().size() != 1 ||
-             !mlir::isa<ResultType>(getResultTypes().front())) {
-    return emitOpError("function must return exactly one monadic Result; use a "
+             !mlir::isa<TVMFFICABIType>(getResultTypes().front())) {
+    return emitOpError("function must return exactly one C ABI value; use a "
                        "tuple for multiple values and None for no value");
   } else {
     return mlir::success();
@@ -256,10 +267,60 @@ mlir::LogicalResult MonadYieldOp::verify() {
   return mlir::success();
 }
 
-mlir::LogicalResult ReturnOp::verify() {
-  FuncOp function = mlir::cast<FuncOp>(getOperation()->getParentOp());
-  if (getOperandTypes() != function.getResultTypes()) {
-    return emitOpError("Result types must match the function results");
+namespace {
+
+template <typename OpTy> mlir::LogicalResult verifyLocalCallee(OpTy op) {
+  FuncOp function = mlir::SymbolTable::lookupNearestSymbolFrom<FuncOp>(
+      op.getOperation(), op.getCalleeAttr());
+  if (!function) {
+    return op.emitOpError("callee must resolve to a tvm_ffi.func");
+  }
+  if (op.getOperandTypes() != function.getArgumentTypes()) {
+    return op.emitOpError("operand types must match the callee arguments");
+  }
+  if (!function.getEmitTvmFfiAbi()) {
+    return op.emitOpError("callee must have emit_tvm_ffi_abi");
+  }
+  return mlir::success();
+}
+
+} // namespace
+
+mlir::LogicalResult CallOp::verify() {
+  // After function conversion the implementation has one output slot and an
+  // i32 status. Preserve the ABI marker so this boundary remains verifiable.
+  mlir::func::FuncOp lowered =
+      mlir::SymbolTable::lookupNearestSymbolFrom<mlir::func::FuncOp>(
+          getOperation(), getCalleeAttr());
+  if (lowered) {
+    mlir::FunctionType const signature = lowered.getFunctionType();
+    if (!lowered->hasAttr("emit_tvm_ffi_abi")) {
+      return emitOpError("callee must have emit_tvm_ffi_abi");
+    }
+    if (signature.getNumInputs() != getNumOperands() + 1 ||
+        !llvm::equal(signature.getInputs().drop_back(), getOperandTypes()) ||
+        !mlir::isa<mlir::LLVM::LLVMPointerType>(signature.getInputs().back()) ||
+        signature.getNumResults() != 1 ||
+        !signature.getResult(0).isSignlessInteger(32)) {
+      return emitOpError(
+          "operand types must match the lowered callee arguments");
+    }
+  } else if (mlir::failed(verifyLocalCallee(*this))) {
+    return mlir::failure();
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult MonadCallOp::verify() {
+  if (mlir::failed(verifyLocalCallee(*this))) {
+    return mlir::failure();
+  }
+  FuncOp function = mlir::SymbolTable::lookupNearestSymbolFrom<FuncOp>(
+      getOperation(), getCalleeAttr());
+  if (function.getResultTypes().size() != 1 ||
+      getResult().getType().getPayloadType() !=
+          function.getResultTypes().front()) {
+    return emitOpError("Result payload must match the callee result");
   }
   return mlir::success();
 }

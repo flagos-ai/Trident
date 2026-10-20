@@ -59,3 +59,31 @@ func.func @any_identity(%arg: !tvm_ffi.any) -> !tvm_ffi.any {
   return %result : !tvm_ffi.any
 }
 
+
+// CHECK-LABEL: func.func @downcast_function(
+// CHECK: tvm_ffi.downcast
+func.func @downcast_function(%arg: !tvm_ffi.any) {
+  %result = tvm_ffi.downcast %arg : !tvm_ffi.any -> !tvm_ffi.function
+  return
+}
+
+// CHECK-LABEL: func.func @downcast_function_union(
+// CHECK: tvm_ffi.downcast
+func.func @downcast_function_union(%arg: !tvm_ffi.any) {
+  %result = tvm_ffi.downcast %arg : !tvm_ffi.any -> !tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>
+  return
+}
+
+// CHECK-LABEL: func.func @upcast_function(
+// CHECK: tvm_ffi.upcast
+func.func @upcast_function(%arg: !tvm_ffi.function) {
+  %result = tvm_ffi.upcast %arg : !tvm_ffi.function -> !tvm_ffi.any
+  return
+}
+
+// CHECK-LABEL: func.func @upcast_function_union(
+// CHECK: tvm_ffi.upcast
+func.func @upcast_function_union(%arg: !tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>) {
+  %result = tvm_ffi.upcast %arg : !tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none> -> !tvm_ffi.any
+  return
+}

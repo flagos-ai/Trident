@@ -86,12 +86,15 @@ supported terminators are covered by Lit.
 `unit/test_importer.py` checks C ABI type spellings and Python type registration,
 semantic container bindings and construction, Result binding, payload type registration, parsed
 OpView payload access, CABI-only Result validation, shared boxed Result type inference and boundary
-boxing/widening, insertion-point restoration, empty argument construction,
+boxing/widening, owned string Result boundaries, insertion-point restoration, empty argument construction,
 explicit None positions and diagnostics for unsupported symbolic powers. The
 e2e suites cover public JIT execution, container reconstruction, conditional
 branches, symbolic shapes, specialization reuse, aliases and mutations. Container
 execution tests also return borrowed inputs and repeated resource outputs, then
 drop one alias and continue using another to check independent output references.
+`e2e/test_local_call.py` executes local packed calls through the complete
+lowering pipeline, covering direct and monadic success/failure, zero arguments
+and payload ownership with repeated CUDA tensor payloads.
 `e2e/test_kernel_launch.py` covers mutation-only Triton launches and their None
 Result payloads; container tests include empty containers and consecutive None
 outputs. Verifier diagnostics and Result lowering belong to the focused Lit
@@ -116,7 +119,7 @@ The following table maps the former flat test layout to current tests.
 | `test_frontend.py::test_argument_specialization` | `test/e2e/test_specialization.py::test_argument_specialization` | Explicit CUDA/CPU devices, unindexed CUDA execution, float32/float16/reused dtype. |
 | `test_frontend.py::test_cached_result_and_writeback` | `test/e2e/test_arange.py::test_cached_factory_result; test/e2e/test_add_.py::test_inplace_alias` | Packed Any tensor result and mutation writeback. |
 | `test_frontend.py::test_container_inputs_unpack` | `test/e2e/test_containers.py::test_container_inputs_unpack` | List, nested list/tuple and tuple inputs. |
-| `test_frontend.py::test_string_specialization` | `test/e2e/test_specialization.py::test_string_specialization` | Inline and long strings, results and specialization count. |
+| `test_frontend.py::test_string_specialization` | `test/e2e/test_specialization.py::test_string_specialization` | Empty strings, 7/8-byte boundaries, long strings, nested results and specialization count. |
 | `test_fx_importer.py::test_cond` | `test/e2e/test_cond.py::test_cond` | Both runtime predicate branches; sizes 3, 6 and 8. |
 | `test_fx_importer.py::test_dynamic_shapes` | `test/e2e/test_reshape.py::test_dynamic_shapes` | Sizes 6, 10 and 14 reuse one specialization; runtime size/floordiv/mul IR. |
 | `test_fx_importer.py::test_inplace_alias` | `test/e2e/test_add_.py::test_inplace_alias` | View return aliases input, with warmup and cached mutation writeback. |

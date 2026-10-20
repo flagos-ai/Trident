@@ -64,46 +64,24 @@ llvm::SmallVector<int32_t> getExpectedTypeIndices(mlir::Type type) {
 }
 
 mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
-                                mlir::ValueRange slots) {
+                                mlir::ValueRange slots,
+                                mlir::Type payloadType) {
   builder.setInsertionPoint(op);
-  mlir::Value ready =
-      mlir::arith::ConstantIntOp::create(builder, op.getLoc(), true, 1);
-  llvm::SmallVector<mlir::Value> payloads;
-  for (mlir::Value const value : op.getOperands()) {
-    tvm_ffi::MonadUnpackOp unpack =
-        tvm_ffi::MonadUnpackOp::create(builder, op.getLoc(), value);
-    ready = builder.createOrFold<mlir::arith::AndIOp>(op.getLoc(), ready,
-                                                      unpack.getSuccess());
-    payloads.push_back(unpack.getValue());
-  }
-  llvm::SmallVector<mlir::Type> const storageTypes = llvm::map_to_vector(
-      op.getOperands(), [&](mlir::Value result) -> mlir::Type {
-        mlir::Type const payload =
-            mlir::cast<tvm_ffi::ResultType>(result.getType()).getPayloadType();
-        if (mlir::isa<tvm_ffi::FunctionType>(payload)) {
-          return mlir::LLVM::LLVMPointerType::get(builder.getContext());
-        }
-        return tvm_ffi::TVMFFICABIType::getLLVMType(builder.getContext());
-      });
+  mlir::Value const ready = tvm_ffi::GetOp::create(
+      builder, op.getLoc(), builder.getI1Type(), op.getSuccess());
   mlir::scf::IfOp branch = mlir::scf::IfOp::create(
       builder, op.getLoc(), mlir::TypeRange{builder.getI32Type()}, ready, true);
   builder.setInsertionPointToStart(branch.thenBlock());
-  for (auto [payload, slot, type, result] :
-       llvm::zip_equal(payloads, slots, storageTypes, op.getOperands())) {
-    mlir::Value value = payload;
-    mlir::Type const semanticType =
-        mlir::cast<tvm_ffi::ResultType>(result.getType()).getPayloadType();
-    if (value.getType() != semanticType) {
-      value = tvm_ffi::DowncastOp::create(builder, op.getLoc(), semanticType,
-                                          value);
-    }
-    if (value.getType() != type) {
-      value = mlir::UnrealizedConversionCastOp::create(builder, op.getLoc(),
-                                                       type, value)
-                  .getResult(0);
-    }
-    mlir::LLVM::StoreOp::create(builder, op.getLoc(), value, slot);
-  }
+  mlir::Type const anyType =
+      tvm_ffi::TVMFFICABIType::getLLVMType(builder.getContext());
+  mlir::Value const checked = builder.createOrFold<tvm_ffi::DowncastOp>(
+      op.getLoc(), payloadType, op.getValue());
+  mlir::Value const payload = builder.createOrFold<tvm_ffi::UpcastOp>(
+      op.getLoc(), tvm_ffi::AnyType::get(builder.getContext()), checked);
+  mlir::Value const value = mlir::UnrealizedConversionCastOp::create(
+                                builder, op.getLoc(), anyType, payload)
+                                .getResult(0);
+  mlir::LLVM::StoreOp::create(builder, op.getLoc(), value, slots.front());
   mlir::Value const zero =
       mlir::arith::ConstantIntOp::create(builder, op.getLoc(), 0, 32);
   mlir::scf::YieldOp::create(builder, op.getLoc(), zero);
@@ -125,10 +103,7 @@ class ConvertTVMFFIToFuncPass final
     getOperation().walk([&](tvm_ffi::FuncOp tvmffiFuncOp) -> mlir::WalkResult {
       mlir::OpBuilder builder(tvmffiFuncOp);
       const mlir::FunctionType targetType = tvmffiFuncOp.getFunctionType();
-      llvm::SmallVector<mlir::Type> const payloadTypes = llvm::map_to_vector(
-          targetType.getResults(), [](mlir::Type result) -> mlir::Type {
-            return mlir::cast<tvm_ffi::ResultType>(result).getPayloadType();
-          });
+      llvm::SmallVector<mlir::Type> const payloadTypes(targetType.getResults());
       llvm::SmallVector<mlir::Type> argumentsTypes(targetType.getInputs());
       argumentsTypes.append(
           payloadTypes.size(),
@@ -138,6 +113,9 @@ class ConvertTVMFFIToFuncPass final
       mlir::func::FuncOp funcOp = mlir::func::FuncOp::create(
           builder, tvmffiFuncOp.getLoc(), tvmffiFuncOp.getSymName(),
           implementationType);
+      if (tvmffiFuncOp.getEmitTvmFfiAbi()) {
+        funcOp->setAttr("emit_tvm_ffi_abi", builder.getUnitAttr());
+      }
       if (tvmffiFuncOp.getSymVisibility()) {
         funcOp.setSymVisibilityAttr(tvmffiFuncOp.getSymVisibilityAttr());
       }
@@ -155,7 +133,8 @@ class ConvertTVMFFIToFuncPass final
           });
       const mlir::WalkResult returnConversionResult =
           funcOp.walk([&](tvm_ffi::ReturnOp returned) -> mlir::WalkResult {
-            if (mlir::failed(lowerReturn(returned, builder, slots))) {
+            if (mlir::failed(lowerReturn(returned, builder, slots,
+                                         payloadTypes.front()))) {
               return mlir::WalkResult::interrupt();
             }
             return mlir::WalkResult::advance();
@@ -200,7 +179,8 @@ class ConvertTVMFFIToFuncPass final
              llvm::enumerate(tvmffiFuncOp.getArgumentTypes())) {
           llvm::SmallVector<int32_t> const expected =
               getExpectedTypeIndices(type);
-          if (expected.empty()) {
+          if (expected.empty() && !mlir::isa<tvm_ffi::AnyType>(type)) {
+            tvmffiFuncOp.emitError("unsupported packed argument type ") << type;
             signalPassFailure();
             return mlir::WalkResult::interrupt();
           }
@@ -209,24 +189,30 @@ class ConvertTVMFFIToFuncPass final
               llvm::ArrayRef<mlir::LLVM::GEPArg>{static_cast<int32_t>(index)});
           const mlir::Value value = mlir::LLVM::LoadOp::create(
               builder, tvmffiFuncOp.getLoc(), llvmAnyTy, slot);
-          arguments.push_back(mlir::UnrealizedConversionCastOp::create(
-                                  builder, tvmffiFuncOp.getLoc(), type, value)
-                                  .getResult(0));
+          mlir::Type const argumentType =
+              mlir::isa<tvm_ffi::FunctionType>(type)
+                  ? mlir::Type(tvm_ffi::AnyType::get(context))
+                  : type;
+          arguments.push_back(
+              mlir::UnrealizedConversionCastOp::create(
+                  builder, tvmffiFuncOp.getLoc(), argumentType, value)
+                  .getResult(0));
+          if (expected.empty()) {
+            continue;
+          }
           const mlir::Value actual = mlir::LLVM::ExtractValueOp::create(
               builder, tvmffiFuncOp.getLoc(), i32Ty, value,
               llvm::ArrayRef<int64_t>{0});
-          mlir::Value condition;
+          mlir::Value condition = mlir::arith::ConstantIntOp::create(
+              builder, tvmffiFuncOp.getLoc(), 0, 1);
           for (int32_t const expectedIndex : expected) {
             mlir::Value const matches = mlir::LLVM::ICmpOp::create(
                 builder, tvmffiFuncOp.getLoc(), mlir::LLVM::ICmpPredicate::eq,
                 actual,
                 mlir::LLVM::ConstantOp::create(builder, tvmffiFuncOp.getLoc(),
                                                i32Ty, expectedIndex));
-            condition =
-                condition
-                    ? mlir::arith::OrIOp::create(builder, tvmffiFuncOp.getLoc(),
-                                                 condition, matches)
-                    : matches;
+            condition = mlir::arith::OrIOp::create(
+                builder, tvmffiFuncOp.getLoc(), condition, matches);
           }
           allTypesMatch = mlir::arith::AndIOp::create(
               builder, tvmffiFuncOp.getLoc(), allTypesMatch, condition);
@@ -236,9 +222,15 @@ class ConvertTVMFFIToFuncPass final
             mlir::TypeRange{builder.getI32Type()}, allTypesMatch,
             /*withElseRegion=*/true);
         builder.setInsertionPointToStart(guard.thenBlock());
+        for (auto [index, type] :
+             llvm::enumerate(tvmffiFuncOp.getArgumentTypes())) {
+          if (mlir::isa<tvm_ffi::FunctionType>(type)) {
+            arguments[index] = tvm_ffi::DowncastOp::create(
+                builder, tvmffiFuncOp.getLoc(), type, arguments[index]);
+          }
+        }
         if (!llvm::all_of(payloadTypes, [](mlir::Type type) -> bool {
-              return mlir::isa<tvm_ffi::TVMFFICABIType>(type) &&
-                     !mlir::isa<tvm_ffi::FunctionType>(type);
+              return mlir::isa<tvm_ffi::TVMFFICABIType>(type);
             })) {
           tvmffiFuncOp.emitError(
               "ABI return payloads must have a tagged TVM FFI ABI type");
