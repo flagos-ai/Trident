@@ -67,26 +67,32 @@ class SpecializationTest(unittest.TestCase):
     def test_string_specialization(self) -> None:
         @trident.jit
         def named(x: torch.Tensor, name: str):
-            return name, {"nested": [name, x + 1]}
+            return name, {
+                "nested": [name, x + 1, ("constant string longer than seven bytes",)]
+            }
+
+        names = (
+            "",
+            "1234567",
+            "12345678",
+            "a string longer than the inline ABI storage",
+            "你好，字符串",
+        )
 
         def check() -> None:
             x = torch.randn(4, device="cuda")
-            for name in (
-                "",
-                "x",
-                "1234567",
-                "12345678",
-                "a string longer than the inline ABI storage",
-            ):
-                first = named(x, name)
-                repeated = named(x, name)
-                self.assertEqual(first[0], name)
-                self.assertEqual(repeated[0], name)
-                self.assertEqual(first[1]["nested"][0], name)
-                self.assertEqual(repeated[1]["nested"][0], name)
-                torch.testing.assert_close(first[1]["nested"][1], x + 1)
-                torch.testing.assert_close(repeated[1]["nested"][1], x + 1)
-            self.assertEqual(len(named._sub_modules), 5)
+            for name in names:
+                for phase in ("first", "repeated"):
+                    with self.subTest(name=name, phase=phase):
+                        result = named(x, name)
+                        self.assertEqual(result[0], name)
+                        self.assertEqual(result[1]["nested"][0], name)
+                        torch.testing.assert_close(result[1]["nested"][1], x + 1)
+                        self.assertEqual(
+                            result[1]["nested"][2],
+                            ("constant string longer than seven bytes",),
+                        )
+            self.assertEqual(len(named._sub_modules), len(names))
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

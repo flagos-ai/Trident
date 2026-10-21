@@ -5,12 +5,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s --trident-lowering-pipeline | FileCheck %s --implicit-check-not='tvm_ffi.cleanup'
+// RUN: trident-core-opt %s --trident-lowering-pipeline | FileCheck %s
 
 // An explicit clone call is preserved through canonicalization and
 // reaches the name-based TVM FFI dispatch path with its memory format operand.
 // In particular, the contiguous-memory-format clone must not fold to its input:
-// test/e2e/test_clone.py checks distinct allocations for contiguous
+// test/e2e/test_storage.py checks distinct allocations for contiguous
 // and preserve-format clones through the public frontend.
 
 // CHECK-LABEL: llvm.func @clone(

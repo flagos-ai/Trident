@@ -113,4 +113,3 @@ func.func private @type_str(%value: !tvm_ffi.c.str) -> !tvm_ffi.c.str {
 func.func private @type_tensor(%value: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor {
   return %value : !tvm_ffi.c.tensor
 }
-

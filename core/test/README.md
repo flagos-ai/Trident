@@ -1,95 +1,92 @@
-<!--
-Part of the Trident project, under the MIT License.
-SPDX-License-Identifier: MIT
--->
+<!-- Part of the Trident project, under the MIT License. -->
+<!-- SPDX-License-Identifier: MIT -->
 
 # Core Lit tests
 
-Test directories mirror their owning implementation directories under `core/lib`:
+Run `cmake --build build/core --target check-trident-core`, or the equivalent
+`core-build` target for a standalone configuration.
 
-- `Conversion/<Component>/` covers local conversion behavior. When one component
-  implements multiple passes, keep their tests together and distinguish the
-  passes with descriptive filename prefixes rather than inventing source
-  directories.
-- `Conversion/Pipeline/` covers representative end-to-end lowering through
-  `--trident-lowering-pipeline`, and explicit pass compositions when their
-  integration contract concerns an intermediate dialect such as `gpu`.
-- `Dialect/<Dialect>/IR/` covers parsing, printing, verification and operation
-  semantics, including effects checked through canonicalization. Invalid IR uses
-  `-verify-diagnostics`.
-- `Dialect/<Dialect>/Transforms/` covers dialect transformation passes.
+Directories mirror the implementation layer:
 
-`Dialect/TVMFFI/Transforms/` covers `lower-tvm-ffi-monad`, which converts
-Results to Bool/Any tuples and binds to SCF branches. `monad.call` becomes a
-two-result `call` followed by borrowing tuple construction. Decomposition
-registers the call payload and tuple releases in defer regions.
-`lower-tvm-ffi-defer` moves those bodies before their enclosing block terminators before
-inlining or SCF-to-CFG conversion; explicit test pipelines must include it after
-decomposition.
-`decompose-tvm-ffi` preserves local calls and erases semantic containers. `TVMFFIToLLVM` expands local calls through the packed ABI.
-`lower-monad-call.mlir` checks the monadic interface boundary;
-`decompose-call.mlir` checks call preservation, container type conversion and
-attributes. `Conversion/TVMFFIToLLVM/call.mlir` checks packed call status,
-output-slot gating and the absence of runtime Array construction; `call-invalid.mlir` checks
-missing decomposition.
-`Conversion/Pipeline/checked-continuation.mlir` covers integration with checked
-calls and the full lowering pipeline. No Result types reach LLVM conversion.
+| Directory | Contract |
+| --- | --- |
+| `Dialect/<Dialect>/IR/` | Parsing, printing, verification and operation semantics |
+| `Dialect/<Dialect>/Transforms/` | Dialect transformation passes |
+| `Conversion/<Component>/` | Local conversion behavior |
+| `Conversion/Pipeline/` | Representative cross-pass integration |
 
-Keep each file focused on one operation family or lowering concern. Use
-descriptive filenames, `CHECK-LABEL` for each function, and named FileCheck
-captures when a value is reused. Bind function arguments and reuse those
-captures when checking data flow instead of relying on printed names such as
-`%arg0`. Spell FileCheck directives with one space after the colon and use
-`[a-zA-Z0-9_]+` for ordinary SSA captures. Do not use anonymous wildcard
-matches in place of a capture. Shared auxiliary inputs belong in an `Inputs/`
-directory and are excluded by the root Lit configuration.
+## Coverage ownership
 
-Use the smallest pass sequence for local conversion tests. Parsing and
-printing belong in `Dialect/<Dialect>/IR/`, rather than an extra no-pass `RUN`
-in a conversion test. Metadata and GPU tests composing multiple conversions belong
-in `Pipeline`; the GPU pass-local test checks semantic operands before ABI
-lowering, while its pipeline counterpart checks native launch operands.
+Keep one file per operation family or conversion concern. Related cases share
+RUN lines and use `--split-input-file` where modules or diagnostics need isolation.
+A new operation or regression normally extends an existing family instead of
+adding a file for each type, arity or operator name.
 
-`Pipeline/aten-dispatch.mlir` owns the representative whole-pipeline registry
-call, cached-handle ownership and packed wrapper checks. Numerical overloads,
-memory formats and view aliases are checked through the public Python JIT;
-they do not each need a copy of the same ABI fixture. Dimension arrays,
-semantic copy, tensor literals and control flow retain their own integration
-regressions. Ownership edge transfers and ABI zero initialization remain
-explicit pass-local contracts. Result conversion and checked returns have focused conversion regressions.
-`bind-arities.mlir` covers zero-input and zero-output binds through parsing,
-decomposition and LLVM lowering, including conditional side effects. Result
-verifier tests retain argument and yield matching checks for these cases.
-Python ownership tests cover attribute-free resource construction, borrowed
-pure payloads, repeated exports, successful and failed Results, independent Bind
-arities and lexical cache reuse. `automatic-ownership.mlir` checks borrowed
-parameters, cast aliases, unused owned results, mixed extraction, reverse release
-order, all export retains before local releases, and manual Base references.
-`automatic-ownership-invalid.mlir` checks unsupported multi-block ownership.
-`decompose-pattern-ownership.mlir` checks Any/Union-to-CAny rewrites,
-constant-branch ownership before folding, nested Opaque-valued joins, mixed
-Opaque/Base branch results, borrowing casts without local cleanup, manual Base
-registry results and zero-result extraction. Together with mixed extraction
-coverage, these exercise value, operation and newly constructed replacements. Opaque exports retain their
-values regardless of their source, including casts from Base and scalar values.
-`lower-defer.mlir` checks cleanup ordering, branch isolation, empty bodies and
-repeat lowering. Defer verifier and lowering diagnostics have focused negative
-tests, including multi-block regions, unsupported enclosing operations and
-unsupported exits. Both decomposition and defer lowering require single-block
-lexical cleanup scopes.
-Container, monad-call and pipeline regressions cover automatic management through
-representation conversion and LLVM lowering. CUDA e2e allocation checks enforce
-cached-execution leak freedom for PyTorch-managed allocations.
+| Family | Coverage boundary |
+| --- | --- |
+| `DLPack/IR/ops`, `TVMFFI/IR/types*` | Public type spellings and representative type parameter constraints |
+| `TVMFFI/IR/ops*` | Scalar/registry operations, containers, reference types, cleanup regions and kernel syntax/verifiers |
+| `TVMFFI/IR/casts*` | Widening, membership, subsets, identity parsing/folding and incompatible casts |
+| `TVMFFI/IR/result*` | Local calls, variadic Results, bind/yield, unpack inference and packed return shape |
+| `Transforms/lower-monad` | Result construction/unpack, continuations, independent input/output arities, local call attributes and CFG signature conversion |
+| `Transforms/decompose-representations` | Opaque/Base mapping, recursive Result/attribute conversion, borrowing casts, local calls and string elements |
+| `Transforms/decompose-containers` | Checked container calls, nested types/attributes and captured values inside nested continuations |
+| `Transforms/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, branches and rejected ownership scopes/legalization |
+| `Transforms/lower-defer*` | Reverse cleanup order, branch isolation, empty bodies, repeat lowering and rejected cleanup scopes/exits |
+| `DLPackToLLVM/metadata`, `FinalizeTVMFFI/metadata` | Metadata field mapping at each conversion boundary |
+| `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Wrapper guards, CFG cloning, opt-in wrappers, output writes, return status and symbol collision |
+| `TVMFFIToGPU/kernel-launch`, `invalid` | Launch arguments/stream, constant/variable specializations, Result success/rejection and unsupported native operands |
+| `TVMFFIToLLVM/call`, `invalid` | Packed argument/output slots, success-only reads, zero/repeated calls and undecomposed input rejection |
+| `TVMFFIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
+| `TVMFFIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |
+| `TVMFFIToLLVM/runtime-ops` | Cached registry lookup/error/call checks, conditional reference updates and clone/copy operand data flow |
 
-Python tests never load these files as executable fixtures. Lit regressions
-can be minimized or renamed independently of Python test setup.
+Public type mnemonics retain individual spelling checks because they have separate
+parser registrations. Generic constraints use representative categories rather
+than every scalar width or object type. Result payload rejection retains native
+scalar, native Object and nested Result examples. Unpack inference retains Any,
+CAny, a scalar and a native function handle; cast compatibility owns membership
+and subset variations. Identity folds use scalar, container, function and union
+representatives. Scalar constants reuse boxing coverage; DType packing and None
+initialization keep their own checks.
 
-TVM FFI functions declare exactly one C ABI payload type and return a boxed
-success flag and Any payload through `tvm_ffi.return`. Return coverage includes None and tuple payloads, output-slot
-status gating. Result reference operations access payloads only in successful branches.
+Automatic ownership checks both defer registration (`DEFER`) and final cleanup
+(`CHECK`). Original Base values stay manually managed. Exports retain independent
+references before reverse local releases, including repeated exports and branch
+results. Monad lowering precedes decomposition; defer lowering immediately follows
+it, before inlining or SCF-to-CFG conversion. Semantic tuple inputs rely on this
+policy without manual retains.
 
-`decompose-c-any.mlir` covers erased Union/Str downcasts and boundaries,
-recursive Result payload conversion and manually managed CAny values. Finite
-Union/Str runtime checks are deferred; concrete indexed Base downcasts retain
-their existing coverage. CAny is a Base tagged representation without a single
-type index.
+Pipeline cases are selected by interaction:
+
+| Fixture | Integration contract |
+| --- | --- |
+| `aten-dispatch` | Semantic call ownership, cached dispatch and packed wrapper |
+| `c-any-checks` | Erased finite constraints at packed boundaries |
+| `checked-continuation` | Nested status-gated calls and payload-independent mutation |
+| `containers` | Array metadata, tuple construction/extraction and packed tuple results |
+| `kernel-launch` | Specialization, tensor/native arguments and runtime stream |
+| `local-call` | Monadic local calls through generated packed wrappers |
+| `tensors` | Dynamic metadata and splat/nonsplat tensor literals through LLVM |
+
+Local passes own scalar boxing, None returns, copy operand order and string casts.
+The pipeline does not repeat generic ATen dispatch for each operator name, or
+upstream SCF selection and assertion lowering in isolation. Python execution tests
+own numerical overloads, list-valued schema arguments, formats, aliases, allocation
+behavior and output pytrees. Python tests never load Lit files as executable
+fixtures.
+
+## Writing tests
+
+Use the smallest pass sequence that owns the behavior. Keep negative parsing and
+verification cases with their operation family, using `--verify-diagnostics`.
+A merged file must run every section through its intended pass sequence; use
+separate files when pass requirements conflict.
+
+Use `CHECK-LABEL` for each function and bind relevant SSA values, including
+arguments, to verify data flow. Avoid incidental IDs and printed argument names.
+Use `CHECK-NEXT` for intentional order, such as export retains preceding reverse
+local releases. Keep lookup status, non-null handles, call status, ABI zero
+initialization and success-only output-slot reads explicit. Never replace SSA
+captures with unconstrained wildcards. Use a single space after directive colons.
+Shared auxiliary inputs belong in `Inputs/`, which Lit excludes from discovery.

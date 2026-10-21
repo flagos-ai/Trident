@@ -1,11 +1,82 @@
-//===----------------------------------------------------------------------===//
-//
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
-//
-//===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -convert-tvm-ffi-to-llvm | FileCheck %s
+// RUN: trident-core-opt %s --split-input-file --convert-tvm-ffi-to-llvm --verify-each | FileCheck %s
+
+// -----
+
+// CHECK-LABEL: func.func @dtype_constant() -> !llvm.struct<(i32, i32, i64)> {
+// CHECK: %[[PACKED:[a-zA-Z0-9_]+]] = llvm.mlir.constant(73730 : i64) : i64
+// CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = llvm.mlir.undef
+// CHECK: %[[KIND:[a-zA-Z0-9_]+]] = llvm.mlir.constant(5 : i32) : i32
+// CHECK: %[[WITH_KIND:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[KIND]], %[[VALUE]][0]
+// CHECK: %[[AUX:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK: %[[WITH_AUX:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[AUX]], %[[WITH_KIND]][1]
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[PACKED]], %[[WITH_AUX]][2]
+// CHECK: return %[[RESULT]] : !llvm.struct<(i32, i32, i64)>
+func.func @dtype_constant() -> !tvm_ffi.dtype {
+  %value = "tvm_ffi.constant.dtype"() <{value = [2, 32, 1]}>
+     : () -> !tvm_ffi.dtype
+  return %value : !tvm_ffi.dtype
+}
+
+// -----
+
+// CHECK-LABEL: func.func @int_constant() -> !llvm.struct<(i32, i32, i64)> {
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = llvm.mlir.constant(-7 : i64) : i64
+// CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = llvm.mlir.undef
+// CHECK: %[[KIND:[a-zA-Z0-9_]+]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK: %[[WITH_KIND:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[KIND]], %[[VALUE]][0]
+// CHECK: %[[AUX:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK: %[[WITH_AUX:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[AUX]], %[[WITH_KIND]][1]
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[PAYLOAD]], %[[WITH_AUX]][2]
+// CHECK: return %[[RESULT]] : !llvm.struct<(i32, i32, i64)>
+func.func @int_constant() -> !tvm_ffi.int {
+  %value = "tvm_ffi.constant.int"() <{value = -7 : i64}> : () -> !tvm_ffi.int
+  return %value : !tvm_ffi.int
+}
+
+// -----
+
+// CHECK-LABEL: func.func @none_constant() -> !llvm.struct<(i32, i32, i64)> {
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i64) : i64
+// CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = llvm.mlir.undef
+// CHECK: %[[KIND:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK: %[[WITH_KIND:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[KIND]], %[[VALUE]][0]
+// CHECK: %[[AUX:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK: %[[WITH_AUX:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[AUX]], %[[WITH_KIND]][1]
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[PAYLOAD]], %[[WITH_AUX]][2]
+// CHECK: return %[[RESULT]] : !llvm.struct<(i32, i32, i64)>
+func.func @none_constant() -> !tvm_ffi.none {
+  %value = "tvm_ffi.constant.none"() : () -> !tvm_ffi.none
+  return %value : !tvm_ffi.none
+}
+
+// -----
+
+// CHECK-LABEL: func.func @int_bool(
+// CHECK-SAME: %[[ARG:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>)
+// CHECK-NOT: builtin.unrealized_conversion_cast
+// CHECK-NOT: ConvertUnrealizedIntCastOp
+// CHECK-NOT: tvm_ffi.to
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[ARG]][2] : !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[BOOL:[a-zA-Z0-9_]+]] = llvm.trunc %[[PAYLOAD]] : i64 to i1
+// CHECK: %[[INT:[a-zA-Z0-9_]+]] = arith.extui %[[BOOL]] : i1 to i64
+// CHECK: %[[UNDEF_RESULT:[a-zA-Z0-9_]+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[TYPE_INDEX:[a-zA-Z0-9_]+]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK: %[[TYPE_RESULT:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[TYPE_INDEX]], %[[UNDEF_RESULT]][0] : !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[KIND_INDEX:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK: %[[KIND_RESULT:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[KIND_INDEX]], %[[TYPE_RESULT]][1] : !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[INT]], %[[KIND_RESULT]][2] : !llvm.struct<(i32, i32, i64)>
+// CHECK: return %[[RESULT]] : !llvm.struct<(i32, i32, i64)>
+func.func @int_bool(%arg0: !tvm_ffi.bool) -> !tvm_ffi.int {
+  %bool = tvm_ffi.get %arg0 : !tvm_ffi.bool -> i1
+  %int = arith.extui %bool : i1 to i64
+  %0 = tvm_ffi.to %int : i64 -> !tvm_ffi.int
+  return %0 : !tvm_ffi.int
+}
+
+// -----
 
 // CHECK-LABEL: func.func @as_dlpack_tensor(
 // CHECK-SAME: %[[OBJECT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> !llvm.struct<(ptr, struct<(i32, i32)>, i32, struct<(i8, i8, i16)>, ptr, ptr, i64)> {
@@ -16,6 +87,19 @@ func.func @as_dlpack_tensor(%object: !tvm_ffi.object)
     -> !dlpack.dl_tensor {
   %tensor = tvm_ffi.as %object : !tvm_ffi.object -> !dlpack.dl_tensor
   return %tensor : !dlpack.dl_tensor
+}
+
+// Test the kernel-argument construction shape: !tvm_ffi.int -> i64 -> i32
+// CHECK-LABEL: func.func @cast_int_to_i32(
+// CHECK-SAME: %[[ARG:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[PLD:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[ARG]][2] : !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[I32:[a-zA-Z0-9_]+]] = llvm.trunc %[[PLD]] : i64 to i32
+// CHECK-NOT: tvm_ffi.get
+// CHECK: return %[[I32]] : i32
+func.func @cast_int_to_i32(%arg0: !tvm_ffi.int) -> i32 {
+  %native = tvm_ffi.get %arg0 : !tvm_ffi.int -> i64
+  %0 = llvm.trunc %native : i64 to i32
+  return %0 : i32
 }
 
 // CHECK-LABEL: func.func @get_native_scalars(
@@ -42,13 +126,6 @@ func.func @get_native_scalars(%bool: !tvm_ffi.bool, %int: !tvm_ffi.int,
 func.func @get_object(%tensor: !tvm_ffi.c.tensor) -> !tvm_ffi.object {
   %object = tvm_ffi.get %tensor : !tvm_ffi.c.tensor -> !tvm_ffi.object
   return %object : !tvm_ffi.object
-}
-
-// CHECK-LABEL: func.func @object_type(
-// CHECK-SAME: %[[OBJECT:[a-zA-Z0-9_]+]]: !llvm.ptr) {
-// CHECK-NEXT: return
-func.func @object_type(%object: !tvm_ffi.object) {
-  return
 }
 
 // CHECK-LABEL: func.func @tensor_literal() -> !llvm.struct<(i32, i32, i64)> {
