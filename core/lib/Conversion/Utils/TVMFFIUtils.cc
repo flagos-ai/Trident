@@ -39,10 +39,8 @@
 
 namespace trident::conversion::utils {
 
-namespace {
-
 /// Get or create the module-level global caching the handle of \p funcName.
-mlir::FailureOr<mlir::LLVM::GlobalOp>
+static mlir::FailureOr<mlir::LLVM::GlobalOp>
 getOrCreateTVMFFIGlobalHandle(mlir::ModuleOp moduleOp,
                               llvm::StringRef funcName) {
   mlir::MLIRContext *ctx = moduleOp.getContext();
@@ -68,7 +66,7 @@ getOrCreateTVMFFIGlobalHandle(mlir::ModuleOp moduleOp,
 
 /// Get or create a `void ()` module-level function whose body is emitted by
 /// \p buildBody. \p description names the function in diagnostics.
-mlir::FailureOr<mlir::LLVM::LLVMFuncOp> getOrCreateTVMFFIHandleLifecycle(
+static mlir::FailureOr<mlir::LLVM::LLVMFuncOp> getOrCreateTVMFFIHandleLifecycle(
     mlir::ModuleOp moduleOp, llvm::StringRef prefix, llvm::StringRef funcName,
     llvm::function_ref<mlir::LogicalResult(mlir::OpBuilder &, mlir::Location)>
         buildBody,
@@ -103,7 +101,7 @@ mlir::FailureOr<mlir::LLVM::LLVMFuncOp> getOrCreateTVMFFIHandleLifecycle(
 
 /// Resolve \p funcName once at load time and cache the handle and the lookup
 /// status in module-level storage.
-mlir::LogicalResult
+static mlir::LogicalResult
 buildTVMFFIHandleCtorBody(mlir::OpBuilder &builder, mlir::Location loc,
                           mlir::ModuleOp moduleOp, llvm::StringRef funcName,
                           mlir::LLVM::GlobalOp handleGlobal) {
@@ -149,7 +147,7 @@ buildTVMFFIHandleCtorBody(mlir::OpBuilder &builder, mlir::Location loc,
 }
 
 /// Release the cached handle at unload time.
-mlir::LogicalResult
+static mlir::LogicalResult
 buildTVMFFIHandleDtorBody(mlir::OpBuilder &builder, mlir::Location loc,
                           mlir::ModuleOp moduleOp,
                           mlir::LLVM::GlobalOp handleGlobal) {
@@ -169,7 +167,8 @@ buildTVMFFIHandleDtorBody(mlir::OpBuilder &builder, mlir::Location loc,
 }
 
 /// Add \p ctor to the module's `llvm.mlir.global_ctors`, unless already listed.
-void registerGlobalCtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp ctor) {
+static void registerGlobalCtor(mlir::ModuleOp moduleOp,
+                               mlir::LLVM::LLVMFuncOp ctor) {
   for (mlir::LLVM::GlobalCtorsOp list :
        moduleOp.getOps<mlir::LLVM::GlobalCtorsOp>()) {
     if (llvm::any_of(list.getCtors(), [&](mlir::Attribute attr) {
@@ -193,7 +192,8 @@ void registerGlobalCtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp ctor) {
 }
 
 /// Add \p dtor to the module's `llvm.mlir.global_dtors`, unless already listed.
-void registerGlobalDtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp dtor) {
+static void registerGlobalDtor(mlir::ModuleOp moduleOp,
+                               mlir::LLVM::LLVMFuncOp dtor) {
   for (mlir::LLVM::GlobalDtorsOp list :
        moduleOp.getOps<mlir::LLVM::GlobalDtorsOp>()) {
     if (llvm::any_of(list.getDtors(), [&](mlir::Attribute attr) {
@@ -219,7 +219,7 @@ void registerGlobalDtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp dtor) {
 /// Resolve \p funcName into the module-level cache and load the handle it
 /// holds. The module owns that reference for its whole lifetime, so the
 /// returned handle is borrowed.
-mlir::FailureOr<mlir::Value>
+static mlir::FailureOr<mlir::Value>
 loadCachedTVMFFIGlobalHandle(mlir::OpBuilder &builder, mlir::Location loc,
                              mlir::ModuleOp moduleOp,
                              llvm::StringRef funcName) {
@@ -263,8 +263,6 @@ loadCachedTVMFFIGlobalHandle(mlir::OpBuilder &builder, mlir::Location loc,
                                              handleGlobal.value()))
       .getResult();
 }
-
-} // namespace
 
 mlir::FailureOr<mlir::Value>
 callTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,

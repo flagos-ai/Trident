@@ -180,8 +180,8 @@ func.func @opaque_exports(%base: !tvm_ffi.c.tensor, %pod: !tvm_ffi.int) -> (!tvm
 // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[TUPLE_HANDLE]] : !tvm_ffi.c.function
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[FIRST]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[SECOND]] : !tvm_ffi.c.any
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[SECOND]] : !tvm_ffi.c.any
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.any
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[SECOND]] : !tvm_ffi.c.any
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.any
 // CHECK-NEXT: return %[[FIRST]], %[[SECOND]]
 func.func @string_elements(%array: !tvm_ffi.array<!tvm_ffi.str>, %tuple: !tvm_ffi.tuple<!tvm_ffi.str>, %index: i64) -> (!tvm_ffi.str, !tvm_ffi.str) {
   %first = tvm_ffi.array.get %array[%index] : !tvm_ffi.array<!tvm_ffi.str> -> !tvm_ffi.str

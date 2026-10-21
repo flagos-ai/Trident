@@ -43,11 +43,10 @@ namespace trident::conversion {
 #define GEN_PASS_DEF_CONVERTTVMFFITOFUNC
 #include "trident/core/Conversion/Passes.h.inc"
 
-namespace {
-
-mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
-                                mlir::ValueRange slots,
-                                mlir::Type payloadType) {
+static mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op,
+                                       mlir::OpBuilder &builder,
+                                       mlir::ValueRange slots,
+                                       mlir::Type payloadType) {
   builder.setInsertionPoint(op);
   mlir::Value const ready = tvm_ffi::GetOp::create(
       builder, op.getLoc(), builder.getI1Type(), op.getSuccess());
@@ -76,8 +75,6 @@ mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
   op.erase();
   return mlir::success();
 }
-
-} // namespace
 
 class ConvertTVMFFIToFuncPass final
     : public impl::ConvertTVMFFIToFuncBase<ConvertTVMFFIToFuncPass> {

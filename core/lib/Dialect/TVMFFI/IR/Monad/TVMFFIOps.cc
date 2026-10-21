@@ -26,15 +26,11 @@
 
 namespace trident::tvm_ffi {
 
-namespace {
-
-llvm::SmallVector<mlir::Type> getPayloadTypes(mlir::ValueRange values) {
+static llvm::SmallVector<mlir::Type> getPayloadTypes(mlir::ValueRange values) {
   return llvm::map_to_vector(values, [](mlir::Value value) -> mlir::Type {
     return mlir::cast<ResultType>(value.getType()).getPayloadType();
   });
 }
-
-} // namespace
 
 mlir::Block *MonadBindOp::addEntryBlock(mlir::OpBuilder &builder) {
   if (mlir::Block *entry = getEntryBlock()) {

@@ -1,11 +1,13 @@
 # Part of the Trident project, under the MIT License.
 # SPDX-License-Identifier: MIT
 
+# File-local helper functions use static without an anonymous namespace.
 Checks: >-
   -*,
   bugprone-*,
   -bugprone-unchecked-optional-access,
   misc-*,
+  -misc-use-anonymous-namespace,
   modernize-use-override,
   performance-*
 HeaderFilterRegex: '^(.*[/\\])(core|ffi)/(include|lib|python|tools)/.*'

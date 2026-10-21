@@ -35,8 +35,20 @@
 
 namespace trident::tvm_ffi {
 
+mlir::Block *DeferOp::addEntryBlock(mlir::OpBuilder &builder) {
+  if (mlir::Block *entry = getEntryBlock()) {
+    return entry;
+  }
+  return builder.createBlock(&getBody());
+}
+
+mlir::Block *DeferOp::getEntryBlock() {
+  mlir::Region &body = getBody();
+  return body.empty() ? nullptr : &body.front();
+}
+
 mlir::LogicalResult DeferOp::verify() {
-  mlir::Block &body = getBody().front();
+  mlir::Block &body = *getEntryBlock();
   if (body.getNumArguments() != 0) {
     return emitOpError("body must have no arguments");
   }
