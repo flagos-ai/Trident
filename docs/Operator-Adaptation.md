@@ -42,7 +42,8 @@ For a new operator:
 1. Inspect the raw exported graph and schema, including defaults and overloads.
 2. Verify the generated wrapper exists, or add an import/lowering rule for an
    operation that has no dispatch schema.
-3. Add public execution checks under `test/e2e`, organized by operator.
+3. Add public execution checks to the matching capability module under
+   `test/e2e` (operators, factories, storage or dynamic behavior).
    `test/unit/test_guards.py` is reserved for guard parsing and expression IR.
    When dialect or lowering behavior changes, add a focused MLIR test at that
    layer. Existing generic dispatch coverage can be reused for an

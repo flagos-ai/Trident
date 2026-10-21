@@ -1,7 +1,7 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --decompose-tvm-ffi --split-input-file --verify-diagnostics
+// RUN: trident-core-opt %s --allow-unregistered-dialect --decompose-tvm-ffi --split-input-file --verify-diagnostics
 
 // Base references remain manually managed, including across CFG edges.
 func.func @base_multiple_blocks(%input: !tvm_ffi.c.tensor, %condition: i1) -> !tvm_ffi.c.tensor {
@@ -45,4 +45,12 @@ func.func @multiple_blocks(%input: !tvm_ffi.tensor, %condition: i1) -> !tvm_ffi.
   return %input : !tvm_ffi.tensor
 ^second:
   return %input : !tvm_ffi.tensor
+}
+
+// -----
+
+func.func @unsupported(%input: !tvm_ffi.array<!tvm_ffi.int>) {
+  // expected-error@+1 {{failed to legalize operation 'test.container'}}
+  "test.container"(%input) : (!tvm_ffi.array<!tvm_ffi.int>) -> ()
+  return
 }

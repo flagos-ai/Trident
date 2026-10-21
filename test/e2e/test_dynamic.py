@@ -1,0 +1,69 @@
+# Part of the Trident project, under the MIT License.
+# SPDX-License-Identifier: MIT
+
+"""Dynamic shapes, scalar arithmetic and control flow through public JIT."""
+
+from __future__ import annotations
+
+import unittest
+
+import torch
+import trident
+
+from test.support.cuda import assert_no_cuda_leak
+
+
+class DynamicTest(unittest.TestCase):
+    def test_cond(self) -> None:
+        @trident.jit(dynamic=True)
+        def conditional(x: torch.Tensor):
+            return torch.cond(x.shape[0] > 4, lambda t: t + 1, lambda t: t - 1, (x,))
+
+        def check() -> None:
+            for size in (3, 6, 8):
+                x = torch.randn(size, device="cuda")
+                expected = x + 1 if size > 4 else x - 1
+                for phase in ("warmup", "cached"):
+                    with self.subTest(size=size, phase=phase):
+                        torch.testing.assert_close(conditional(x), expected)
+            self.assertIn("scf.if", str(conditional._sub_modules[0]))
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
+    def test_dynamic_shapes(self) -> None:
+        @trident.jit(dynamic=True)
+        def reshape(x: torch.Tensor) -> torch.Tensor:
+            return x.reshape(x.shape[0] // 2, x.shape[1] * 2)
+
+        def check() -> None:
+            for size in (6, 10, 14):
+                x = torch.randn(size, 3, device="cuda")
+                for phase in ("first", "repeated"):
+                    with self.subTest(size=size, phase=phase):
+                        torch.testing.assert_close(reshape(x), x.reshape(size // 2, 6))
+            text = str(reshape._sub_modules[0])
+            self.assertIn("tvm_ffi.tensor.size", text)
+            self.assertIn("arith.floordivsi", text)
+            self.assertIn("arith.muli", text)
+            self.assertNotIn("!torch.", text)
+            self.assertEqual(len(reshape._sub_modules), 1)
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
+    def test_symbolic_integer_power(self) -> None:
+        @trident.jit(dynamic=True)
+        def power(x: torch.Tensor) -> int:
+            return x.shape[0] ** 3
+
+        def check() -> None:
+            for size in (3, 5, 7):
+                x = torch.randn(size, device="cuda")
+                for phase in ("first", "repeated"):
+                    with self.subTest(size=size, phase=phase):
+                        self.assertEqual(power(x), size**3)
+            self.assertEqual(len(power._sub_modules), 1)
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)

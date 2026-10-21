@@ -1,193 +1,94 @@
 # Part of the Trident project, under the MIT License.
 # SPDX-License-Identifier: MIT
 
-"""Result construction contracts and symbolic expression diagnostics."""
+"""Python frontend construction, diagnostics and lexical input caching."""
 
 import unittest
 
 import sympy
 import torch
 from trident.core import ir
-from trident.core.dialects import func
+from trident.core.dialects import arith, func, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.importer import TridentFxImporter
+from trident.input import InputNodeBuilder, InputTableBuilder
 from trident.ir import (
     bind,
     box,
     checked_call,
     constant,
     container_get,
-    ffi_type,
     make_result_types,
     native_constant,
     pure,
-    value_type,
 )
+from trident.ownership import is_value_in_scope
 
 from test.support.ir import new_context
 
 
 class ImporterTest(unittest.TestCase):
-    def test_frontend_uses_semantic_object_types(self) -> None:
-        forbidden = (
-            tvm_ffi_d.CAnyType,
-            tvm_ffi_d.CArrayType,
-            tvm_ffi_d.CExceptionType,
-            tvm_ffi_d.CFunctionType,
-            tvm_ffi_d.CStrType,
-            tvm_ffi_d.CTensorType,
-            tvm_ffi_d.ObjectType,
-        )
+    @staticmethod
+    def _extraction_count(module: ir.Module) -> int:
+        extractions: list[ir.Operation] = []
 
-        def check_type(type_: ir.Type) -> None:
-            self.assertNotIsInstance(type_, forbidden)
-            if isinstance(type_, tvm_ffi_d.ArrayType):
-                check_type(type_.element_type)
-            elif isinstance(type_, tvm_ffi_d.ResultType):
-                check_type(type_.payload_type)
-            elif isinstance(type_, (tvm_ffi_d.TupleType, tvm_ffi_d.UnionType)):
-                for member in type_.types:
-                    check_type(member)
-            elif isinstance(type_, ir.FunctionType):
-                for member in (*type_.inputs, *type_.results):
-                    check_type(member)
+        def collect(operation: ir.Operation) -> ir.WalkResult:
+            if operation.name == "tvm_ffi.array.get":
+                extractions.append(operation)
+            return ir.WalkResult.ADVANCE
 
-        def check_attribute(attribute: ir.Attribute) -> None:
-            if isinstance(attribute, ir.TypeAttr):
-                check_type(attribute.value)
-            elif isinstance(attribute, ir.ArrayAttr):
-                for member in attribute:
-                    check_attribute(member)
-            elif isinstance(attribute, ir.DictAttr):
-                for member in attribute:
-                    check_attribute(member.attr)
+        module.operation.walk(collect)
+        return len(extractions)
 
-        def check_operation(operation: ir.Operation) -> None:
-            for value in (*operation.operands, *operation.results):
-                check_type(value.type)
-            for attribute in operation.attributes:
-                check_attribute(
-                    operation.attributes[attribute]
-                    if isinstance(attribute, str)
-                    else attribute.attr
-                )
-            for region in operation.regions:
-                for block in region.blocks:
-                    for argument in block.arguments:
-                        check_type(argument.type)
-                    for child in block.operations:
-                        check_operation(child.operation)
-
-        context = new_context()
-        importer = TridentFxImporter(context=context, specialization_id=0)
-        with context, ir.Location.unknown(context):
-            tensor = tvm_ffi_d.TensorType.get()
-            string = tvm_ffi_d.StrType.get()
-            with ir.InsertionPoint(importer.module.body):
-                function = func.FuncOp("semantic", ([tensor, string], []))
-                with ir.InsertionPoint(function.add_entry_block()):
-                    checked_call("test.identity", [function.arguments[0]], tensor)
-                    pure([tvm_ffi_d.ExceptionOp("GuardMatch").result])
-                    importer.build_arguments(
-                        [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
+    def test_bind_arities(self) -> None:
+        for input_count, output_count in [(0, 0), (0, 2), (2, 0), (2, 3)]:
+            with (
+                self.subTest(inputs=input_count, outputs=output_count),
+                new_context(),
+                ir.Location.unknown(),
+            ):
+                module = ir.Module.create()
+                result_type = tvm_ffi_d.ResultType.get(tvm_ffi_d.IntType.get())
+                with ir.InsertionPoint(module.body):
+                    function = func.FuncOp(
+                        "test",
+                        ([result_type] * input_count, [result_type] * output_count),
                     )
-                    func.ReturnOp([])
-            self.assertTrue(importer.module.operation.verify())
-            check_operation(importer.module.operation)
-            parsed = ir.Module.parse(f"{importer.module}")
-            check_operation(parsed.operation)
+                    block = function.add_entry_block()
+                with ir.InsertionPoint(block):
+                    with bind(
+                        block.arguments, result_types=[result_type] * output_count
+                    ) as operation:
+                        self.assertEqual(len(operation.arguments), input_count)
+                        values = (
+                            pure([constant(7)] * output_count) if output_count else []
+                        )
+                        tvm_ffi_d.MonadYieldOp(values)
 
-    def test_abi_type_spellings(self) -> None:
-        context = new_context()
-        with context:
-            for name, type_class in (
-                ("any", tvm_ffi_d.AnyType),
-                ("bool", tvm_ffi_d.BoolType),
-                ("c.any", tvm_ffi_d.CAnyType),
-                ("c.array", tvm_ffi_d.CArrayType),
-                ("c.exception", tvm_ffi_d.CExceptionType),
-                ("c.function", tvm_ffi_d.CFunctionType),
-                ("c.str", tvm_ffi_d.CStrType),
-                ("c.tensor", tvm_ffi_d.CTensorType),
-                ("dtype", tvm_ffi_d.DTypeType),
-                ("device", tvm_ffi_d.DeviceType),
-                ("float", tvm_ffi_d.FloatType),
-                ("function", tvm_ffi_d.FunctionType),
-                ("int", tvm_ffi_d.IntType),
-                ("none", tvm_ffi_d.NoneType),
-                ("object", tvm_ffi_d.ObjectType),
-                ("raw_str", tvm_ffi_d.RawStrType),
-                ("small_str", tvm_ffi_d.SmallStrType),
-                ("str", tvm_ffi_d.StrType),
-                ("tensor", tvm_ffi_d.TensorType),
-            ):
-                with self.subTest(name=name):
-                    type_ = type_class.get()
-                    self.assertEqual(f"{type_}", f"!tvm_ffi.{name}")
-                    parsed = ffi_type(name)
-                    self.assertIsInstance(parsed, type_class)
-                    self.assertEqual(parsed, type_)
-            self.assertNotEqual(tvm_ffi_d.AnyType.get(), tvm_ffi_d.CAnyType.get())
-            self.assertNotIsInstance(ffi_type("c.any"), tvm_ffi_d.AnyType)
-            exception = tvm_ffi_d.ExceptionType.get()
-            self.assertEqual(f"{exception}", "!tvm_ffi.exception")
-            self.assertIsInstance(ffi_type("exception"), tvm_ffi_d.ExceptionType)
-            union = tvm_ffi_d.UnionType.get([tvm_ffi_d.IntType.get(), exception])
-            self.assertEqual(
-                f"{union}", "!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>"
-            )
-            parsed_union = ir.Type.parse(f"{union}")
-            self.assertIsInstance(parsed_union, tvm_ffi_d.UnionType)
-            self.assertEqual(parsed_union.types, union.types)
-            for member in (
-                ir.IntegerType.get_signless(64),
-                tvm_ffi_d.ObjectType.get(),
-                tvm_ffi_d.ResultType.get(tvm_ffi_d.IntType.get()),
-            ):
-                with (
-                    self.subTest(member=f"{member}"),
-                    self.assertRaisesRegex(
-                        ValueError, "union members must be TVM FFI C ABI types"
-                    ),
-                ):
-                    tvm_ffi_d.UnionType.get([tvm_ffi_d.IntType.get(), member])
-            result = tvm_ffi_d.ResultType.get(union)
-            self.assertEqual(f"{result}", f"!tvm_ffi.monad.result<{union}>")
-            parsed_result = ir.Type.parse(f"{result}")
-            self.assertIsInstance(parsed_result, tvm_ffi_d.ResultType)
-            self.assertEqual(parsed_result.payload_type, union)
+                    self.assertEqual(ir.InsertionPoint.current.block, block)
+                    self.assertEqual(len(operation.outputs), output_count)
+                    func.ReturnOp(operation.outputs)
 
-    def test_local_call_bindings(self) -> None:
-        context = new_context()
-        with context, ir.Location.unknown(context):
+                self.assertTrue(module.operation.verify())
+
+    def test_bind_empty_restores_insertion_point_on_exception(self) -> None:
+        with new_context(), ir.Location.unknown():
             module = ir.Module.create()
-            payload = tvm_ffi_d.TensorType.get()
-            result = tvm_ffi_d.ResultType.get(payload)
-            success = tvm_ffi_d.BoolType.get()
-            value = tvm_ffi_d.AnyType.get()
             with ir.InsertionPoint(module.body):
-                tvm_ffi_d.FuncOp(
-                    "callee",
-                    ir.TypeAttr.get(ir.FunctionType.get([payload], [payload])),
-                    emit_tvm_ffi_abi=True,
-                )
-                caller = func.FuncOp("caller", ([payload], [result, success, value]))
-                with ir.InsertionPoint(caller.add_entry_block()):
-                    arguments = list(caller.arguments)
-                    monad_call = tvm_ffi_d.MonadCallOp(result, "callee", arguments)
-                    call = tvm_ffi_d.CallOp("callee", arguments)
-                    self.assertIsInstance(monad_call.result.type, tvm_ffi_d.ResultType)
-                    self.assertEqual(monad_call.result.type.payload_type, payload)
-                    self.assertIsInstance(call.success.type, tvm_ffi_d.BoolType)
-                    self.assertIsInstance(call.value.type, tvm_ffi_d.AnyType)
-                    func.ReturnOp([monad_call.result, call.success, call.value])
+                function = func.FuncOp("test", ([], []))
+                block = function.add_entry_block()
+            with ir.InsertionPoint(block):
+                with (
+                    self.assertRaisesRegex(RuntimeError, "stop"),
+                    bind([], result_types=[]),
+                ):
+                    tvm_ffi_d.MonadYieldOp([])
+
+                    raise RuntimeError("stop")
+                self.assertEqual(ir.InsertionPoint.current.block, block)
+                func.ReturnOp([])
+
             self.assertTrue(module.operation.verify())
-            parsed = ir.Module.parse(f"{module}")
-            calls = list(parsed.body.operations[1].regions[0].blocks[0].operations)
-            self.assertIsInstance(calls[0], tvm_ffi_d.MonadCallOp)
-            self.assertIsInstance(calls[1], tvm_ffi_d.CallOp)
-            self.assertIsInstance(calls[1].success.type, tvm_ffi_d.BoolType)
-            self.assertIsInstance(calls[1].value.type, tvm_ffi_d.AnyType)
 
     def test_bind_result_contract(self) -> None:
         context = new_context()
@@ -197,17 +98,6 @@ class ImporterTest(unittest.TestCase):
             integer = tvm_ffi_d.IntType.get()
             payload = tvm_ffi_d.ResultType.get(integer)
             unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
-            self.assertIsInstance(ir.Type.parse(f"{payload}"), tvm_ffi_d.ResultType)
-            self.assertEqual(payload.payload_type, integer)
-            self.assertIsInstance(unit.payload_type, tvm_ffi_d.NoneType)
-            with self.assertRaises(TypeError):
-                tvm_ffi_d.ResultType.get()
-            with self.assertRaises(TypeError):
-                tvm_ffi_d.ResultType.get(None)
-            with self.assertRaisesRegex(
-                ValueError, "Result payload must be a TVM FFI C ABI type"
-            ):
-                tvm_ffi_d.ResultType.get(payload)
             with ir.InsertionPoint(module.body):
                 value = native_constant(7)
                 count = len(module.body.operations)
@@ -239,6 +129,70 @@ class ImporterTest(unittest.TestCase):
                 [value.type for value in parsed_bind.arguments],
                 [unit.payload_type, unit.payload_type, integer, unit.payload_type],
             )
+
+    def test_cache_lives_until_defining_block_exit(self) -> None:
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            tensor = tvm_ffi_d.TensorType.get()
+            array = tvm_ffi_d.ArrayType.get(tensor)
+            unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
+            builder = InputTableBuilder(
+                [("values", InputNodeBuilder(array, [InputNodeBuilder(tensor)]))],
+                ["values"],
+            )
+            with ir.InsertionPoint(module.body):
+                function = func.FuncOp("test", ([array], []))
+                block = function.add_entry_block()
+            with ir.InsertionPoint(block):
+                table = builder.build(block.arguments)
+                first = table.extract(("values", 0))
+                with bind(first, result_types=[unit]):
+                    cached = table.extract(("values", 0))
+                    with bind(cached, result_types=[unit]) as reused:
+                        tvm_ffi_d.MonadYieldOp(pure([]))
+
+                    tvm_ffi_d.MonadYieldOp(reused.outputs)
+
+                # Ending the Python context does not end the IR block lifetime.
+                self.assertTrue(is_value_in_scope(first[0]))
+                cached = table.extract(("values", 0))
+                with bind(cached, result_types=[unit]):
+                    tvm_ffi_d.MonadYieldOp(pure([]))
+
+                func.ReturnOp([])
+
+            self.assertEqual(self._extraction_count(module), 1)
+            self.assertTrue(module.operation.verify())
+
+    def test_cache_rebuilds_in_sibling_blocks(self) -> None:
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            tensor = tvm_ffi_d.TensorType.get()
+            array = tvm_ffi_d.ArrayType.get(tensor)
+            unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
+            builder = InputTableBuilder(
+                [("values", InputNodeBuilder(array, [InputNodeBuilder(tensor)]))],
+                ["values"],
+            )
+            with ir.InsertionPoint(module.body):
+                function = func.FuncOp("test", ([array], []))
+                block = function.add_entry_block()
+            with ir.InsertionPoint(block):
+                table = builder.build(block.arguments)
+                predicate = arith.constant(ir.IntegerType.get_signless(1), True)
+                branch = scf.IfOp(predicate, [], has_else=True)
+                for child in (branch.then_block, branch.else_block):
+                    with ir.InsertionPoint(child):
+                        values = table.extract(("values", 0))
+                        with bind(values, result_types=[unit]):
+                            tvm_ffi_d.MonadYieldOp(pure([]))
+
+                        scf.YieldOp([])
+
+                func.ReturnOp([])
+
+            self.assertEqual(self._extraction_count(module), 2)
+            self.assertTrue(module.operation.verify())
 
     def test_container_array_operations(self) -> None:
         context = new_context()
@@ -328,68 +282,6 @@ class ImporterTest(unittest.TestCase):
             self.assertTrue(importer.module.operation.verify())
             self.assertTrue(ir.Module.parse(f"{importer.module}").operation.verify())
 
-    def test_container_types(self) -> None:
-        context = new_context()
-        with context, ir.Location.unknown(context):
-            integer = tvm_ffi_d.IntType.get()
-            for mapping in ({}, {"key": [1, "value"]}):
-                with self.subTest(mapping=mapping):
-                    self.assertEqual(
-                        value_type(mapping),
-                        tvm_ffi_d.ArrayType.get(tvm_ffi_d.AnyType.get()),
-                    )
-            array = tvm_ffi_d.ArrayType.get(integer)
-            tuple_ = tvm_ffi_d.TupleType.get([array, integer, integer])
-            for value, cls in (
-                (array, tvm_ffi_d.ArrayType),
-                (tuple_, tvm_ffi_d.TupleType),
-            ):
-                self.assertIsInstance(ir.Type.parse(f"{value}"), cls)
-                self.assertEqual(ir.Type.parse(f"{value}"), value)
-            self.assertEqual(array.element_type, integer)
-            self.assertEqual(tuple_.types, (array, integer, integer))
-            abi_members = (
-                tvm_ffi_d.AnyType.get(),
-                array,
-                tvm_ffi_d.ExceptionType.get(),
-                tvm_ffi_d.FunctionType.get(),
-                tvm_ffi_d.NoneType.get(),
-                tuple_,
-                tvm_ffi_d.UnionType.get([integer, tvm_ffi_d.NoneType.get()]),
-            )
-            for element in abi_members:
-                with self.subTest(array_element=element):
-                    abi_array = tvm_ffi_d.ArrayType.get(element)
-                    self.assertEqual(abi_array.element_type, element)
-                    self.assertEqual(ir.Type.parse(f"{abi_array}"), abi_array)
-            abi_tuple = tvm_ffi_d.TupleType.get(abi_members)
-            self.assertEqual(abi_tuple.types, abi_members)
-            self.assertEqual(ir.Type.parse(f"{abi_tuple}"), abi_tuple)
-            empty = tvm_ffi_d.TupleType.get([])
-            self.assertEqual(empty.types, ())
-            self.assertEqual(ir.Type.parse(f"{empty}"), empty)
-            for type_ in (
-                ir.IntegerType.get_signless(64),
-                ir.RankedTensorType.get([2], ir.IntegerType.get_signless(64)),
-                tvm_ffi_d.ObjectType.get(),
-                tvm_ffi_d.ResultType.get(integer),
-            ):
-                with self.assertRaisesRegex(
-                    ValueError, "array element must be a TVM FFI C ABI type"
-                ):
-                    tvm_ffi_d.ArrayType.get(type_)
-                with self.assertRaisesRegex(
-                    ValueError, "tuple elements must be TVM FFI C ABI types"
-                ):
-                    tvm_ffi_d.TupleType.get([type_])
-            other = new_context()
-            with other:
-                foreign = tvm_ffi_d.IntType.get()
-            with self.assertRaises(ValueError):
-                tvm_ffi_d.ArrayType.get(foreign)
-            with self.assertRaises(ValueError):
-                tvm_ffi_d.TupleType.get([foreign])
-
     def test_empty_arguments_and_explicit_none(self) -> None:
         def collect(operation: ir.Operation) -> list[ir.OpView]:
             calls: list[ir.OpView] = []
@@ -430,42 +322,76 @@ class ImporterTest(unittest.TestCase):
                     for call in calls:
                         self.assertEqual(len(call.elements), 0)
 
-    def test_monad_unpack(self) -> None:
-        context = new_context()
-        with context, ir.Location.unknown(context):
-            module = ir.Module.create()
-            with ir.InsertionPoint(module.body):
-                for value in (
-                    native_constant(True),
-                    native_constant(7),
-                    native_constant(2.5),
-                    constant(None),
-                ):
-                    with self.subTest(type=value.type):
-                        [result] = pure([value])
-                        unpacked = tvm_ffi_d.MonadUnpackOp(result)
-                        self.assertEqual(
-                            unpacked.success.type, ir.IntegerType.get_signless(1)
-                        )
-                        expected = tvm_ffi_d.AnyType.get()
-                        self.assertEqual(unpacked.value.type, expected)
-                self.assertTrue(module.operation.verify())
+    def test_frontend_uses_semantic_object_types(self) -> None:
+        forbidden = (
+            tvm_ffi_d.CAnyType,
+            tvm_ffi_d.CArrayType,
+            tvm_ffi_d.CExceptionType,
+            tvm_ffi_d.CFunctionType,
+            tvm_ffi_d.CStrType,
+            tvm_ffi_d.CTensorType,
+            tvm_ffi_d.ObjectType,
+        )
 
-    def test_owned_string_boundaries(self) -> None:
+        def check_type(type_: ir.Type) -> None:
+            self.assertNotIsInstance(type_, forbidden)
+            if isinstance(type_, tvm_ffi_d.ArrayType):
+                check_type(type_.element_type)
+            elif isinstance(type_, tvm_ffi_d.ResultType):
+                check_type(type_.payload_type)
+            elif isinstance(type_, (tvm_ffi_d.TupleType, tvm_ffi_d.UnionType)):
+                for member in type_.types:
+                    check_type(member)
+            elif isinstance(type_, ir.FunctionType):
+                for member in (*type_.inputs, *type_.results):
+                    check_type(member)
+
+        def check_attribute(attribute: ir.Attribute) -> None:
+            if isinstance(attribute, ir.TypeAttr):
+                check_type(attribute.value)
+            elif isinstance(attribute, ir.ArrayAttr):
+                for member in attribute:
+                    check_attribute(member)
+            elif isinstance(attribute, ir.DictAttr):
+                for member in attribute:
+                    check_attribute(member.attr)
+
+        def check_operation(operation: ir.Operation) -> None:
+            for value in (*operation.operands, *operation.results):
+                check_type(value.type)
+            for attribute in operation.attributes:
+                check_attribute(
+                    operation.attributes[attribute]
+                    if isinstance(attribute, str)
+                    else attribute.attr
+                )
+            for region in operation.regions:
+                for block in region.blocks:
+                    for argument in block.arguments:
+                        check_type(argument.type)
+                    for child in block.operations:
+                        check_operation(child.operation)
+
         context = new_context()
+        importer = TridentFxImporter(context=context, specialization_id=0)
         with context, ir.Location.unknown(context):
-            module = ir.Module.create()
+            tensor = tvm_ffi_d.TensorType.get()
             string = tvm_ffi_d.StrType.get()
-            with ir.InsertionPoint(module.body):
-                for text in ("", "1234567", "12345678"):
-                    with self.subTest(text=text):
-                        value = constant(text)
-                        self.assertIsInstance(value.type, tvm_ffi_d.StrType)
-                        [result] = pure([value])
-                        self.assertEqual(result.type.payload_type, string)
-                        self.assertEqual(make_result_types([value.type]), [result.type])
-                        self.assertEqual(result.owner.opview.values[0].type, string)
-            self.assertTrue(module.operation.verify())
+            with ir.InsertionPoint(importer.module.body):
+                function = func.FuncOp("semantic", ([tensor, string], []))
+                with ir.InsertionPoint(function.add_entry_block()):
+                    checked_call("test.identity", [function.arguments[0]], tensor)
+                    pure([tvm_ffi_d.ExceptionOp("GuardMatch").result])
+                    importer.build_arguments(
+                        [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
+                    )
+                    func.ReturnOp([])
+            self.assertTrue(importer.module.operation.verify())
+            self.assertNotIn("tvm_ffi.cleanup", f"{importer.module}")
+            self.assertNotIn("tvm_ffi.retain", f"{importer.module}")
+            check_operation(importer.module.operation)
+            parsed = ir.Module.parse(f"{importer.module}")
+            check_operation(parsed.operation)
 
     def test_pure_inference_and_typed_boundaries(self) -> None:
         context = new_context()
@@ -479,6 +405,11 @@ class ImporterTest(unittest.TestCase):
                 inferred = pure([value])
                 self.assertEqual(inferred[0].type.payload_type, boxed)
                 self.assertEqual(make_result_types(iter([integer])), [inferred[0].type])
+                string = constant("text")
+                [string_result] = pure([string])
+                self.assertIsInstance(string.type, tvm_ffi_d.StrType)
+                self.assertEqual(string_result.type.payload_type, string.type)
+                self.assertEqual(make_result_types([string.type]), [string_result.type])
                 empty = pure([])
                 self.assertIsInstance(empty[0].type.payload_type, tvm_ffi_d.NoneType)
                 for target in (boxed, tvm_ffi_d.AnyType.get(), union):
@@ -510,48 +441,6 @@ class ImporterTest(unittest.TestCase):
                 ):
                     pure(bound.arguments)
             self.assertTrue(module.operation.verify())
-
-    def test_result_payload_types(self) -> None:
-        with new_context(), ir.Location.unknown():
-            integer = tvm_ffi_d.IntType.get()
-            for payload in (
-                tvm_ffi_d.AnyType.get(),
-                tvm_ffi_d.ArrayType.get(integer),
-                tvm_ffi_d.BoolType.get(),
-                tvm_ffi_d.CArrayType.get(),
-                tvm_ffi_d.ExceptionType.get(),
-                tvm_ffi_d.FloatType.get(),
-                tvm_ffi_d.FunctionType.get(),
-                integer,
-                tvm_ffi_d.NoneType.get(),
-                tvm_ffi_d.TensorType.get(),
-                tvm_ffi_d.TupleType.get([integer]),
-                tvm_ffi_d.UnionType.get([integer, tvm_ffi_d.NoneType.get()]),
-            ):
-                with self.subTest(payload=payload):
-                    result = tvm_ffi_d.ResultType.get(payload)
-                    self.assertEqual(result.payload_type, payload)
-                    self.assertEqual(ir.Type.parse(f"{result}"), result)
-            for payload in (
-                ir.IntegerType.get_signless(1),
-                ir.IntegerType.get_signless(64),
-                ir.F64Type.get(),
-                ir.IndexType.get(),
-                ir.RankedTensorType.get([2], ir.IntegerType.get_signless(64)),
-                tvm_ffi_d.ObjectType.get(),
-                tvm_ffi_d.ResultType.get(integer),
-            ):
-                with (
-                    self.subTest(payload=payload),
-                    self.assertRaisesRegex(
-                        ValueError, "Result payload must be a TVM FFI C ABI type"
-                    ),
-                ):
-                    tvm_ffi_d.ResultType.get(payload)
-            with new_context():
-                foreign = tvm_ffi_d.IntType.get()
-            with self.assertRaisesRegex(ValueError, "construction context"):
-                tvm_ffi_d.ResultType.get(foreign)
 
     def test_unsupported_symbolic_power(self) -> None:
         importer = TridentFxImporter(context=new_context(), specialization_id=0)

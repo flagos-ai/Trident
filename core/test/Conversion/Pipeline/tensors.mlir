@@ -1,14 +1,28 @@
-//===----------------------------------------------------------------------===//
-//
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
-//
-//===----------------------------------------------------------------------===//
 
-// Keep input/check order: ABI lowering inserts helper declarations and wrappers
-// whose output order is checked together with the original functions.
-// RUN: trident-core-opt %s --trident-lowering-pipeline | FileCheck %s
-//
+// RUN: trident-core-opt %s --split-input-file --trident-lowering-pipeline --verify-each | FileCheck %s --implicit-check-not='!tvm_ffi.' --implicit-check-not='dlpack.' --implicit-check-not='unrealized_conversion_cast'
+
+// The local FinalizeTVMFFI and DLPackToLLVM fixtures own the metadata field
+// matrix. This integration follows one dynamic index from a semantic tensor
+// through object extraction, the DLTensor layout and the native return value.
+// CHECK-LABEL: llvm.func @tensor_size(
+// CHECK-SAME: %[[TENSOR:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[INDEX:[a-zA-Z0-9_]+]]: i64)
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[TENSOR]][2]
+// CHECK: %[[OBJECT:[a-zA-Z0-9_]+]] = llvm.inttoptr %[[PAYLOAD]] : i64 to !llvm.ptr
+// CHECK: %[[DLTENSOR_PTR:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[OBJECT]][24]
+// CHECK: %[[DLTENSOR:[a-zA-Z0-9_]+]] = llvm.load %[[DLTENSOR_PTR]]
+// CHECK: %[[SIZES:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[DLTENSOR]][4]
+// CHECK: %[[SIZE_PTR:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[SIZES]][%[[INDEX]]]
+// CHECK: %[[SIZE:[a-zA-Z0-9_]+]] = llvm.load %[[SIZE_PTR]] : !llvm.ptr -> i64
+// CHECK: llvm.return %[[SIZE]] : i64
+func.func @tensor_size(%tensor: !tvm_ffi.tensor, %index: i64) -> i64 {
+  %size = tvm_ffi.tensor.size %tensor[%index] : !tvm_ffi.tensor
+  return %size : i64
+}
+
+// -----
+
 // Tensor literals use one stable CPU-staging path for both splat and
 // non-splat attributes before copying the tensor to the current CUDA device.
 

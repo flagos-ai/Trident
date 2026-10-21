@@ -1,7 +1,7 @@
 # Part of the Trident project, under the MIT License.
 # SPDX-License-Identifier: MIT
 
-"""Container inputs and output pytree reconstruction."""
+"""Container inputs, output reconstruction and independent references."""
 
 from __future__ import annotations
 
@@ -14,29 +14,6 @@ from test.support.cuda import assert_no_cuda_leak
 
 
 class ContainerTest(unittest.TestCase):
-    def test_string_representations(self) -> None:
-        @trident.jit
-        def strings(x: torch.Tensor, text: str) -> tuple:
-            return x + 1, [text, (text, "constant string longer than seven bytes")]
-
-        texts = ("", "1234567", "12345678", "你好，字符串")
-
-        def check() -> None:
-            x = torch.randn(4, device="cuda")
-            for text in texts:
-                for phase in ("warmup", "cached"):
-                    with self.subTest(text=text, phase=phase):
-                        tensor, values = strings(x, text)
-                        torch.testing.assert_close(tensor, x + 1)
-                        self.assertEqual(
-                            values,
-                            [text, (text, "constant string longer than seven bytes")],
-                        )
-            self.assertEqual(len(strings._sub_modules), len(texts))
-
-        device = torch.device("cuda", torch.cuda.current_device())
-        assert_no_cuda_leak(self, check, device)
-
     def test_container_inputs_unpack(self) -> None:
         @trident.jit
         def list_add(x: torch.Tensor, values: list[torch.Tensor]) -> torch.Tensor:

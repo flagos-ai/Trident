@@ -48,3 +48,12 @@ func.func @unused_checks(%first: !tvm_ffi.any, %second: !tvm_ffi.union<!tvm_ffi.
   %b = tvm_ffi.downcast %second : !tvm_ffi.union<!tvm_ffi.c.tensor, !tvm_ffi.none> -> !tvm_ffi.c.tensor
   return
 }
+
+// CHECK-LABEL: func.func @string_cast(
+// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>
+// CHECK-NOT: llvm.call @abort()
+// CHECK: return %[[INPUT]]
+func.func @string_cast(%value: !tvm_ffi.any) -> !tvm_ffi.str {
+  %string = tvm_ffi.downcast %value : !tvm_ffi.any -> !tvm_ffi.str
+  return %string : !tvm_ffi.str
+}
