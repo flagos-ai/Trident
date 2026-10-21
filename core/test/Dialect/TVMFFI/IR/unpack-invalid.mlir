@@ -20,10 +20,10 @@ func.func @wrong_payload(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) {
 
 // -----
 
-func.func @missing_widening(%input: !tvm_ffi.monad.result<!tvm_ffi.tensor>) {
+func.func @missing_widening(%input: !tvm_ffi.monad.result<!tvm_ffi.c.tensor>) {
   // expected-error@+2 {{inferred type}}
   // expected-error@+1 {{failed to infer returned types}}
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (i1, !tvm_ffi.tensor)
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.c.tensor>) -> (i1, !tvm_ffi.c.tensor)
   return
 }
 

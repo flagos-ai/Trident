@@ -5,14 +5,14 @@
 
 // HasObject and Contains satisfy the combined constraint. Native Object is
 // admitted separately, without acquiring C ABI object classification.
-func.func @accepted(%any: !tvm_ffi.any, %array: !tvm_ffi.c.array, %exception: !tvm_ffi.exception, %function: !tvm_ffi.function, %object: !tvm_ffi.object, %str: !tvm_ffi.str, %tensor: !tvm_ffi.tensor, %union: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>) {
+func.func @accepted(%any: !tvm_ffi.any, %array: !tvm_ffi.c.array, %exception: !tvm_ffi.c.exception, %function: !tvm_ffi.c.function, %object: !tvm_ffi.object, %str: !tvm_ffi.c.str, %tensor: !tvm_ffi.c.tensor, %union: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>) {
   tvm_ffi.ObjectIncRef %any : !tvm_ffi.any
   tvm_ffi.ObjectDecRef %array : !tvm_ffi.c.array
-  tvm_ffi.ObjectIncRef %exception : !tvm_ffi.exception
-  tvm_ffi.ObjectDecRef %function : !tvm_ffi.function
+  tvm_ffi.ObjectIncRef %exception : !tvm_ffi.c.exception
+  tvm_ffi.ObjectDecRef %function : !tvm_ffi.c.function
   tvm_ffi.ObjectIncRef %object : !tvm_ffi.object
-  tvm_ffi.ObjectDecRef %str : !tvm_ffi.str
-  tvm_ffi.ObjectIncRef %tensor : !tvm_ffi.tensor
+  tvm_ffi.ObjectDecRef %str : !tvm_ffi.c.str
+  tvm_ffi.ObjectIncRef %tensor : !tvm_ffi.c.tensor
   tvm_ffi.ObjectDecRef %union : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>
   return
 }
@@ -27,9 +27,9 @@ func.func @array(%value: !tvm_ffi.array<!tvm_ffi.int>) {
 
 // -----
 
-func.func @result(%value: !tvm_ffi.monad.result<!tvm_ffi.tensor>) {
+func.func @result(%value: !tvm_ffi.monad.result<!tvm_ffi.c.tensor>) {
   // expected-error@+1 {{operand #0 must be TVM FFI object handle}}
-  tvm_ffi.ObjectDecRef %value : !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  tvm_ffi.ObjectDecRef %value : !tvm_ffi.monad.result<!tvm_ffi.c.tensor>
   return
 }
 

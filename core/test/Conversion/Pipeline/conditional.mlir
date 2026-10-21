@@ -11,11 +11,11 @@
 // CHECK-SAME: %[[COND:[a-zA-Z0-9_]+]]: i1, %[[LHS:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[RHS:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.select %[[COND]], %[[LHS]], %[[RHS]]
 // CHECK: llvm.return %[[RESULT]]
-func.func @conditional(%cond: i1, %lhs: !tvm_ffi.tensor, %rhs: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
-  %result = scf.if %cond -> (!tvm_ffi.tensor) {
-    scf.yield {tvm_ffi.retain} %lhs : !tvm_ffi.tensor
+func.func @conditional(%cond: i1, %lhs: !tvm_ffi.c.tensor, %rhs: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor {
+  %result = scf.if %cond -> (!tvm_ffi.c.tensor) {
+    scf.yield %lhs : !tvm_ffi.c.tensor
   } else {
-    scf.yield {tvm_ffi.retain} %rhs : !tvm_ffi.tensor
-  } {tvm_ffi.cleanup}
-  return {tvm_ffi.retain} %result : !tvm_ffi.tensor
+    scf.yield %rhs : !tvm_ffi.c.tensor
+  }
+  return %result : !tvm_ffi.c.tensor
 }

@@ -53,7 +53,12 @@ template <typename DerivedTy> struct SimpleType : PyConcreteType<DerivedTy> {
 
 DEFINE_GENERIC_TYPE(Any)
 DEFINE_GENERIC_TYPE(Bool)
+DEFINE_GENERIC_TYPE(CAny)
 DEFINE_GENERIC_TYPE(CArray)
+DEFINE_GENERIC_TYPE(CException)
+DEFINE_GENERIC_TYPE(CFunction)
+DEFINE_GENERIC_TYPE(CStr)
+DEFINE_GENERIC_TYPE(CTensor)
 DEFINE_GENERIC_TYPE(DType)
 DEFINE_GENERIC_TYPE(Device)
 DEFINE_GENERIC_TYPE(Exception)
@@ -223,7 +228,12 @@ NB_MODULE(_tvm_ffi, module) {
   AnyType::bind(module);
   ArrayType::bind(module);
   BoolType::bind(module);
+  CAnyType::bind(module);
   CArrayType::bind(module);
+  CExceptionType::bind(module);
+  CFunctionType::bind(module);
+  CStrType::bind(module);
+  CTensorType::bind(module);
   DTypeType::bind(module);
   DeviceType::bind(module);
   ExceptionType::bind(module);

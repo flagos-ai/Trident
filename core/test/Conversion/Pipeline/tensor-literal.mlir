@@ -46,22 +46,22 @@
 // CHECK: llvm.call @tensor_literal_splat(%[[SLOT:[a-zA-Z0-9_]+]]) : (!llvm.ptr) -> i32
 // The wrapper passes through the lowered TVMFFIAny result from the inner
 // function and stores it into the return slot expected by tvm_ffi.func.
-tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
-  %0 = tvm_ffi.tensor.literal dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32> {tvm_ffi.cleanup} : !tvm_ffi.tensor
+tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
+  %0 = tvm_ffi.tensor.literal dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32> : !tvm_ffi.c.tensor
 
   // The marked return retains its payload before local cleanup.
-  %return_value_1 = tvm_ffi.upcast %0 : !tvm_ffi.tensor -> !tvm_ffi.any
+  %return_value_1 = tvm_ffi.upcast %0 : !tvm_ffi.c.tensor -> !tvm_ffi.any
   %return_flag_1 = tvm_ffi.constant.bool true
-  tvm_ffi.return {tvm_ffi.retain} %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }
 
 // The wrapper passes through the lowered TVMFFIAny result from the inner
 // function and stores it into the return slot expected by tvm_ffi.func.
-tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
-  %0 = tvm_ffi.tensor.literal dense<1.250000e+00> : tensor<2x3xf32> {tvm_ffi.cleanup} : !tvm_ffi.tensor
+tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
+  %0 = tvm_ffi.tensor.literal dense<1.250000e+00> : tensor<2x3xf32> : !tvm_ffi.c.tensor
 
   // The marked return retains its payload before local cleanup.
-  %return_value_2 = tvm_ffi.upcast %0 : !tvm_ffi.tensor -> !tvm_ffi.any
+  %return_value_2 = tvm_ffi.upcast %0 : !tvm_ffi.c.tensor -> !tvm_ffi.any
   %return_flag_2 = tvm_ffi.constant.bool true
-  tvm_ffi.return {tvm_ffi.retain} %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.any
 }

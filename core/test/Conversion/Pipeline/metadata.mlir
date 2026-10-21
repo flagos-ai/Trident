@@ -25,12 +25,12 @@
 // CHECK: %[[DEVICE_TYPE:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[DEVICE]][0] : !llvm.struct<(i32, i32)>
 // CHECK: %[[DEVICE_INDEX:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[DEVICE]][1] : !llvm.struct<(i32, i32)>
 // CHECK: return %[[CODE]], %[[BITS]], %[[LANES]], %[[DEVICE_TYPE]], %[[DEVICE_INDEX]]
-func.func @tensor_dtype_and_device(%tensor: !tvm_ffi.tensor)
+func.func @tensor_dtype_and_device(%tensor: !tvm_ffi.c.tensor)
     -> (i8, i8, i16, i32, i32) {
-  %code, %bits, %lanes = tvm_ffi.tensor.dtype %tensor : !tvm_ffi.tensor
-  %device_type, %device_index = tvm_ffi.tensor.device %tensor : !tvm_ffi.tensor
+  %code, %bits, %lanes = tvm_ffi.tensor.dtype %tensor : !tvm_ffi.c.tensor
+  %device_type, %device_index = tvm_ffi.tensor.device %tensor : !tvm_ffi.c.tensor
   return %code, %bits, %lanes, %device_type, %device_index
-      : i8, i8, i16, i32, i32
+     : i8, i8, i16, i32, i32
 }
 
 // -----
@@ -63,11 +63,11 @@ func.func @tensor_dtype_and_device(%tensor: !tvm_ffi.tensor)
 // CHECK: %[[OFFSET_DLTENSOR:[a-zA-Z0-9_]+]] = llvm.load %[[OFFSET_DLTENSOR_PTR]] : !llvm.ptr -> !llvm.struct<(ptr, struct<(i32, i32)>, i32, struct<(i8, i8, i16)>, ptr, ptr, i64)>
 // CHECK: %[[OFFSET:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[OFFSET_DLTENSOR]][6] : !llvm.struct<(ptr, struct<(i32, i32)>, i32, struct<(i8, i8, i16)>, ptr, ptr, i64)>
 // CHECK: return %[[DIM]], %[[SIZE]], %[[STRIDE]], %[[OFFSET]] : i64, i64, i64, i64
-func.func @tensor_metadata(%tensor: !tvm_ffi.tensor, %index: i64)
+func.func @tensor_metadata(%tensor: !tvm_ffi.c.tensor, %index: i64)
     -> (i64, i64, i64, i64) {
-  %dim = tvm_ffi.tensor.dim %tensor : !tvm_ffi.tensor
-  %size = tvm_ffi.tensor.size %tensor[%index] : !tvm_ffi.tensor
-  %stride = tvm_ffi.tensor.stride %tensor[%index] : !tvm_ffi.tensor
-  %offset = tvm_ffi.tensor.storage_offset %tensor : !tvm_ffi.tensor
+  %dim = tvm_ffi.tensor.dim %tensor : !tvm_ffi.c.tensor
+  %size = tvm_ffi.tensor.size %tensor[%index] : !tvm_ffi.c.tensor
+  %stride = tvm_ffi.tensor.stride %tensor[%index] : !tvm_ffi.c.tensor
+  %offset = tvm_ffi.tensor.storage_offset %tensor : !tvm_ffi.c.tensor
   return %dim, %size, %stride, %offset : i64, i64, i64, i64
 }

@@ -42,7 +42,6 @@ from trident.core.dialects import (
 )
 from trident.core.execution_engine import ExecutionEngine
 from trident.ffi import Exception
-from trident.ownership import CLEANUP_ATTR, RETAIN_ATTR
 
 from .guards import parse_guards
 from .importer import TridentFxImporter
@@ -124,14 +123,14 @@ class TridentGraphModule:
     ) -> list[ir.Value]:
         """Pack owned graph outputs or translate specialization rejection to GuardMatch."""
         graph_call = func.CallOp(function, arguments)
-        graph_call.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+
         graph_results = graph_call.results
         ready = arith.constant(ir.IntegerType.get_signless(1), True)
         for result in graph_results:
             unpack = tvm_ffi_d.MonadUnpackOp(result)
             ready = arith.andi(ready, unpack.success)
         outcome = scf.IfOp(ready, [result_type], has_else=True)
-        outcome.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+
         with ir.InsertionPoint(outcome.then_block):
             with bind(
                 graph_results,
@@ -156,20 +155,16 @@ class TridentGraphModule:
                             packing.arguments,
                             result_types=[result_type],
                         )
-                        terminator = tvm_ffi_d.MonadYieldOp(yielded)
-                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                        tvm_ffi_d.MonadYieldOp(yielded)
                     results = [*packing.outputs]
-                terminator = tvm_ffi_d.MonadYieldOp(results)
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            terminator = scf.YieldOp(invocation.outputs)
-            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                tvm_ffi_d.MonadYieldOp(results)
+            scf.YieldOp(invocation.outputs)
         with ir.InsertionPoint(outcome.else_block):
             yielded = pure(
                 [rejection],
                 result_types=[result_type],
             )
-            terminator = scf.YieldOp(yielded)
-            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            scf.YieldOp(yielded)
         return [*outcome.results]
 
     def _register_shape(
@@ -326,9 +321,7 @@ class TridentGraphModule:
             entry_block: ir.Block = ir.Block.create_at_start(ffi_func.body, param_types)
 
             with ir.InsertionPoint(entry_block):
-                owned_op = tvm_ffi_d.ExceptionOp("GuardMatch")
-                owned_op.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-                exception = owned_op.result
+                exception = tvm_ffi_d.ExceptionOp("GuardMatch").result
                 rejection = tvm_ffi_d.upcast(abi_result_type, exception)
                 with bind(
                     parse_guards(gs).build(
@@ -340,7 +333,7 @@ class TridentGraphModule:
                     branch = scf.IfOp(
                         native(predicate), [ffi_result_type], has_else=True
                     )
-                    branch.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
+
                     with ir.InsertionPoint(branch.then_block):
                         with bind(
                             input_builder.build(entry_block.arguments).extract_many(),
@@ -376,21 +369,15 @@ class TridentGraphModule:
                                 rejection,
                                 ffi_result_type,
                             )
-                            terminator = tvm_ffi_d.MonadYieldOp(yielded)
-                            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                        terminator = scf.YieldOp(inputs.outputs)
-                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                            tvm_ffi_d.MonadYieldOp(yielded)
+                        scf.YieldOp(inputs.outputs)
                     with ir.InsertionPoint(branch.else_block):
                         yielded = pure([rejection], result_types=[ffi_result_type])
-                        terminator = scf.YieldOp(yielded)
-                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                    terminator = tvm_ffi_d.MonadYieldOp(branch.results)
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                        scf.YieldOp(yielded)
+                    tvm_ffi_d.MonadYieldOp(branch.results)
                 unpacked = tvm_ffi_d.MonadUnpackOp(guards.outputs[0])
                 success = tvm_ffi_d.to(unpacked.success)
-                terminator = tvm_ffi_d.ReturnOp(success, unpacked.value)
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-
+                tvm_ffi_d.ReturnOp(success, unpacked.value)
         self._sub_modules.append(module)
         self.executor = self.stub_compile()
         gc.collect()

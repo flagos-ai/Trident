@@ -29,7 +29,7 @@
 // CHECK: %[[RET_SLOT:[a-zA-Z0-9_]+]] = llvm.alloca
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[CALL_ARGS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RET_SLOT]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: %[[RET:[a-zA-Z0-9_]+]] = llvm.load %[[RET_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// The frontend cleanup marker becomes a release before exporting the payload.
+// Automatic ownership releases the local handle before exporting the payload.
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
 // CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
@@ -42,11 +42,11 @@
 
 tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
   %memory_format = tvm_ffi.constant.int 0
-  %clone_handle = tvm_ffi.FunctionGetGlobal "trident.aten.clone" {tvm_ffi.cleanup} : !tvm_ffi.object
-  %clone = tvm_ffi.FunctionCall %clone_handle(%arg0, %memory_format) {tvm_ffi.cleanup} : (!tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.tensor
+  %clone_handle = tvm_ffi.FunctionGetGlobal "trident.aten.clone" : !tvm_ffi.function
+  %clone = tvm_ffi.FunctionCall %clone_handle : !tvm_ffi.function(%arg0, %memory_format) : (!tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.tensor
 
-  // The marked return retains its payload before local cleanup.
+  // The return retains its payload before local cleanup.
   %return_value_1 = tvm_ffi.upcast %clone : !tvm_ffi.tensor -> !tvm_ffi.any
   %return_flag_1 = tvm_ffi.constant.bool true
-  tvm_ffi.return {tvm_ffi.retain} %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }

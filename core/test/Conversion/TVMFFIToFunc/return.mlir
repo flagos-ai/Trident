@@ -5,10 +5,10 @@
 // RUN: trident-core-opt %s --trident-lowering-pipeline --verify-each | FileCheck %s --check-prefix=LLVM --implicit-check-not='tvm_ffi.'
 
 // CHECK-LABEL: func.func @explicit_status(
-// CHECK-SAME: %[[FLAG:[a-zA-Z0-9_]+]]: !tvm_ffi.bool, %[[PAYLOAD:[a-zA-Z0-9_]+]]: !tvm_ffi.any, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
+// CHECK-SAME: %[[FLAG:[a-zA-Z0-9_]+]]: !tvm_ffi.bool, %[[PAYLOAD:[a-zA-Z0-9_]+]]: !tvm_ffi.c.any, %[[SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
 // CHECK: %[[READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[FLAG]]
 // CHECK: %[[STATUS:[a-zA-Z0-9_]+]] = scf.if %[[READY]] -> (i32) {
-// CHECK: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[PAYLOAD]] : !tvm_ffi.any -> !tvm_ffi.tensor
+// CHECK: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[PAYLOAD]] : !tvm_ffi.c.any -> !tvm_ffi.c.tensor
 // CHECK: %[[ANY:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[TYPED]]
 // CHECK: %[[ABI:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[ANY]]
 // CHECK: llvm.store %[[ABI]], %[[SLOT]]
@@ -22,8 +22,8 @@
 // CHECK: scf.yield %[[ERROR]]
 // CHECK: return %[[STATUS]]
 // LLVM-LABEL: llvm.func @explicit_status(
-tvm_ffi.func @explicit_status(%flag: !tvm_ffi.bool, %payload: !tvm_ffi.any) -> !tvm_ffi.tensor {
-  tvm_ffi.return %flag, %payload : !tvm_ffi.bool, !tvm_ffi.any
+tvm_ffi.func @explicit_status(%flag: !tvm_ffi.bool, %payload: !tvm_ffi.c.any) -> !tvm_ffi.c.tensor {
+  tvm_ffi.return %flag, %payload : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // CHECK-LABEL: func.func private @external(
@@ -49,7 +49,7 @@ tvm_ffi.func @external(i64) -> !tvm_ffi.int
 // LLVM-LABEL: llvm.func @__tvm_ffi_packed_unit(
 tvm_ffi.func @packed_unit() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
   %none = tvm_ffi.constant.none
-  %any = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
+  %any = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.c.any
   %ok = tvm_ffi.constant.bool true
-  tvm_ffi.return %ok, %any : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %ok, %any : !tvm_ffi.bool, !tvm_ffi.c.any
 }

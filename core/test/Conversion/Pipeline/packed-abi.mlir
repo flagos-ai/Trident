@@ -22,7 +22,7 @@ tvm_ffi.func @make_int() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
 
   %return_flag_1 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return {tvm_ffi.retain} %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }
 
 // Tuple construction packs multiple values before crossing the ABI.
@@ -49,13 +49,13 @@ tvm_ffi.func @make_int() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
 // CHECK: llvm.call @tuple_return(%[[X:[a-zA-Z0-9_]+]], %[[Y:[a-zA-Z0-9_]+]], %[[Z:[a-zA-Z0-9_]+]], %[[SLOT:[a-zA-Z0-9_]+]])
 // CHECK: %[[PACKED:[a-zA-Z0-9_]+]] = llvm.load %[[SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: llvm.store %[[PACKED]], %[[OUT]]
-tvm_ffi.func @tuple_return(%x: !tvm_ffi.tensor,
-    %y: !tvm_ffi.tensor, %z: !tvm_ffi.tensor) -> !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>
+tvm_ffi.func @tuple_return(%x: !tvm_ffi.c.tensor,
+    %y: !tvm_ffi.c.tensor, %z: !tvm_ffi.c.tensor) -> !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor>
     attributes {emit_tvm_ffi_abi} {
-  %tuple = tvm_ffi.tuple.construct(%x, %y, %z) {tvm_ffi.cleanup} : (!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor) -> !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>
-  %any = tvm_ffi.upcast %tuple : !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor> -> !tvm_ffi.any
+  %tuple = tvm_ffi.tuple.construct(%x, %y, %z) : (!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor) -> !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor>
+  %any = tvm_ffi.upcast %tuple : !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor> -> !tvm_ffi.any
   tvm_ffi.ObjectIncRef %any : !tvm_ffi.any
-  %return_value_2 = tvm_ffi.upcast %tuple : !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor> -> !tvm_ffi.any
+  %return_value_2 = tvm_ffi.upcast %tuple : !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor> -> !tvm_ffi.any
   %return_flag_2 = tvm_ffi.constant.bool true
-  tvm_ffi.return {tvm_ffi.retain} %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.any
 }

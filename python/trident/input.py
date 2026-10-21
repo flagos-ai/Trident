@@ -29,7 +29,7 @@ from trident.ir import (
     tuple_type,
     value_type,
 )
-from trident.ownership import RETAIN_ATTR, has_cleanup_owner, is_value_in_scope
+from trident.ownership import is_value_in_scope
 
 pytree.register_pytree_node(
     torch.device,
@@ -110,14 +110,13 @@ class InputTable:
                 [node.value], result_types=[tvm_ffi_d.ResultType.get(node.type)]
             )
         elif node.result is not None and all(
-            has_cleanup_owner(value) for value in node.result
+            is_value_in_scope(value) for value in node.result
         ):
             # The cache borrows a reference until block exit; return an independent one.
             with bind(
                 node.result, result_types=[value.type for value in node.result]
             ) as cached:
-                terminator = tvm_ffi_d.MonadYieldOp(pure(cached.arguments))
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                tvm_ffi_d.MonadYieldOp(pure(cached.arguments))
             return [*cached.outputs]
         else:
             assert len(path) > 1, f"input cannot be resolved: {path}"
@@ -125,10 +124,8 @@ class InputTable:
             *parent_path, index = path
             with bind(self.extract(parent_path), result_types=types) as operation:
                 [array] = operation.arguments
-                terminator = tvm_ffi_d.MonadYieldOp(
-                    container_get(array, index, node.type)
-                )
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                tvm_ffi_d.MonadYieldOp(container_get(array, index, node.type))
+
             node.result = [*operation.outputs]
             return node.result
 
@@ -146,10 +143,10 @@ class InputTable:
                     values.append(value)
                     continue
                 with bind(self.extract(path), result_types=types) as operation:
-                    terminator = tvm_ffi_d.MonadYieldOp(
+                    tvm_ffi_d.MonadYieldOp(
                         build(index + 1, [*values, *operation.arguments])
                     )
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+
                 return [*operation.outputs]
             return pure(values, result_types=types)
 

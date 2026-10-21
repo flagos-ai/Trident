@@ -11,7 +11,6 @@
 #include <cassert>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/ADT/SmallVectorExtras.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -23,6 +22,7 @@
 #include <mlir/IR/BuiltinTypeInterfaces.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/Location.h>
+#include <mlir/IR/OpDefinition.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Region.h>
@@ -35,6 +35,30 @@
 
 namespace trident::tvm_ffi {
 
+mlir::LogicalResult DeferOp::verify() {
+  mlir::Block &body = getBody().front();
+  if (body.getNumArguments() != 0) {
+    return emitOpError("body must have no arguments");
+  }
+  if (body.empty() || !mlir::isa<DeferYieldOp>(body.back())) {
+    return emitOpError("body must end with tvm_ffi.defer_yield");
+  }
+  for (mlir::Operation &operation : body.without_terminator()) {
+    if (operation.getNumRegions() != 0 ||
+        operation.hasTrait<mlir::OpTrait::IsTerminator>()) {
+      return emitOpError(
+          "body must contain only operations without regions or terminators");
+    }
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult DeferYieldOp::verify() {
+  return mlir::isa<DeferOp>((*this)->getParentOp())
+             ? mlir::success()
+             : emitOpError("must terminate tvm_ffi.defer");
+}
+
 mlir::OpFoldResult DowncastOp::fold(FoldAdaptor) {
   return getValue().getType() == getType() ? getValue() : mlir::OpFoldResult{};
 }
@@ -43,15 +67,39 @@ mlir::OpFoldResult UpcastOp::fold(FoldAdaptor) {
   return getValue().getType() == getType() ? getValue() : mlir::OpFoldResult{};
 }
 
-namespace {
-
-llvm::SmallVector<mlir::Type> getPayloadTypes(mlir::ValueRange values) {
-  return llvm::map_to_vector(values, [](mlir::Value value) -> mlir::Type {
-    return mlir::cast<ResultType>(value.getType()).getPayloadType();
-  });
+bool CallOp::isCompatibleReturnTypes(mlir::TypeRange lhs, mlir::TypeRange rhs) {
+  return lhs.size() == 2 && rhs.size() == 2 && lhs[0] == rhs[0] &&
+         mlir::isa<AnyType, CAnyType>(lhs[1]) &&
+         mlir::isa<AnyType, CAnyType>(rhs[1]);
 }
 
-} // namespace
+bool ExceptionOp::isCompatibleReturnTypes(mlir::TypeRange lhs,
+                                          mlir::TypeRange rhs) {
+  return lhs.size() == 1 && rhs.size() == 1 &&
+         mlir::isa<ExceptionType, CExceptionType>(lhs[0]) &&
+         mlir::isa<ExceptionType, CExceptionType>(rhs[0]);
+}
+
+bool FunctionGetGlobalOp::isCompatibleReturnTypes(mlir::TypeRange lhs,
+                                                  mlir::TypeRange rhs) {
+  return lhs.size() == 1 && rhs.size() == 1 &&
+         mlir::isa<FunctionType, CFunctionType>(lhs[0]) &&
+         mlir::isa<FunctionType, CFunctionType>(rhs[0]);
+}
+
+bool TensorCloneOp::isCompatibleReturnTypes(mlir::TypeRange lhs,
+                                            mlir::TypeRange rhs) {
+  return lhs.size() == 1 && rhs.size() == 1 &&
+         mlir::isa<TensorType, CTensorType>(lhs[0]) &&
+         mlir::isa<TensorType, CTensorType>(rhs[0]);
+}
+
+bool TensorLiteralOp::isCompatibleReturnTypes(mlir::TypeRange lhs,
+                                              mlir::TypeRange rhs) {
+  return lhs.size() == 1 && rhs.size() == 1 &&
+         mlir::isa<TensorType, CTensorType>(lhs[0]) &&
+         mlir::isa<TensorType, CTensorType>(rhs[0]);
+}
 
 mlir::LogicalResult ArrayCreateOp::verify() {
   ArrayType const type = getResult().getType();
@@ -89,9 +137,8 @@ mlir::LogicalResult FuncOp::verify() {
              !mlir::isa<TVMFFICABIType>(getResultTypes().front())) {
     return emitOpError("function must return exactly one C ABI value; use a "
                        "tuple for multiple values and None for no value");
-  } else {
-    return mlir::success();
   }
+  return mlir::success();
 }
 
 mlir::LogicalResult GetOp::inferReturnTypes(
@@ -187,105 +234,6 @@ mlir::LogicalResult KernelLaunchOp::verify() {
   return mlir::success();
 }
 
-mlir::Block *MonadBindOp::addEntryBlock(mlir::OpBuilder &builder) {
-  if (mlir::Block *entry = getEntryBlock()) {
-    return entry;
-  }
-  llvm::SmallVector<mlir::Type> const payloads = getPayloadTypes(getInputs());
-  llvm::SmallVector<mlir::Location> const locations(payloads.size(), getLoc());
-  return builder.createBlock(&getBody(), {}, payloads, locations);
-}
-
-mlir::Block *MonadBindOp::getEntryBlock() {
-  mlir::Region &body = getBody();
-  return body.empty() ? nullptr : &body.front();
-}
-
-mlir::LogicalResult MonadBindOp::verify() {
-  mlir::Block *entry = getEntryBlock();
-  if (!getBody().hasOneBlock() || !entry || entry->empty()) {
-    return emitOpError(
-        "body must contain one nonempty block ending with tvm_ffi.monad.yield");
-  } else if (llvm::SmallVector<mlir::Type> const payloads =
-                 getPayloadTypes(getInputs());
-             entry->getArgumentTypes() != mlir::TypeRange(payloads)) {
-    return emitOpError("region arguments must match input Result payloads");
-  } else if (!mlir::isa<MonadYieldOp>(entry->getTerminator())) {
-    return emitOpError("body must end with tvm_ffi.monad.yield");
-  } else {
-    return mlir::success();
-  }
-}
-
-mlir::LogicalResult MonadFailOp::verify() {
-  return getOutputs().empty() ? emitOpError("requires at least one Result")
-                              : mlir::success();
-}
-
-mlir::LogicalResult MonadPureOp::verify() {
-  llvm::SmallVector<mlir::Type> const payloads = getPayloadTypes(getOutputs());
-  if (getOutputs().empty()) {
-    return emitOpError("requires at least one Result");
-  } else if (getValues().size() != payloads.size()) {
-    return emitOpError("payload count must match Result count");
-  } else if (!llvm::equal(getValues().getTypes(), payloads)) {
-    return emitOpError("payload type must match Result type");
-  } else {
-    return mlir::success();
-  }
-}
-
-mlir::LogicalResult MonadUnpackOp::inferReturnTypes(
-    mlir::MLIRContext *context, std::optional<mlir::Location>,
-    mlir::ValueRange operands, mlir::DictionaryAttr, mlir::PropertyRef,
-    mlir::RegionRange, llvm::SmallVectorImpl<mlir::Type> &inferredReturnTypes) {
-  if (operands.size() != 1) {
-    return mlir::failure();
-  }
-  ResultType const result =
-      mlir::dyn_cast<ResultType>(operands.front().getType());
-  if (!result) {
-    return mlir::failure();
-  }
-  mlir::Type const payload = result.getPayloadType();
-  mlir::Type const any = AnyType::get(context);
-  inferredReturnTypes.push_back(mlir::IntegerType::get(context, 1));
-  inferredReturnTypes.push_back(
-      UpcastOp::areCastCompatible({payload}, {any}) ? any : payload);
-  return mlir::success();
-}
-
-mlir::LogicalResult MonadYieldOp::verify() {
-  mlir::Operation *parent = getOperation()->getParentOp();
-  if (MonadBindOp bind = mlir::dyn_cast<MonadBindOp>(parent)) {
-    if (getOperandTypes() != bind.getResultTypes()) {
-      return emitOpError("Result types must match bind outputs");
-    }
-  } else {
-    return emitOpError("must be nested directly in tvm_ffi.monad.bind");
-  }
-  return mlir::success();
-}
-
-namespace {
-
-template <typename OpTy> mlir::LogicalResult verifyLocalCallee(OpTy op) {
-  FuncOp function = mlir::SymbolTable::lookupNearestSymbolFrom<FuncOp>(
-      op.getOperation(), op.getCalleeAttr());
-  if (!function) {
-    return op.emitOpError("callee must resolve to a tvm_ffi.func");
-  }
-  if (op.getOperandTypes() != function.getArgumentTypes()) {
-    return op.emitOpError("operand types must match the callee arguments");
-  }
-  if (!function.getEmitTvmFfiAbi()) {
-    return op.emitOpError("callee must have emit_tvm_ffi_abi");
-  }
-  return mlir::success();
-}
-
-} // namespace
-
 mlir::LogicalResult CallOp::verify() {
   // After function conversion the implementation has one output slot and an
   // i32 status. Preserve the ABI marker so this boundary remains verifiable.
@@ -305,22 +253,6 @@ mlir::LogicalResult CallOp::verify() {
       return emitOpError(
           "operand types must match the lowered callee arguments");
     }
-  } else if (mlir::failed(verifyLocalCallee(*this))) {
-    return mlir::failure();
-  }
-  return mlir::success();
-}
-
-mlir::LogicalResult MonadCallOp::verify() {
-  if (mlir::failed(verifyLocalCallee(*this))) {
-    return mlir::failure();
-  }
-  FuncOp function = mlir::SymbolTable::lookupNearestSymbolFrom<FuncOp>(
-      getOperation(), getCalleeAttr());
-  if (function.getResultTypes().size() != 1 ||
-      getResult().getType().getPayloadType() !=
-          function.getResultTypes().front()) {
-    return emitOpError("Result payload must match the callee result");
   }
   return mlir::success();
 }

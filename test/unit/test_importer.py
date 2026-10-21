@@ -14,25 +14,101 @@ from trident.importer import TridentFxImporter
 from trident.ir import (
     bind,
     box,
+    checked_call,
     constant,
     container_get,
     ffi_type,
     make_result_types,
     native_constant,
     pure,
+    value_type,
 )
 
 from test.support.ir import new_context
 
 
 class ImporterTest(unittest.TestCase):
+    def test_frontend_uses_semantic_object_types(self) -> None:
+        forbidden = (
+            tvm_ffi_d.CAnyType,
+            tvm_ffi_d.CArrayType,
+            tvm_ffi_d.CExceptionType,
+            tvm_ffi_d.CFunctionType,
+            tvm_ffi_d.CStrType,
+            tvm_ffi_d.CTensorType,
+            tvm_ffi_d.ObjectType,
+        )
+
+        def check_type(type_: ir.Type) -> None:
+            self.assertNotIsInstance(type_, forbidden)
+            if isinstance(type_, tvm_ffi_d.ArrayType):
+                check_type(type_.element_type)
+            elif isinstance(type_, tvm_ffi_d.ResultType):
+                check_type(type_.payload_type)
+            elif isinstance(type_, (tvm_ffi_d.TupleType, tvm_ffi_d.UnionType)):
+                for member in type_.types:
+                    check_type(member)
+            elif isinstance(type_, ir.FunctionType):
+                for member in (*type_.inputs, *type_.results):
+                    check_type(member)
+
+        def check_attribute(attribute: ir.Attribute) -> None:
+            if isinstance(attribute, ir.TypeAttr):
+                check_type(attribute.value)
+            elif isinstance(attribute, ir.ArrayAttr):
+                for member in attribute:
+                    check_attribute(member)
+            elif isinstance(attribute, ir.DictAttr):
+                for member in attribute:
+                    check_attribute(member.attr)
+
+        def check_operation(operation: ir.Operation) -> None:
+            for value in (*operation.operands, *operation.results):
+                check_type(value.type)
+            for attribute in operation.attributes:
+                check_attribute(
+                    operation.attributes[attribute]
+                    if isinstance(attribute, str)
+                    else attribute.attr
+                )
+            for region in operation.regions:
+                for block in region.blocks:
+                    for argument in block.arguments:
+                        check_type(argument.type)
+                    for child in block.operations:
+                        check_operation(child.operation)
+
+        context = new_context()
+        importer = TridentFxImporter(context=context, specialization_id=0)
+        with context, ir.Location.unknown(context):
+            tensor = tvm_ffi_d.TensorType.get()
+            string = tvm_ffi_d.StrType.get()
+            with ir.InsertionPoint(importer.module.body):
+                function = func.FuncOp("semantic", ([tensor, string], []))
+                with ir.InsertionPoint(function.add_entry_block()):
+                    checked_call("test.identity", [function.arguments[0]], tensor)
+                    pure([tvm_ffi_d.ExceptionOp("GuardMatch").result])
+                    importer.build_arguments(
+                        [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
+                    )
+                    func.ReturnOp([])
+            self.assertTrue(importer.module.operation.verify())
+            check_operation(importer.module.operation)
+            parsed = ir.Module.parse(f"{importer.module}")
+            check_operation(parsed.operation)
+
     def test_abi_type_spellings(self) -> None:
         context = new_context()
         with context:
             for name, type_class in (
                 ("any", tvm_ffi_d.AnyType),
                 ("bool", tvm_ffi_d.BoolType),
+                ("c.any", tvm_ffi_d.CAnyType),
                 ("c.array", tvm_ffi_d.CArrayType),
+                ("c.exception", tvm_ffi_d.CExceptionType),
+                ("c.function", tvm_ffi_d.CFunctionType),
+                ("c.str", tvm_ffi_d.CStrType),
+                ("c.tensor", tvm_ffi_d.CTensorType),
                 ("dtype", tvm_ffi_d.DTypeType),
                 ("device", tvm_ffi_d.DeviceType),
                 ("float", tvm_ffi_d.FloatType),
@@ -51,6 +127,8 @@ class ImporterTest(unittest.TestCase):
                     parsed = ffi_type(name)
                     self.assertIsInstance(parsed, type_class)
                     self.assertEqual(parsed, type_)
+            self.assertNotEqual(tvm_ffi_d.AnyType.get(), tvm_ffi_d.CAnyType.get())
+            self.assertNotIsInstance(ffi_type("c.any"), tvm_ffi_d.AnyType)
             exception = tvm_ffi_d.ExceptionType.get()
             self.assertEqual(f"{exception}", "!tvm_ffi.exception")
             self.assertIsInstance(ffi_type("exception"), tvm_ffi_d.ExceptionType)
@@ -201,7 +279,7 @@ class ImporterTest(unittest.TestCase):
                 ([1, None], "!tvm_ffi.array<!tvm_ffi.any>"),
                 (
                     ["a", "b"],
-                    "!tvm_ffi.array<!tvm_ffi.union<!tvm_ffi.raw_str, !tvm_ffi.small_str, !tvm_ffi.str>>",
+                    "!tvm_ffi.array<!tvm_ffi.str>",
                 ),
                 ([torch.float32, torch.float64], "!tvm_ffi.array<!tvm_ffi.int>"),
                 ((torch.float32, 1), "!tvm_ffi.tuple<!tvm_ffi.int, !tvm_ffi.int>"),
@@ -254,6 +332,12 @@ class ImporterTest(unittest.TestCase):
         context = new_context()
         with context, ir.Location.unknown(context):
             integer = tvm_ffi_d.IntType.get()
+            for mapping in ({}, {"key": [1, "value"]}):
+                with self.subTest(mapping=mapping):
+                    self.assertEqual(
+                        value_type(mapping),
+                        tvm_ffi_d.ArrayType.get(tvm_ffi_d.AnyType.get()),
+                    )
             array = tvm_ffi_d.ArrayType.get(integer)
             tuple_ = tvm_ffi_d.TupleType.get([array, integer, integer])
             for value, cls in (
@@ -371,18 +455,12 @@ class ImporterTest(unittest.TestCase):
         context = new_context()
         with context, ir.Location.unknown(context):
             module = ir.Module.create()
-            string = tvm_ffi_d.UnionType.get(
-                [
-                    tvm_ffi_d.RawStrType.get(),
-                    tvm_ffi_d.SmallStrType.get(),
-                    tvm_ffi_d.StrType.get(),
-                ]
-            )
+            string = tvm_ffi_d.StrType.get()
             with ir.InsertionPoint(module.body):
                 for text in ("", "1234567", "12345678"):
                     with self.subTest(text=text):
                         value = constant(text)
-                        self.assertIsInstance(value.type, tvm_ffi_d.RawStrType)
+                        self.assertIsInstance(value.type, tvm_ffi_d.StrType)
                         [result] = pure([value])
                         self.assertEqual(result.type.payload_type, string)
                         self.assertEqual(make_result_types([value.type]), [result.type])

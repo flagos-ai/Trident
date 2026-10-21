@@ -65,85 +65,92 @@ division uses floor semantics; integer remainder follows
 ABI. Unsupported scalar expressions or higher-order operators fail explicitly.
 
 TVM FFI types have concrete Python bindings exported by
-`trident.core.dialects.tvm_ffi`. Their TypeID registrations automatically cast
-parsed types and operation value types to classes such as `BoolType`, `IntType`
-and `TensorType`. Python type inspection uses `isinstance`, integer width and
-signedness, or MLIR Type equality, rather than textual spellings. Native scalar
-boxing remains limited to signless i1/i64 and f64. Internal TVM FFI type
-construction uses `.get()`; `UnionType.get()` verifies members and exposes them
-through its read-only `types` tuple. Union members are restricted to
-`TVMFFICABIType`; its C++ parameter and accessor use
-`ArrayRef<TVMFFICABIType>`. Native scalars, native Object handles and Results
-are rejected during parsing and checked C/Python construction. Existing minimum
-arity, uniqueness and indexed-member restrictions remain in force. `ffi_type(name)` remains a textual
-compatibility constructor. Only the native C ABI Array uses the `c.` prefix:
-`!tvm_ffi.c.array`,
-with the `CArrayType` binding. Other ABI types retain their ordinary spellings,
-for example `ffi_type("int")` and `!tvm_ffi.tensor`. Semantic `ArrayType.get(T)`
-and `TupleType.get(types)` construct `!tvm_ffi.array<T>` and
-`!tvm_ffi.tuple<T0, T1, ...>`, including empty tuples. Their read-only
-`element_type` and `types` properties expose the parameters. Both semantic
-container types inherit `TVMFFICOpaqueABIType`; Array and Tuple elements must be
-`TVMFFICABIType`, including nested Array and Tuple types. Array's C++ parameter
-and accessor use `TVMFFICABIType`; Tuple uses `ArrayRef<TVMFFICABIType>`.
-Parsing and checked C/Python construction reject other types.
-C ABI types are identified by the C++ `TVMFFICABIType` class and its
-`TVMFFICABI` trait, including indexed object types. Its TableGen subclasses
-`TVMFFICBaseABI_Type` and `TVMFFICOpaqueABI_Type` distinguish public C
-representations/layouts from opaque semantic representations. The C++
-`TVMFFICBaseABIType` and `TVMFFICOpaqueABIType` classes use corresponding traits
-for `isa`/`dyn_cast`, independently of object classification. The common CABI
-class provides `getLLVMType(context)` for the tagged `{i32, i32, i64}` ABI
-representation used by both categories.
-Base implements `TVMFFITypeIndexInterface` and supports both fixed and dynamically
-registered type indices. Fixed-index POD and object types share the TableGen-only
-`TVMFFIStaticTypeIndex_Type` base, which adds `HasStaticTypeIndex` and generates
-`static constexpr int32_t getTypeIndex()` from its non-negative `typeIndex`
-parameter. The same accessor serves the common interface and compile-time
-queries. No additional C++ classification class is needed.
-`TVMFFICBaseABI_Type` declares `getTypeIndex()` without an implementation;
-the static-index subclass replaces that declaration with its constant
-implementation.
-Exception implements the declared method in C++ using its runtime-registered
-index and does not have the static-index trait.
-The C++ Base classification provides an instance `getTypeIndex()` that dispatches
-through the interface. The common CABI base and Opaque do not provide that method.
-The `HasObject` trait marks CArray, Exception, Function, Str and Tensor
-independently of the ABI hierarchy and static-index classification.
-The fixed-index object types explicitly declare `TVMFFINativeTypeInterface`;
-Exception retains its runtime-registered index. Concrete object types inherit
-`TVMFFICBaseABIType` directly. `TVMFFIObjectType` remains a trait-based
-classification view supporting `isa`/`dyn_cast` and type-index queries, rather
-than a C++ base of concrete types; implicit conversions to that view require an
-explicit MLIR cast. `HasObject` identifies definite C ABI object types, not all
-reference-bearing types; reference management is selected by the cleanup pass.
-`TVMFFI_MayHaveObject` is a TableGen type constraint combining `HasObject` or
-`Contains`, rather than an explicitly registered trait. `HasObject` directly
-inherits the MLIR type-trait base. Any and Union register only `Contains`;
-Result and native Object register neither marker. After unwrapping a Result
-payload, the cleanup pass checks native Object or either trait. Scalar Results
-need no references, while even scalar-only Unions conservatively require reference
-handling. Semantic Array/Tuple are classified after conversion to CArray.
-These rules preserve ABI classification, representation and cast legality.
-Any and Union carry the `Contains` native type trait, which declares
-`bool contains(TVMFFICABIType) const`, accepting only C ABI types. Any always
-returns true; Union checks direct membership or whether every member of another Union belongs to it.
-Any, semantic Array/Tuple and Union belong to Opaque.
-Object remains a native-pointer `TVMFFIABIType` outside CABI; it cannot
-be a Tuple member, tagged call value or tagged cast operand/result. It retains
-reference management but cannot be a Result payload. `decompose-tvm-ffi`
-converts semantic Array/Tuple to the concrete Base
-`CArrayType`, including function signatures, region arguments, Result payloads
-and type-bearing attributes. Other opaque types retain their specialized ABI/LLVM
-lowering paths; opaque classification alone does not imply container erasure.
-Result remains an independent monadic wrapper outside the ABI classification
-until monad lowering converts it to a semantic Bool/Any tuple.
-All current fixed-index types belong to Base, including CArray (TVMFFISeqCell),
-Function (TVMFFIFunctionCell), Str (TVMFFIByteArray) and Tensor (DLTensor).
-This classification does not change native extraction or LLVM storage: Function
-still lowers to a native pointer.
-Trident extensions retain `!tvm_ffi.exception`, `!tvm_ffi.union` and
-`!tvm_ffi.monad.result<T>`; their payloads use the ordinary ABI types.
+`trident.core.dialects.tvm_ffi`, with TypeID registration for parsed types and
+operation value types. Inspect them through `isinstance`, parameter accessors,
+MLIR Type equality, and native integer width/signedness rather than text.
+`ffi_type(name)` remains a textual compatibility constructor.
+
+The Python frontend constructs only object-free Base types and Opaque types.
+Monad `ResultType` remains an independent wrapper whose payload is CABI.
+Object-bearing Base types have `C`-prefixed binding names and `c.` mnemonics:
+`CArrayType`, `CExceptionType`, `CFunctionType`, `CStrType` and `CTensorType`.
+Their semantic counterparts are Array/Tuple, Exception, Function, Str and Tensor.
+Low-level bindings remain available for inspection and tests; this is a frontend
+IR construction contract, not a restriction on MLIR parsing or Python `.get()`.
+Native `ObjectType` is a pointer outside CABI and is generated only by C++
+lowering, not by the Python frontend. It cannot be a Result or container payload.
+Global function lookup returns semantic Function, and registry calls accept it
+as their callee; decomposition changes both to CFunction. Textual registry calls
+explicitly include their callee type.
+
+`TVMFFICABIType` and its trait classify all tagged C ABI types. Base types have
+public C representations; indexed Base types implement `TVMFFITypeIndexInterface`.
+CAny has a dynamic tag and no single type index. Opaque types expose
+semantic representations requiring decomposition. The common tagged layout is
+`{i32, i32, i64}`, while CFunction retains its native-pointer LLVM storage and is
+boxed at tagged ABI boundaries. Base POD and fixed-index object types use the
+TableGen-only `TVMFFIStaticTypeIndex_Type` to generate a constexpr index accessor.
+CException supplies its runtime-registered index instead. Opaque types do not
+expose runtime type indices.
+
+The Opaque/Base separation serves two design goals:
+
+1. Automatically select an appropriate underlying implementation while keeping
+   frontend IR expressed in semantic types. Opaque-to-Base conversion is the
+   boundary where lowering chooses concrete representations and operations;
+   frontend users should not need to make that choice.
+2. Ultimately automate memory management. The same conversion boundary exposes
+   the concrete representation and its ownership requirements so lowering can
+   materialize the necessary lifetime management.
+
+Opaque-to-Base conversion selects concrete representations and materializes
+semantic reference lifetimes. Python builders do not attach ownership attributes.
+The automatic policy applies to semantic objects; handwritten Base operations
+and their explicit reference adjustments remain manually managed.
+
+The `HasObject` trait marks precisely the five object-bearing Base types.
+`TVMFFIObjectType` is a trait-based classification view of those types, not their
+concrete C++ base. Any, CAny and Union carry `Contains`; Any and CAny contain all CABI types,
+while Union checks direct or subset membership. Ownership materialization uses
+the original Opaque types at each operation and region boundary. Base-typed results remain manually managed, including elements
+extracted from semantic containers. Any/Union reference adjustments check the
+runtime tag after lowering.
+Object-free Base types remain Bool, DType, Device, Float, Int, None, RawStr and
+SmallStr. A scalar-only Union conservatively receives runtime reference checks.
+
+Str is a unified semantic string, including raw views, inline small strings and
+heap objects. `constant.str` creates a semantic string; decomposition produces a
+RawStr constant widened to CAny. This preserves the
+owning-container normalization of raw views to SmallStr or CStr. Result payloads,
+container elements and frontend string inputs all use Str. Str and Union become
+CAny, even when Union members share one representation. Preserving their finite
+runtime tag sets for downcast checks is deferred.
+
+`ArrayType.get(T)` and `TupleType.get(types)` require CABI elements and preserve
+nested semantic containers. They expose `element_type` and `types`; empty tuples
+are supported. Union requires at least two unique CABI members with runtime
+indices or supported semantic object representations, excluding Any, CAny and nested
+Unions. Parsing and checked C/Python construction reject invalid members and
+cross-context construction. Result likewise requires one CABI payload.
+
+`decompose-tvm-ffi` converts Array/Tuple to CArray, Exception to CException,
+Function to CFunction, Tensor to CTensor, and Any/Union/Str to CAny.
+It recursively converts Result payloads, signatures, region
+arguments and type-bearing attributes. It also inserts semantic export retains
+and registers local releases in `tvm_ffi.defer` regions. CAny retains the tagged
+LLVM layout. Original semantic types determine ownership; converted Base types
+make operations legal without a separate processed-operation set.
+Finite Union/Str constraints currently disappear when converted to CAny, which
+accepts every tag. Preserving these constraints for explicit downcasts, packed
+argument validation and success-only return checks is deferred. Downcasts to
+concrete indexed Base types retain their runtime checks.
+Frontend builders do not classify references themselves.
+
+Type definitions and implementations are organized under TVM FFI IR `Base/`,
+`Opaque/` and `Monad/`. Monad contains Result and all `monad.*` definitions and
+implementations. Top-level files retain common ABI utilities, native Object,
+aggregate constraints and registration. `TVMFFITypeBase.td` and
+`TVMFFIOpBase.td` provide the shared TableGen hierarchy and operation base.
 
 ## Guards and containers
 
@@ -153,9 +160,9 @@ list/tuple paths to semantic values. Lists use `!tvm_ffi.array<T>` with a common
 boxed element type, or `!tvm_ffi.any` for empty or heterogeneous lists. Tuples
 retain one type per element. `array_type` infers a common boxed element type;
 `tuple_type` boxes and preserves each element type independently. Nested
-containers preserve this structure. Owning FFI containers normalize RawStr views
-to SmallStr (up to seven bytes) or Str. Boxed string types therefore admit
-RawStr, SmallStr and Str, including Result payloads and nested container elements.
+containers preserve this structure. Strings use semantic Str throughout the frontend, including Result payloads
+and nested container elements. Decomposition admits RawStr, SmallStr and CStr
+representations after runtime container normalization.
 The frontend emits `array.create/get/size` and `tuple.construct/unconstruct`.
 Array construction and extraction return their array/element types directly;
 array size returns a boxed integer directly. Tuple construct directly packs elements into a semantic Tuple;
@@ -218,28 +225,34 @@ The lowering pipeline is:
    payloads are restored only in successful branches. Function signatures,
    calls and control-flow arguments are converted together.
 3. Run `decompose-tvm-ffi`. Preserve local `tvm_ffi.call` operations and
-   erase semantic Array/Tuple types to `!tvm_ffi.c.array` throughout
-   signatures, regions and type-bearing attributes. Container operations become
-   checked runtime Array calls, preserving explicit cleanup markers.
-4. Run `materialize-tvm-ffi-cleanup` before inlining and SCF-to-CFG conversion,
-   retaining marked exports and releasing local owned references.
-5. Finalize metadata operations and convert TVM FFI functions and returns to
+   convert semantic object types to their Base representations throughout
+   signatures, regions and type-bearing attributes, including Array/Tuple to
+   `!tvm_ffi.c.array` and Any/Union/Str to `!tvm_ffi.c.any`. Container operations become
+   checked runtime Array calls. Materialize semantic export retains and register
+   local releases in defer regions. Run `lower-tvm-ffi-defer` immediately
+   afterward to move their bodies
+   to block exits before inlining and SCF-to-CFG conversion.
+4. Finalize metadata operations and convert TVM FFI functions and returns to
    checked functions with output slots and an i32 status, generating packed ABI
    wrappers. Output slots are read and written only on success.
-6. Expand local packed calls in `TVMFFIToLLVM`, then convert semantic ABI values
+5. Run GPU-to-LLVM before expanding packed calls and reference checks, avoiding
+   region simplification over the expanded LLVM CFG. The GPU conversion also
+   applies registered dialect LLVM patterns. Expand remaining local packed calls
+   in `TVMFFIToLLVM`, then convert semantic ABI values
    and the remaining dialects to LLVM, followed by
    canonicalization and cast reconciliation. No Result types reach LLVM lowering.
 
 `tvm_ffi.monad.call @callee(...)` returns `Result<T>`, where T exactly matches
 its callee's return type. `lower-tvm-ffi-monad` emits `tvm_ffi.call @callee(...)`
 with separate `!tvm_ffi.bool` and `!tvm_ffi.any` results, then explicitly packs
-them into the semantic Bool/Any tuple used for lowered Results. The tuple retains
-the payload, after which an explicit release transfers the call's owned
-reference. The original cleanup marker applies to the tuple, not the call;
-without that marker the tuple remains unmanaged. No transfer attribute is needed.
+them into the semantic Bool/Any tuple used for lowered Results. The tuple
+borrows the call payload and retains it through runtime container construction.
+Decomposition releases both the call's independent reference and its local tuple
+reference at block exit, retaining any exported tuple first.
 Result attributes move to the call's payload result, with an empty entry for success.
-Both call operations require a `tvm_ffi.func` callee with `emit_tvm_ffi_abi` and
-matching argument types. This local-symbol call is distinct from registry
+Local callee resolution, argument matching and the `emit_tvm_ffi_abi`
+requirement are deferred to lowering for unlowered callees. This local-symbol
+call is distinct from registry
 `tvm_ffi.FunctionCall`.
 
 `decompose-tvm-ffi` preserves the call's two results while converting container
@@ -298,8 +311,8 @@ Argument construction does not invoke an operator or traverse later FX nodes. Ke
 launch construction likewise preserves its original order.
 
 The shared `trident.ir.bind` construction context manager borrows its inputs.
-The Python builder unconditionally marks the bind operation for block-exit cleanup;
-the C++ cleanup pass selects its reference-bearing results. Successful body arguments remain borrowed. It
+Decomposition manages the bind's lowered Result containers automatically.
+Successful body arguments remain borrowed. It
 yields the `MonadBindOp`; its read-only `arguments` property exposes
 one successful payload per input in input order, including None payloads,
 while `outputs` exposes complete Results.
@@ -324,33 +337,15 @@ pure FX nodes and pure argument prefixes do not add recursive frames.
 `import_program` and direct `visit` calls retain their value and symbol mappings;
 use a fresh importer for each program.
 
-Python imports `CLEANUP_ATTR` and `RETAIN_ATTR` from `trident.ownership`;
-these constants name `tvm_ffi.cleanup` and `tvm_ffi.retain`.
-The retain marker requests independent references for operand occurrences on
-`monad.pure` and the supported exits. Pure retains precede wrapping; exit
-retains precede local cleanup. Other operations do not consume this marker.
-
-Frontend exits construct `func.ReturnOp`, `tvm_ffi_d.ReturnOp`,
-`scf.YieldOp` or `tvm_ffi_d.MonadYieldOp`, then directly set
-`operation.attributes[RETAIN_ATTR] = ir.UnitAttr.get()`.
-The cleanup pass consumes this UnitAttr, retaining each reference-bearing
-operand occurrence before releasing local references. Unmarked exits request
-no automatic retains. Do not manually retain outputs for marked exits.
-Payload retains requested by `pure` remain independent of export retains.
-
+Python builds ordinary operations and exits without ownership attributes.
 Function entries and branches use insertion points directly. Cond branches use
 independent importers sharing the parent module, and return Results for the
 parent visitor to bind. Input tables cache complete Results, never extraction
 bind payloads. Cached Results must belong to an ancestor block; sibling scopes
-rebuild their extraction. Input and guard tables keep cached SSA Results until
-discarded or cleared; resource reuse also requires an explicit cleanup marker on the cached
-reference. Ownership lasts until the defining IR block exits, independent of
-Python context-manager exits. Guards and backend input flattening use fresh
-tables, so caches remain local to each construction.
-Construction exceptions propagate without automatic cache clearing; discard the
-importer and its input tables after a construction failure rather than reusing
-them. A guard consuming an extracted value receives a separate structural table
-scoped to its bind. Imported payloads check block ancestry before reuse.
+rebuild their extraction. Semantic reference lifetimes extend to the defining
+IR block exit, independently of Python context-manager exits. Guards and backend
+input flattening use fresh tables. Construction exceptions propagate; discard
+an importer and its tables after a construction failure.
 
 Each guard-expression visitor caches one recursive analysis per AST node for its
 type, active operands, purity, fallback and checked array-size requirement.
@@ -379,76 +374,78 @@ values, requesting another specialization; runtime FFI failures return nonzero
 status without inspecting output payloads.
 
 Lowered Results are runtime Array tuples containing a boxed boolean and payload.
-Failure tuples contain None; successful tuples retain their payloads. Cleanup
-adjusts the tuple's reference directly after container erasure, and the runtime
-container manages its elements' lifetimes.
+Failure tuples contain None. Both the Python `pure` helper and low-level
+`MonadPureOp` borrow their inputs: tuple construction retains each occurrence,
+including repeated payloads. No transfer mode or ownership attribute is needed.
 
-The TVM FFI dialect distinguishes boxed values, owned runtime objects, borrowed
-objects and native pointers. Reference-bearing type selection is private to the
-cleanup pass: it checks native Object, HasObject or Contains, conservatively
-including Any and Union. Lowered Result tuples have become CArray objects.
-Python builders and lowering patterns record cleanup intent without classifying
-result types; the cleanup pass selects
-reference-bearing results after semantic container decomposition. Ownership
-interfaces describe operation contracts. Container runtime calls and converted
-FunctionCall operations preserve explicit cleanup markers during decomposition.
-Decomposition never adds cleanup responsibility. A marked tuple unconstruct
-propagates cleanup to every element extraction call; each reference-bearing
-FFI result owns an independent reference. Monad lowering explicitly marks its
-temporary tuple extractions for cleanup. The explicit
-`tvm_ffi.cleanup` UnitAttr schedules one release for every
-reference-bearing result of an operation, including each resource in mixed
-multi-results. Scalars are ignored. Unmarked results remain unmanaged. Cleanup
-responsibility describes object references, even when they share tensor storage.
+`decompose-tvm-ffi` validates lexical ownership scopes without tracing value
+provenance or collecting ownership actions. `ReplacementConversionPattern<SourceOp>`
+derives from `OpConversionPattern` and provides protected static replacement
+helpers. Producers explicitly select its `OwnershipConversionPattern<SourceOp>`
+subclass, whose helpers register local releases for original Opaque result types
+in a `tvm_ffi.defer`, in reverse result order, before delegating replacement.
+Representation-only patterns select their base through a template parameter;
+there is no runtime producer classification in the replacement helpers.
+Scope validation checks region structure, while conversion legality depends on
+types. Casts, parameters and captures borrow and create no local cleanup
+responsibility. Tensor storage aliases do not imply borrowed object references.
 
-`materialize-tvm-ffi-cleanup` assumes well-formed input attributes and processes
-export retains and cleanup only when their immediate parent region has one block.
-Pure borrowing intent is handled during monad lowering. Two pattern walks
-materialize export retains, then consume cleanup markers
-at block exits. The walks do not fold or eliminate operations, and cleanup patterns
-explicitly preserve reverse operation and result
-order independently of traversal order. Region selection does not use an operation
-whitelist. Export and cleanup markers directly in multi-block regions remain
-pending; nested single-block regions can be processed independently.
-The walk driver does not visit unreachable blocks.
-Results of the region-owning operation are still processed in its selected parent
-block. Export retains are generated for marked `func.return`, `tvm_ffi.return`,
-`scf.yield`; monadic yields have already been lowered.
-Each export is retained in operand order before any local release. References
-are released in reverse operation and result order. Each lowered Result tuple
-is cleaned up independently, including partially successful multi-results.
-Consumed cleanup and `tvm_ffi.retain` markers are removed, including
-export markers on scalar-only and empty exits. This makes repeated cleanup runs
-idempotent. Container and bind decomposition preserve pending markers on
-converted function returns and region yields. Generated failure exits export
-owned failure tuples and retain them before local cleanup.
+Each return or yield pattern retains every Opaque operand in operand order,
+including repeated values, borrowed parameters and values widened from Base or
+POD types. The operand's source does not affect this export rule. Each `scf.if`
+Opaque result receives an independent reference from its selected branch and
+registers a release in its enclosing block. Nested regions use the same rule
+without propagating ownership through Base-valued results.
 
-Python builders construct the operation, then directly set
-`operation.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()` for acquired
-results. Marking an operation covers all its reference-bearing results;
-repeated assignment does not add credits. Scalar-only and zero-result operations
-can carry the marker; the C++ pass consumes it without emitting releases.
-There are no marking helper functions or automatic annotation stage. Cache
-checks require lexical visibility and an OpResult whose defining operation has
-a cleanup UnitAttr, regardless of result type. Marked terminator exports acquire
-their references during cleanup.
+The decomposition implementation separates representation mapping, container
+runtime calls, ownership completion and conversion configuration. Array and Tuple
+construction share one pattern; container patterns explicitly release their
+temporary Base function handles after each runtime call. Producer patterns inherit
+the ownership-aware conversion pattern base and use its replacement helpers,
+which register semantic cleanup through the driver-provided rewriter in the same
+conversion transaction. Value replacements register cleanup at the current
+insertion point; operation replacements place it
+after the replacement operation. Dedicated return/yield
+patterns retain exported operands without applying producer ownership rules.
+The pass validates scopes, converts operations, then recursively converts
+type-bearing attributes.
 
-Resource helpers borrow arguments and explicitly mark their acquired results
-for cleanup. `pure` borrows payloads and records `tvm_ffi.retain` to
-request independent payload references through tuple construction,
-including repeated payloads; callers do not retain them again.
-The low-level `MonadPureOp` transfers references, so callers must manage ownership
-explicitly. The cleanup pass retains each marked exported occurrence for
-the receiving scope. Block arguments, captures, casts and monadic unpacked
-payloads borrow their source at the semantic level; lowering manages
-independently owned runtime extraction references explicitly. ATen views can own
-references while sharing storage. Lowerings
-preserve cleanup markers on replacement resource operations. Temporary references
-with explicit releases remain unmarked to avoid duplicate release.
+Patterns use original types to classify ownership and remapped operands and
+replacement results to emit reference operations. Any/Union become CAny, so
+type legality forces their ownership patterns to run once without tracking
+completed replacements. Patterns run before conversion-time folding so
+a producer or branch cannot vanish before registering its ownership. Region
+conversion moves existing child operations rather than cloning them.
 
-Construction failures abandon incomplete IR; discard the importer and tables.
-The first version does not perform early-release optimization or full borrow
-checking: SSA visibility alone does not establish lifetime validity.
+`lower-tvm-ffi-defer` moves cleanup bodies before the registering block's
+terminator, after all export retains. Each enclosing region must be single-block.
+Inner lexical scopes run before outer scopes; registrations in the same block
+run in reverse order, preserving operation order and SSA data flow within each
+body. Runtime-tagged reference checks
+handle CAny payloads, including scalar-only values. Temporary Base
+function handles created by decomposition keep their immediate, explicit
+releases; generated runtime calls are not reclassified as semantic producers.
+Original Base results remain manually managed, including Base-typed container
+extractions. A manually managed reference exposed through an Opaque return or
+yield still receives the independent export reference required by that boundary;
+its original reference remains the caller's responsibility to manage explicitly.
+
+Automatic management requires single-block regions and currently supports
+functions and `scf.if`. Required ownership across multi-block CFG edges or
+unsupported region exits is diagnosed rather than silently skipped. The dedicated
+`lower-tvm-ffi-defer` cleanup pass runs immediately after decomposition. Each
+defer has a single block without arguments, captures its inputs, and ends in
+`tvm_ffi.defer_yield`. Nested regions and additional terminators in cleanup
+bodies are rejected. Automatically generated cleanup stays within its
+registering block, including `scf.if` branches; it does not unwind aborts or
+exceptions. Defer lowering supports only single-block `tvm_ffi.func`, `func.func`
+and `scf.if` regions with `tvm_ffi.return`, `func.return` or `scf.yield` exits.
+Multi-block regions, unsupported enclosing operations and unsupported exits
+produce diagnostics before any cleanup is moved.
+Decomposition is a once-only lowering boundary and does not promise idempotent
+reference materialization. Defer lowering is a no-op when no defers remain.
+There is no early-release optimization or complete borrow checker; callers must
+preserve lexical validity.
 
 Generated private graph Results use failure for specialization rejection. At the
 Python-built graph-call boundary, the wrapper checks all Result success bits,
@@ -457,19 +454,20 @@ payload. All independently successful outputs are cleaned up even if another
 output failed. Ordinary asserting FFI-call failures remain assertions, and generic
 Result/ABI failure propagation is unchanged. Introducing recoverable graph runtime
 errors requires distinguishing them from rejection before extending this contract.
-Runtime objects use `!llvm.struct<(i32, i32, i64)>`; native Object/Function handles
+Runtime objects use `!llvm.struct<(i32, i32, i64)>`; native Object/CFunction handles
 are pointers. `ResultType` retains its C/Python bindings and TypeID registration before monad lowering.
 
 `tvm_ffi.upcast` widens a tagged semantic ABI value to Any or a compatible union.
 Both casts accept identical source and result types as a no-op.
-`tvm_ffi.downcast` otherwise narrows Any/Union to a concrete type or a smaller Union,
-checking the result type against the runtime type tag. Failed checks branch to
+`tvm_ffi.downcast` narrows Any/Union to a concrete type or a smaller Union.
+After decomposition, concrete indexed Base targets check the runtime type tag;
+finite Union/Str checks are deferred. Failed checks branch to
 an `abort()` call and LLVM unreachable in every build mode. A shared LLVM assertion helper
 contains a TODO for diagnostic output before aborting. Semantic containers support Any widening/narrowing; after erasure, narrowing
-checks only the Array runtime tag, without validating element types. Neither cast supports
-native Function/Object handles or unions containing them. Both casts borrow
-their source; non-identity downcast checks remain observable even when the
-result is unused.
+checks only the Array runtime tag, without validating element types. Neither cast supports native Object handles. Function values preserve their
+existing tagged boxing and native-pointer extraction paths. Both casts borrow
+their source; concrete indexed Base downcast checks remain observable even when
+the result is unused.
 `tvm_ffi.get` extracts a native scalar or borrowed object, and `tvm_ffi.to` boxes
 a native scalar. Metadata operations lower through DLPack. Tensor literals use
 the existing runtime staging path. Global function handles are cached at module
@@ -478,8 +476,8 @@ initialization; call sites retain and release the cached reference.
 `tvm_ffi.monad.unpack` exposes one Result as a success `i1` followed by its
 payload. Payload types compatible with `tvm_ffi.upcast` to Any produce
 `!tvm_ffi.any`: success preserves the value and failure produces None.
-Function handles and unions containing them retain their payload types and may
-only be used when success is true. Unpack neither clears runtime errors nor
+Function payloads use the same Any widening, with pointer boxing supplied by
+the underlying CFunction lowering. Unpack neither clears runtime errors nor
 transfers ownership. Result payloads must be `TVMFFICABIType`; native scalars,
 native Object handles and nested Results are rejected by parsing and checked
 C/Python construction. The C++ payload parameter and accessor use

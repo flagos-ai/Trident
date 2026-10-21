@@ -25,34 +25,6 @@ def TVMFFI_NativeTypeInterface
   ];
 }
 
-def TVMFFI_ObjectOwnershipOpInterface
-    : OpInterface<"ObjectOwnershipOpInterface"> {
-  let cppNamespace = "::trident::tvm_ffi";
-  let description = [{
-    Describes how an operation produces and consumes object-typed TVM FFI
-    values, ABI containers that may dynamically hold objects, and transitional
-    Torch object values. Runtime reference operations inspect the type index of
-    `!tvm_ffi.any` and `!tvm_ffi.union` values before changing a reference.
-  }];
-
-  let methods = [
-    InterfaceMethod<
-      "Returns the ownership effect of the indexed operand.",
-      "::trident::tvm_ffi::ObjectOperandOwnership",
-      "getObjectOperandOwnership", (ins "uint32_t":$index), [{}],
-      /*defaultImplementation=*/[{
-        return ::trident::tvm_ffi::ObjectOperandOwnership::Borrowed;
-      }]>,
-    InterfaceMethod<
-      "Returns the ownership kind of the indexed result.",
-      "::trident::tvm_ffi::ObjectResultOwnership",
-      "getObjectResultOwnership", (ins "uint32_t":$index), [{}],
-      /*defaultImplementation=*/[{
-        return ::trident::tvm_ffi::ObjectResultOwnership::Owned;
-      }]>
-  ];
-}
-
 def TVMFFI_SpecializationAttrInterface
     : AttrInterface<"SpecializationAttrInterface"> {
   let cppNamespace = "::trident::tvm_ffi";

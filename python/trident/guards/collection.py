@@ -14,7 +14,6 @@ from trident.core.dialects import scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTableBuilder
 from trident.ir import bind, native, native_constant, pure
-from trident.ownership import RETAIN_ATTR
 
 from .codes import GuardCode
 from .kinds import Guard
@@ -56,14 +55,11 @@ class Guards:
             branch = scf.IfOp(native(predicate), [type_], has_else=True)
             with ir.InsertionPoint(branch.then_block):
                 yielded = self._build_checks(codes, builder, arguments, context)
-                terminator = scf.YieldOp(yielded)
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                scf.YieldOp(yielded)
             with ir.InsertionPoint(branch.else_block):
                 yielded = pure([native_constant(False)], result_types=[type_])
-                terminator = scf.YieldOp(yielded)
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            terminator = tvm_ffi_d.MonadYieldOp(branch.results)
-            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                scf.YieldOp(yielded)
+            tvm_ffi_d.MonadYieldOp(branch.results)
         return [*operation.outputs]
 
     def build(

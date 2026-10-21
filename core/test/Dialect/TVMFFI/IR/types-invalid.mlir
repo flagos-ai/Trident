@@ -3,8 +3,8 @@
 
 // RUN: trident-core-opt %s -split-input-file -verify-diagnostics
 
-// expected-error@+1 {{unknown  type `c.any` in dialect `tvm_ffi`}}
-func.func private @old_any(!tvm_ffi.c.any)
+// expected-error@+1 {{unknown  type `c.unknown` in dialect `tvm_ffi`}}
+func.func private @unknown(!tvm_ffi.c.unknown)
 
 // -----
 
@@ -33,8 +33,8 @@ func.func private @old_float(!tvm_ffi.c.float)
 
 // -----
 
-// expected-error@+1 {{unknown  type `c.function` in dialect `tvm_ffi`}}
-func.func private @old_function(!tvm_ffi.c.function)
+// expected-error@+1 {{unknown  type `c.unknown_function` in dialect `tvm_ffi`}}
+func.func private @old_function(!tvm_ffi.c.unknown_function)
 
 // -----
 
@@ -63,13 +63,18 @@ func.func private @old_small_str(!tvm_ffi.c.small_str)
 
 // -----
 
-// expected-error@+1 {{unknown  type `c.str` in dialect `tvm_ffi`}}
-func.func private @old_str(!tvm_ffi.c.str)
+// expected-error@+1 {{unknown  type `c.unknown_str` in dialect `tvm_ffi`}}
+func.func private @old_str(!tvm_ffi.c.unknown_str)
 
 // -----
 
-// expected-error@+1 {{unknown  type `c.tensor` in dialect `tvm_ffi`}}
-func.func private @old_tensor(!tvm_ffi.c.tensor)
+// expected-error@+1 {{unknown  type `c.unknown_tensor` in dialect `tvm_ffi`}}
+func.func private @old_tensor(!tvm_ffi.c.unknown_tensor)
+
+// -----
+
+// expected-error@+1 {{invalid union member type '!tvm_ffi.c.any'}}
+func.func private @union_c_any(!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.c.any>)
 
 // -----
 

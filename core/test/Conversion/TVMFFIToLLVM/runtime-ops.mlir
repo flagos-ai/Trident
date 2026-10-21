@@ -36,9 +36,9 @@
 // CHECK-NEXT: llvm.unreachable
 func.func @checked_global_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
   %callee = tvm_ffi.FunctionGetGlobal "test.identity"
-      : !tvm_ffi.object
-  %result = tvm_ffi.FunctionCall %callee(%arg)
-      : (!tvm_ffi.int) -> !tvm_ffi.int
+     : !tvm_ffi.c.function
+  %result = tvm_ffi.FunctionCall %callee : !tvm_ffi.c.function(%arg)
+     : (!tvm_ffi.int) -> !tvm_ffi.int
   return %result : !tvm_ffi.int
 }
 
@@ -83,9 +83,9 @@ func.func @equal(%lhs: !tvm_ffi.bool, %rhs: !tvm_ffi.bool) -> i1 {
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[EXCEPTION_HANDLE:[a-zA-Z0-9_]+]], %[[EXCEPTION_ARGS:[a-zA-Z0-9_]+]], %[[EXCEPTION_NARGS:[a-zA-Z0-9_]+]], %[[RESULT_SLOT:[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: %[[EXCEPTION_RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: return %[[EXCEPTION_RESULT]] : !llvm.struct<(i32, i32, i64)>
-func.func @exception() -> !tvm_ffi.exception {
-  %value = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
-  return %value : !tvm_ffi.exception
+func.func @exception() -> !tvm_ffi.c.exception {
+  %value = tvm_ffi.exception "GuardMatch" : !tvm_ffi.c.exception
+  return %value : !tvm_ffi.c.exception
 }
 
 // -----
@@ -95,9 +95,9 @@ func.func @exception() -> !tvm_ffi.exception {
 // CHECK: llvm.call @TVMFFIObjectIncRef(%[[FUNCTION]]) : (!llvm.ptr) -> i32
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[FUNCTION]]) : (!llvm.ptr) -> i32
 // CHECK: return
-func.func @function_refs(%function: !tvm_ffi.function) {
-  tvm_ffi.ObjectIncRef %function : !tvm_ffi.function
-  tvm_ffi.ObjectDecRef %function : !tvm_ffi.function
+func.func @function_refs(%function: !tvm_ffi.c.function) {
+  tvm_ffi.ObjectIncRef %function : !tvm_ffi.c.function
+  tvm_ffi.ObjectDecRef %function : !tvm_ffi.c.function
   return
 }
 
@@ -151,9 +151,9 @@ func.func @get_bool(%value: !tvm_ffi.bool) -> i1 {
 // CHECK: llvm.mlir.global_dtors dtors = [@__trident_tvm_ffi_dtor_test.identity], priorities = [65535 : i32], data = [#llvm.zero]
 func.func @global_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
   %callee = tvm_ffi.FunctionGetGlobal "test.identity"
-      : !tvm_ffi.object
-  %result = tvm_ffi.FunctionCall %callee(%arg)
-      : (!tvm_ffi.int) -> !tvm_ffi.int
+     : !tvm_ffi.c.function
+  %result = tvm_ffi.FunctionCall %callee : !tvm_ffi.c.function(%arg)
+     : (!tvm_ffi.int) -> !tvm_ffi.int
   return %result : !tvm_ffi.int
 }
 
@@ -168,8 +168,8 @@ func.func @global_call(%arg: !tvm_ffi.int) -> !tvm_ffi.int {
 // CHECK: %[[DEC_HANDLE:[a-zA-Z0-9_]+]] = llvm.inttoptr %[[DEC_BITS]] : i64 to !llvm.ptr
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[DEC_HANDLE]]) : (!llvm.ptr) -> i32
 // CHECK: return
-func.func @object_refs(%object: !tvm_ffi.tensor) {
-  tvm_ffi.ObjectIncRef %object : !tvm_ffi.tensor
-  tvm_ffi.ObjectDecRef %object : !tvm_ffi.tensor
+func.func @object_refs(%object: !tvm_ffi.c.tensor) {
+  tvm_ffi.ObjectIncRef %object : !tvm_ffi.c.tensor
+  tvm_ffi.ObjectDecRef %object : !tvm_ffi.c.tensor
   return
 }

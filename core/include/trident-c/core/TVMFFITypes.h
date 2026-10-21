@@ -37,12 +37,47 @@ MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFIBoolTypeGetName(void);
 MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIBoolTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIBoolType(MlirType type);
 
+// CAnyType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFICAnyTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFICAnyTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFICAnyTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFICAnyType(MlirType type);
+
 // CArrayType
 
 MLIR_CAPI_EXPORTED MlirType mlirTVMFFICArrayTypeGet(MlirContext context);
 MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFICArrayTypeGetName(void);
 MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFICArrayTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFICArrayType(MlirType type);
+
+// CExceptionType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFICExceptionTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFICExceptionTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFICExceptionTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFICExceptionType(MlirType type);
+
+// CFunctionType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFICFunctionTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFICFunctionTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFICFunctionTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFICFunctionType(MlirType type);
+
+// CStrType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFICStrTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFICStrTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFICStrTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFICStrType(MlirType type);
+
+// CTensorType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFICTensorTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFICTensorTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFICTensorTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFICTensorType(MlirType type);
 
 // DTypeType
 

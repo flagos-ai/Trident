@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h" // NOLINT(misc-include-cleaner)
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h"
+#include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIOps.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <llvm/ADT/STLExtras.h>
@@ -32,7 +32,6 @@
 #include <mlir/Support/LLVM.h>
 #include <mlir/Support/LogicalResult.h>
 #include <mlir/Transforms/DialectConversion.h>
-#include <type_traits>
 #include <utility>
 
 namespace trident::tvm_ffi {
@@ -46,20 +45,15 @@ TupleType resultTupleType(mlir::MLIRContext *context) {
                         {BoolType::get(context), AnyType::get(context)});
 }
 
-// Tuple construction borrows its elements; low-level pure instead transfers
-// payload references. Release those inputs after the container has retained
-// them.
+// Result construction borrows its payload; the runtime tuple retains it.
 mlir::Value makeTuple(mlir::OpBuilder &builder, mlir::Location loc,
-                      bool success, mlir::Value payload, bool cleanup) {
+                      bool success, mlir::Value payload) {
   mlir::Value const flag = ConstantBoolOp::create(builder, loc, success);
   payload = builder.createOrFold<UpcastOp>(
       loc, AnyType::get(builder.getContext()), payload);
   TupleConstructOp tuple = TupleConstructOp::create(
       builder, loc, resultTupleType(builder.getContext()),
       mlir::ValueRange{flag, payload});
-  if (cleanup) {
-    tuple->setAttr(kCleanupAttributeName, builder.getUnitAttr());
-  }
   return tuple;
 }
 
@@ -70,14 +64,8 @@ public:
   matchAndRewrite(MonadPureOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     llvm::SmallVector<mlir::Value> results;
-    for (mlir::Value payload : adaptor.getValues()) {
-      payload = rewriter.createOrFold<UpcastOp>(
-          op.getLoc(), AnyType::get(rewriter.getContext()), payload);
-      results.push_back(makeTuple(rewriter, op.getLoc(), true, payload,
-                                  op->hasAttr(kCleanupAttributeName)));
-      if (!op->hasAttr(kRetainAttributeName)) {
-        ObjectDecRefOp::create(rewriter, op.getLoc(), payload);
-      }
+    for (mlir::Value const payload : adaptor.getValues()) {
+      results.push_back(makeTuple(rewriter, op.getLoc(), true, payload));
     }
     rewriter.replaceOp(op, results);
     return mlir::success();
@@ -93,7 +81,7 @@ public:
     mlir::Value const none = ConstantNoneOp::create(rewriter, op.getLoc());
     llvm::SmallVector<mlir::Value> const results = llvm::map_to_vector(
         op.getOutputs(), [&rewriter, &op, &none](mlir::Value) -> mlir::Value {
-          return makeTuple(rewriter, op.getLoc(), false, none, true);
+          return makeTuple(rewriter, op.getLoc(), false, none);
         });
     rewriter.replaceOp(op, results);
     return mlir::success();
@@ -111,7 +99,6 @@ public:
         mlir::TypeRange{BoolType::get(rewriter.getContext()),
                         AnyType::get(rewriter.getContext())},
         adaptor.getInput());
-    tuple->setAttr(kCleanupAttributeName, rewriter.getUnitAttr());
     mlir::Value const success = GetOp::create(
         rewriter, op.getLoc(), rewriter.getI1Type(), tuple.getElements()[0]);
     rewriter.replaceOp(op, {success, tuple.getElements()[1]});
@@ -132,20 +119,13 @@ public:
                        AnyType::get(rewriter.getContext()), op.getCalleeAttr(),
                        adaptor.getOperands(), op.getArgAttrsAttr(), nullptr);
     call->setAttrs(op->getAttrs());
-    call->removeAttr(kCleanupAttributeName);
     if (mlir::ArrayAttr const attributes = op.getResAttrsAttr();
         attributes && !attributes.empty()) {
       call.setResAttrsAttr(rewriter.getArrayAttr(
           {rewriter.getDictionaryAttr({}), attributes[0]}));
     }
-    TupleConstructOp const tuple =
-        rewriter.replaceOpWithNewOp<TupleConstructOp>(
-            op, resultTupleType(rewriter.getContext()), call.getResults());
-    if (op->hasAttr(kCleanupAttributeName)) {
-      tuple->setAttr(kCleanupAttributeName, rewriter.getUnitAttr());
-    }
-    rewriter.setInsertionPointAfter(tuple);
-    ObjectDecRefOp::create(rewriter, loc, call.getValue());
+    rewriter.replaceOpWithNewOp<TupleConstructOp>(
+        op, resultTupleType(rewriter.getContext()), call.getResults());
     return mlir::success();
   }
 };
@@ -173,7 +153,6 @@ public:
               mlir::TypeRange{BoolType::get(rewriter.getContext()),
                               AnyType::get(rewriter.getContext())},
               input);
-          unpack->setAttr(kCleanupAttributeName, rewriter.getUnitAttr());
           mlir::Value const success = GetOp::create(
               rewriter, loc, rewriter.getI1Type(), unpack.getElements()[0]);
           ready =
@@ -184,9 +163,6 @@ public:
         rewriter, loc, resultTypes, ready, !resultTypes.empty());
     if (resultTypes.empty()) {
       rewriter.eraseOp(branch.thenBlock()->getTerminator());
-    }
-    if (mlir::Attribute const cleanup = bind->getAttr(kCleanupAttributeName)) {
-      branch->setAttr(kCleanupAttributeName, cleanup);
     }
     rewriter.setInsertionPointToStart(branch.thenBlock());
     mlir::Block &body = *bind.getEntryBlock();
@@ -204,33 +180,12 @@ public:
       rewriter.setInsertionPointToStart(branch.elseBlock());
       MonadFailOp failed =
           MonadFailOp::create(rewriter, loc, bind.getResultTypes());
-      failed->setAttr(kCleanupAttributeName, rewriter.getUnitAttr());
-      mlir::scf::YieldOp const exit =
-          mlir::scf::YieldOp::create(rewriter, loc, failed.getResults());
-      exit->setAttr(kRetainAttributeName, rewriter.getUnitAttr());
+      mlir::scf::YieldOp::create(rewriter, loc, failed.getResults());
     }
     rewriter.replaceOp(bind, branch.getResults());
     return mlir::success();
   }
 };
-
-// Failure previously held no references. Its new container is local-owned;
-// establish an export reference even for an otherwise unmarked transfer exit.
-void retainFailureExports(mlir::Operation *op, mlir::ValueRange operands,
-                          mlir::ConversionPatternRewriter &rewriter) {
-  if (op->hasAttr(kRetainAttributeName)) {
-    return;
-  }
-  for (auto [original, converted] :
-       llvm::zip_equal(op->getOperands(), operands)) {
-    if (original.getDefiningOp<MonadFailOp>()) {
-      mlir::Value const any =
-          UpcastOp::create(rewriter, op->getLoc(),
-                           AnyType::get(rewriter.getContext()), converted);
-      ObjectIncRefOp::create(rewriter, op->getLoc(), any);
-    }
-  }
-}
 
 class LowerYieldOp final : public mlir::OpConversionPattern<MonadYieldOp> {
 public:
@@ -239,7 +194,6 @@ public:
   mlir::LogicalResult
   matchAndRewrite(MonadYieldOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    retainFailureExports(op, adaptor.getOperands(), rewriter);
     mlir::DictionaryAttr const attributes = op->getAttrDictionary();
     mlir::scf::YieldOp const replacement =
         rewriter.replaceOpWithNewOp<mlir::scf::YieldOp>(op,
@@ -259,10 +213,6 @@ public:
   mlir::LogicalResult
   matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    if constexpr (std::is_same_v<OpTy, mlir::func::ReturnOp> ||
-                  std::is_same_v<OpTy, mlir::scf::YieldOp>) {
-      retainFailureExports(op, adaptor.getOperands(), rewriter);
-    }
     mlir::FailureOr<mlir::Operation *> replacement = mlir::convertOpResultTypes(
         op, adaptor.getOperands(), *this->getTypeConverter(), rewriter);
     if (mlir::failed(replacement)) {

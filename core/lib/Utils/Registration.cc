@@ -14,10 +14,9 @@
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
 #include "trident/core/Dialect/DLPack/IR/DLPackDialect.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h"
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFIInterfaces.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/MaterializeOwnershipMark.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
 #include <mlir/Conversion/GPUCommon/GPUToLLVM.h>
@@ -37,7 +36,6 @@ void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
   mlir::gpu::registerConvertGpuToLLVMInterface(registry);
   trident::conversion::registerConvertDLPackToLLVMInterface(registry);
   trident::conversion::registerConvertTVMFFIToLLVMInterface(registry);
-  trident::tvm_ffi::registerTVMFFIObjectOwnershipExternalModels(registry);
 }
 
 void trident::conversion::registerAllPasses() {
@@ -50,6 +48,6 @@ void trident::conversion::registerAllPasses() {
   trident::conversion::registerFinalizeTVMFFIPass();
   trident::conversion::registerTridentLoweringPipelinePass();
   trident::tvm_ffi::registerDecomposeTVMFFIPass();
+  trident::tvm_ffi::registerLowerTVMFFIDeferPass();
   trident::tvm_ffi::registerLowerTVMFFIMonadPass();
-  trident::tvm_ffi::registerMaterializeTVMFFICleanupPass();
 }

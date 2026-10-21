@@ -20,9 +20,9 @@
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[CLONE_HANDLE]], %[[CLONE_CALL_INPUTS]], %[[CLONE_NARGS:[a-zA-Z0-9_]+]], %[[CLONE_RESULTS:[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: %[[CLONE_RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[CLONE_RESULTS]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: return %[[CLONE_RESULT]] : !llvm.struct<(i32, i32, i64)>
-func.func @clone(%input: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
-  %copy = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
-  return %copy : !tvm_ffi.tensor
+func.func @clone(%input: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor {
+  %copy = tvm_ffi.tensor.clone %input : !tvm_ffi.c.tensor -> !tvm_ffi.c.tensor
+  return %copy : !tvm_ffi.c.tensor
 }
 
 // CHECK-LABEL: func.func @copy(
@@ -43,7 +43,7 @@ func.func @clone(%input: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
 // CHECK: %[[COPY_HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[COPY_HANDLE_SLOT:[a-zA-Z0-9_]+]] : !llvm.ptr -> !llvm.ptr
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[COPY_HANDLE]], %[[COPY_ARGUMENTS_SLOT]], %[[COPY_NUM_ARGS:[a-zA-Z0-9_]+]], %[[COPY_RESULTS:[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: return
-func.func @copy(%destination: !tvm_ffi.tensor, %source: !tvm_ffi.tensor) {
-  tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.tensor
+func.func @copy(%destination: !tvm_ffi.c.tensor, %source: !tvm_ffi.c.tensor) {
+  tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.c.tensor
   return
 }

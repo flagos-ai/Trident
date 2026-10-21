@@ -13,10 +13,13 @@
 // CHECK-NEXT: llvm.unreachable
 // CHECK: %[[STATUS:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[ARGS:[a-zA-Z0-9_]+]], %[[COUNT:[a-zA-Z0-9_]+]], %[[SLOT:[a-zA-Z0-9_]+]])
 // CHECK: %[[OK:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO:[a-zA-Z0-9_]+]] : i32
-// CHECK: llvm.cond_br %[[OK]], ^[[SUCCESS:bb[0-9]+]], ^[[FAILURE]]
+// CHECK: llvm.cond_br %[[OK]], ^[[SUCCESS:bb[0-9]+]], ^[[CALL_FAILURE:bb[0-9]+]]
+// CHECK: ^[[CALL_FAILURE]]:
+// CHECK-NEXT: llvm.call @abort() : () -> ()
+// CHECK-NEXT: llvm.unreachable
 // CHECK: ^[[SUCCESS]]:
 // CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[SLOT]]
 func.func @array_size(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.int {
   %size = tvm_ffi.array.size %array : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.int
-  return {tvm_ffi.retain} %size : !tvm_ffi.int
+  return %size : !tvm_ffi.int
 }

@@ -31,7 +31,6 @@ from trident.ir import (
     native_type,
     pure,
 )
-from trident.ownership import RETAIN_ATTR
 
 from .local import Local
 
@@ -296,13 +295,10 @@ class GuardExpressionVisitor:
                     [value] = remaining.arguments
                     if analysis.fallback is None:
                         value = arith.andi(comparison, native(value))
-                    terminator = tvm_ffi_d.MonadYieldOp(
-                        pure([value], result_types=types)
-                    )
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    tvm_ffi_d.MonadYieldOp(pure([value], result_types=types))
+
                 results = [*remaining.outputs]
-            terminator = tvm_ffi_d.MonadYieldOp(results)
-            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+            tvm_ffi_d.MonadYieldOp(results)
         return [*operation.outputs]
 
     def _build_operands(self, operands: Sequence[ast.expr]) -> list[ir.Value]:
@@ -316,10 +312,10 @@ class GuardExpressionVisitor:
                     values.append(self.value(operand))
                     continue
                 with bind(self.build(operand), result_types=types) as operation:
-                    terminator = tvm_ffi_d.MonadYieldOp(
+                    tvm_ffi_d.MonadYieldOp(
                         build(index + 1, [*values, *operation.arguments])
                     )
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+
                 return [*operation.outputs]
             return pure(values, result_types=types)
 
@@ -492,17 +488,16 @@ class GuardExpressionVisitor:
                         result_types=types,
                     ) as length:
                         [value] = length.arguments
-                        terminator = tvm_ffi_d.MonadYieldOp(
+                        tvm_ffi_d.MonadYieldOp(
                             pure([native(value)], result_types=types)
                         )
-                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+
                     results = [*length.outputs]
                 else:
                     results = pure(
                         [self._evaluate(node, operation.arguments)], result_types=types
                     )
-                terminator = tvm_ffi_d.MonadYieldOp(results)
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                tvm_ffi_d.MonadYieldOp(results)
             return [*operation.outputs]
 
     def value(self, node: ast.expr) -> ir.Value:

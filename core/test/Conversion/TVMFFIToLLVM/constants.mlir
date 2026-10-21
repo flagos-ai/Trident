@@ -28,9 +28,9 @@ func.func @bool_constant() -> !tvm_ffi.bool {
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>)
 // CHECK-NOT: tvm_ffi.upcast
 // CHECK: return %[[VALUE]] : !llvm.struct<(i32, i32, i64)>
-func.func @cast(%value: !tvm_ffi.int) -> !tvm_ffi.any {
-  %result = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.any
-  return %result : !tvm_ffi.any
+func.func @cast(%value: !tvm_ffi.int) -> !tvm_ffi.c.any {
+  %result = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.c.any
+  return %result : !tvm_ffi.c.any
 }
 
 // -----
@@ -46,7 +46,7 @@ func.func @cast(%value: !tvm_ffi.int) -> !tvm_ffi.any {
 // CHECK: return %[[RESULT]] : !llvm.struct<(i32, i32, i64)>
 func.func @dtype_constant() -> !tvm_ffi.dtype {
   %value = "tvm_ffi.constant.dtype"() <{value = [2, 32, 1]}>
-      : () -> !tvm_ffi.dtype
+     : () -> !tvm_ffi.dtype
   return %value : !tvm_ffi.dtype
 }
 

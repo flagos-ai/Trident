@@ -22,18 +22,18 @@ func.func @case_1(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad
 }
 
 // CHECK-LABEL: func.func @case_10(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.any)
-func.func @case_10(%input: !tvm_ffi.monad.result<!tvm_ffi.function>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.any)
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.c.function>) -> (i1, !tvm_ffi.any)
+func.func @case_10(%input: !tvm_ffi.monad.result<!tvm_ffi.c.function>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.c.function>) -> (i1, !tvm_ffi.any)
   %unit = tvm_ffi.constant.none
   %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
 }
 
 // CHECK-LABEL: func.func @case_12(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.any)
-func.func @case_12(%input: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.any)
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.c.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.any)
+func.func @case_12(%input: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.c.function, !tvm_ffi.none>>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.c.function, !tvm_ffi.none>>) -> (i1, !tvm_ffi.any)
   %unit = tvm_ffi.constant.none
   %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
@@ -49,9 +49,9 @@ func.func @case_2(%input: !tvm_ffi.monad.result<!tvm_ffi.float>) -> !tvm_ffi.mon
 }
 
 // CHECK-LABEL: func.func @case_5(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (i1, !tvm_ffi.any)
-func.func @case_5(%input: !tvm_ffi.monad.result<!tvm_ffi.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (i1, !tvm_ffi.any)
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.c.tensor>) -> (i1, !tvm_ffi.any)
+func.func @case_5(%input: !tvm_ffi.monad.result<!tvm_ffi.c.tensor>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.c.tensor>) -> (i1, !tvm_ffi.any)
   %unit = tvm_ffi.constant.none
   %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   return %result : !tvm_ffi.monad.result<!tvm_ffi.none>
@@ -67,9 +67,9 @@ func.func @case_6(%input: !tvm_ffi.monad.result<!tvm_ffi.c.array>) -> !tvm_ffi.m
 }
 
 // CHECK-LABEL: func.func @case_7(
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.exception>) -> (i1, !tvm_ffi.any)
-func.func @case_7(%input: !tvm_ffi.monad.result<!tvm_ffi.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
-  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.exception>) -> (i1, !tvm_ffi.any)
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.monad.unpack %[[INPUT:[a-zA-Z0-9_]+]] : (!tvm_ffi.monad.result<!tvm_ffi.c.exception>) -> (i1, !tvm_ffi.any)
+func.func @case_7(%input: !tvm_ffi.monad.result<!tvm_ffi.c.exception>) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.c.exception>) -> (i1, !tvm_ffi.any)
   %unit = tvm_ffi.constant.none
   %result = tvm_ffi.monad.pure %unit : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   return %result : !tvm_ffi.monad.result<!tvm_ffi.none>

@@ -1,13 +1,12 @@
 add_mlir_library(
   TVMFFITransforms
   DecomposeTVMFFI.cc
+  LowerTVMFFIDefer.cc
   LowerTVMFFIMonad.cc
-  MaterializeOwnershipMark.cc
   DEPENDS
   MLIRTVMFFITransformsPassIncGen
   LINK_LIBS
   PUBLIC
-  MLIRAnalysis
   MLIRArithDialect
   MLIRControlFlowDialect
   MLIRControlFlowInterfaces

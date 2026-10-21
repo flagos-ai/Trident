@@ -11,7 +11,6 @@ from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
 from trident.ir import bind, pure
-from trident.ownership import RETAIN_ATTR
 
 from ..local import Local
 
@@ -47,10 +46,10 @@ class GuardCode:
         ) as operation:
             [value] = operation.arguments
             scoped = tree.with_value(self.source.subscripts, value)
-            terminator = tvm_ffi_d.MonadYieldOp(
+            tvm_ffi_d.MonadYieldOp(
                 pure([self.build(scoped, context)], result_types=types)
             )
-            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+
         return [*operation.outputs]
 
     @property

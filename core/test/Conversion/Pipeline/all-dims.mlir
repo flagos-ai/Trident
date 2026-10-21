@@ -36,17 +36,17 @@
 // CHECK: %[[WRAPPER_RET:[a-zA-Z0-9_]+]] = llvm.load %[[WRAPPER_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: llvm.store %[[WRAPPER_RET]], %[[WRAPPER_RESULT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 
-tvm_ffi.func @all_dims(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @all_dims(%arg0: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
   %int1 = tvm_ffi.constant.int 1
   %int0 = tvm_ffi.constant.int 0
-  %call_dims_handle = tvm_ffi.FunctionGetGlobal "ffi.Array" {tvm_ffi.cleanup} : !tvm_ffi.object
-  %dims = tvm_ffi.FunctionCall %call_dims_handle(%int1, %int0) {tvm_ffi.cleanup} : (!tvm_ffi.int, !tvm_ffi.int) -> !tvm_ffi.c.array
+  %call_dims_handle = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.c.function
+  %dims = tvm_ffi.FunctionCall %call_dims_handle : !tvm_ffi.c.function(%int1, %int0) : (!tvm_ffi.int, !tvm_ffi.int) -> !tvm_ffi.c.array
   %false = tvm_ffi.constant.bool false
-  %call_result_handle = tvm_ffi.FunctionGetGlobal "trident.aten.all.dims" {tvm_ffi.cleanup} : !tvm_ffi.object
-  %result = tvm_ffi.FunctionCall %call_result_handle(%arg0, %dims, %false) {tvm_ffi.cleanup} : (!tvm_ffi.tensor, !tvm_ffi.c.array, !tvm_ffi.bool) -> !tvm_ffi.tensor
+  %call_result_handle = tvm_ffi.FunctionGetGlobal "trident.aten.all.dims" : !tvm_ffi.c.function
+  %result = tvm_ffi.FunctionCall %call_result_handle : !tvm_ffi.c.function(%arg0, %dims, %false) : (!tvm_ffi.c.tensor, !tvm_ffi.c.array, !tvm_ffi.bool) -> !tvm_ffi.c.tensor
 
   // The marked return retains its payload before local cleanup.
-  %return_value_1 = tvm_ffi.upcast %result : !tvm_ffi.tensor -> !tvm_ffi.any
+  %return_value_1 = tvm_ffi.upcast %result : !tvm_ffi.c.tensor -> !tvm_ffi.any
   %return_flag_1 = tvm_ffi.constant.bool true
-  tvm_ffi.return {tvm_ffi.retain} %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }

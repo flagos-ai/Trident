@@ -1,5 +1,9 @@
 add_mlir_dialect_library(
   TVMFFIDialect
+  Base/TVMFFITypes.cc
+  Monad/TVMFFIOps.cc
+  Monad/TVMFFITypes.cc
+  Opaque/TVMFFITypes.cc
   TVMFFIAttrs.cc
   TVMFFIDialect.cc
   TVMFFIInterfaces.cc

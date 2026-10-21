@@ -6,112 +6,93 @@
 
 // CHECK-LABEL:   func.func @construct(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
-// CHECK:           %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.int -> !tvm_ffi.any
-// CHECK:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// CHECK-DAG:           %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.int -> !tvm_ffi.any
+// CHECK-DAG:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
 // CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_0]], %[[UPCAST_0]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-// CHECK:           tvm_ffi.ObjectDecRef %[[UPCAST_0]] : !tvm_ffi.any
 // CHECK:           return %[[TUPLE_0]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK-LABEL:   func.func @construct_multiple(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.int,
 // CHECK-SAME:      %[[ARG1:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.none,
-// CHECK-SAME:      %[[ARG2:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.function) -> (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) {
-// CHECK:           %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.int -> !tvm_ffi.any
-// CHECK:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// CHECK-SAME:      %[[ARG2:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.function) -> (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) {
+// CHECK-DAG:           %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.int -> !tvm_ffi.any
+// CHECK-DAG:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
 // CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_0]], %[[UPCAST_0]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-// CHECK:           tvm_ffi.ObjectDecRef %[[UPCAST_0]] : !tvm_ffi.any
-// CHECK:           %[[UPCAST_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG1]] : !tvm_ffi.none -> !tvm_ffi.any
-// CHECK:           %[[CONSTANT_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// CHECK-DAG:           %[[UPCAST_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG1]] : !tvm_ffi.none -> !tvm_ffi.any
+// CHECK-DAG:           %[[CONSTANT_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
 // CHECK:           %[[TUPLE_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_1]], %[[UPCAST_1]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-// CHECK:           tvm_ffi.ObjectDecRef %[[UPCAST_1]] : !tvm_ffi.any
-// CHECK:           %[[UPCAST_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG2]] : !tvm_ffi.function -> !tvm_ffi.any
-// CHECK:           %[[CONSTANT_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
+// CHECK-DAG:           %[[UPCAST_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG2]] : !tvm_ffi.c.function -> !tvm_ffi.any
+// CHECK-DAG:           %[[CONSTANT_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool true
 // CHECK:           %[[TUPLE_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_2]], %[[UPCAST_2]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-// CHECK:           tvm_ffi.ObjectDecRef %[[UPCAST_2]] : !tvm_ffi.any
 // CHECK:           return %[[TUPLE_0]], %[[TUPLE_1]], %[[TUPLE_2]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK-LABEL:   func.func @failures() -> (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) {
 // CHECK:           %[[CONSTANT_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.none
 // CHECK:           %[[CONSTANT_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool false
 // CHECK:           %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[CONSTANT_0]] : !tvm_ffi.none -> !tvm_ffi.any
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_1]], %[[UPCAST_0]]) {tvm_ffi.cleanup} : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_1]], %[[UPCAST_0]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK:           %[[CONSTANT_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool false
 // CHECK:           %[[UPCAST_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[CONSTANT_0]] : !tvm_ffi.none -> !tvm_ffi.any
-// CHECK:           %[[TUPLE_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_2]], %[[UPCAST_1]]) {tvm_ffi.cleanup} : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// CHECK:           %[[TUPLE_1:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_2]], %[[UPCAST_1]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK:           %[[CONSTANT_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.constant.bool false
 // CHECK:           %[[UPCAST_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[CONSTANT_0]] : !tvm_ffi.none -> !tvm_ffi.any
-// CHECK:           %[[TUPLE_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_3]], %[[UPCAST_2]]) {tvm_ffi.cleanup} : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-// CHECK:           %[[UPCAST_3:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[TUPLE_0]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> -> !tvm_ffi.any
-// CHECK:           tvm_ffi.ObjectIncRef %[[UPCAST_3]] : !tvm_ffi.any
-// CHECK:           %[[UPCAST_4:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[TUPLE_1]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> -> !tvm_ffi.any
-// CHECK:           tvm_ffi.ObjectIncRef %[[UPCAST_4]] : !tvm_ffi.any
-// CHECK:           %[[UPCAST_5:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[TUPLE_2]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> -> !tvm_ffi.any
-// CHECK:           tvm_ffi.ObjectIncRef %[[UPCAST_5]] : !tvm_ffi.any
+// CHECK:           %[[TUPLE_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_3]], %[[UPCAST_2]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK:           return %[[TUPLE_0]], %[[TUPLE_1]], %[[TUPLE_2]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK-LABEL:   func.func @forward(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
-// CHECK:           cf.br ^[[BLOCK_bb1:bb[0-9]+]](%[[ARG0]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>)
-// CHECK:         ^[[BLOCK_bb1]](%[[VAL_0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>):
-// CHECK:           %[[VAL_1:[a-zA-Z0-9_$.-]+]] = call @identity(%[[VAL_0]]) : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
+// CHECK:           %[[VAL_1:[a-zA-Z0-9_$.-]+]] = call @identity(%[[ARG0]]) : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK:           return %[[VAL_1]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK-LABEL:   func.func @unpack_any(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (i1, !tvm_ffi.any) {
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
 // CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
 // CHECK:           return %[[GET_0]], %[[TUPLE_0]]#1 : i1, !tvm_ffi.any
 // CHECK-LABEL:   func.func @unpack_float(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (i1, !tvm_ffi.any) {
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
 // CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
 // CHECK:           return %[[GET_0]], %[[TUPLE_0]]#1 : i1, !tvm_ffi.any
 // CHECK-LABEL:   func.func @unpack_function(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (i1, !tvm_ffi.any) {
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
 // CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
 // CHECK:           return %[[GET_0]], %[[TUPLE_0]]#1 : i1, !tvm_ffi.any
 // CHECK-LABEL:   func.func @unpack_int(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (i1, !tvm_ffi.any) {
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
 // CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
 // CHECK:           return %[[GET_0]], %[[TUPLE_0]]#1 : i1, !tvm_ffi.any
 // CHECK-LABEL:   func.func @unpack_none(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (i1, !tvm_ffi.any) {
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
 // CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
 // CHECK:           return %[[GET_0]], %[[TUPLE_0]]#1 : i1, !tvm_ffi.any
 // CHECK-LABEL:   func.func @unpack_tensor(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (i1, !tvm_ffi.any) {
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
 // CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
 // CHECK:           return %[[GET_0]], %[[TUPLE_0]]#1 : i1, !tvm_ffi.any
 // CHECK-LABEL:   func.func @unpack_union(
 // CHECK-SAME:      %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (i1, !tvm_ffi.any) {
-// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] {tvm_ffi.cleanup} : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
+// CHECK:           %[[TUPLE_0:[a-zA-Z0-9_$.-]+]]:2 = tvm_ffi.tuple.unconstruct %[[ARG0]] : (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) -> (!tvm_ffi.bool, !tvm_ffi.any)
 // CHECK:           %[[GET_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.get %[[TUPLE_0]]#0 : !tvm_ffi.bool -> i1
 // CHECK:           return %[[GET_0]], %[[TUPLE_0]]#1 : i1, !tvm_ffi.any
-
-
-
-
-
 
 func.func @construct(%value: !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
   %result = tvm_ffi.monad.pure %value : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
   return %result : !tvm_ffi.monad.result<!tvm_ffi.int>
 }
 
-func.func @construct_multiple(%value: !tvm_ffi.int, %none: !tvm_ffi.none, %function: !tvm_ffi.function) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.function>) {
-  %results:3 = tvm_ffi.monad.pure %value, %none, %function : (!tvm_ffi.int, !tvm_ffi.none, !tvm_ffi.function) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.function>)
-  return %results#0, %results#1, %results#2 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.function>
+func.func @construct_multiple(%value: !tvm_ffi.int, %none: !tvm_ffi.none, %function: !tvm_ffi.c.function) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.c.function>) {
+  %results:3 = tvm_ffi.monad.pure %value, %none, %function : (!tvm_ffi.int, !tvm_ffi.none, !tvm_ffi.c.function) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.c.function>)
+  return %results#0, %results#1, %results#2 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.c.function>
 }
 
-func.func @failures() -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.function>) {
-  %results:3 = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.function>
-  return %results#0, %results#1, %results#2 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.function>
+func.func @failures() -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.c.tensor>, !tvm_ffi.monad.result<!tvm_ffi.c.function>) {
+  %results:3 = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.c.tensor>, !tvm_ffi.monad.result<!tvm_ffi.c.function>
+  return %results#0, %results#1, %results#2 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.c.tensor>, !tvm_ffi.monad.result<!tvm_ffi.c.function>
 }
 
 func.func @forward(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int> {
-  cf.br ^next(%input : !tvm_ffi.monad.result<!tvm_ffi.int>)
-^next(%arg: !tvm_ffi.monad.result<!tvm_ffi.int>):
-  %result = call @identity(%arg) : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+  %result = call @identity(%input) : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> !tvm_ffi.monad.result<!tvm_ffi.int>
   return %result : !tvm_ffi.monad.result<!tvm_ffi.int>
 }
 
@@ -127,8 +108,8 @@ func.func @unpack_float(%result: !tvm_ffi.monad.result<!tvm_ffi.float>) -> (i1, 
   return %ok, %value : i1, !tvm_ffi.any
 }
 
-func.func @unpack_function(%result: !tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.any) {
-  %ok, %value = tvm_ffi.monad.unpack %result : (!tvm_ffi.monad.result<!tvm_ffi.function>) -> (i1, !tvm_ffi.any)
+func.func @unpack_function(%result: !tvm_ffi.monad.result<!tvm_ffi.c.function>) -> (i1, !tvm_ffi.any) {
+  %ok, %value = tvm_ffi.monad.unpack %result : (!tvm_ffi.monad.result<!tvm_ffi.c.function>) -> (i1, !tvm_ffi.any)
   return %ok, %value : i1, !tvm_ffi.any
 }
 
@@ -142,8 +123,8 @@ func.func @unpack_none(%result: !tvm_ffi.monad.result<!tvm_ffi.none>) -> (i1, !t
   return %ok, %value : i1, !tvm_ffi.any
 }
 
-func.func @unpack_tensor(%result: !tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (i1, !tvm_ffi.any) {
-  %ok, %value = tvm_ffi.monad.unpack %result : (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (i1, !tvm_ffi.any)
+func.func @unpack_tensor(%result: !tvm_ffi.monad.result<!tvm_ffi.c.tensor>) -> (i1, !tvm_ffi.any) {
+  %ok, %value = tvm_ffi.monad.unpack %result : (!tvm_ffi.monad.result<!tvm_ffi.c.tensor>) -> (i1, !tvm_ffi.any)
   return %ok, %value : i1, !tvm_ffi.any
 }
 
