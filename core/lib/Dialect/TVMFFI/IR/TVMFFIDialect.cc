@@ -62,9 +62,7 @@ struct TVMFFIInlinerInterface final : mlir::DialectInlinerInterface {
   }
 };
 
-namespace {
-
-bool isTaggedCastType(mlir::Type type) {
+static bool isTaggedCastType(mlir::Type type) {
   if (mlir::isa<AnyType, CAnyType, ArrayType, ExceptionType, FunctionType,
                 StrType, TensorType, TupleType>(type)) {
     return true;
@@ -75,8 +73,6 @@ bool isTaggedCastType(mlir::Type type) {
   return mlir::isa<TVMFFICABIType>(type) &&
          mlir::isa<TVMFFITypeIndexInterface>(type);
 }
-
-} // namespace
 
 bool DowncastOp::areCastCompatible(mlir::TypeRange inputs,
                                    mlir::TypeRange outputs) {

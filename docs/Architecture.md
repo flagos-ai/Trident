@@ -230,8 +230,8 @@ The lowering pipeline is:
    `!tvm_ffi.c.array` and Any/Union/Str to `!tvm_ffi.c.any`. Container operations become
    checked runtime Array calls. Materialize semantic export retains and register
    local releases in defer regions. Run `lower-tvm-ffi-defer` immediately
-   afterward to move their bodies
-   to block exits before inlining and SCF-to-CFG conversion.
+   afterward to clone their bodies
+   at dominance-scope exits before inlining and SCF-to-CFG conversion.
 4. Finalize metadata operations and convert TVM FFI functions and returns to
    checked functions with output slots and an i32 status, generating packed ABI
    wrappers. Output slots are read and written only on success.
@@ -248,7 +248,7 @@ with separate `!tvm_ffi.bool` and `!tvm_ffi.any` results, then explicitly packs
 them into the semantic Bool/Any tuple used for lowered Results. The tuple
 borrows the call payload and retains it through runtime container construction.
 Decomposition releases both the call's independent reference and its local tuple
-reference at block exit, retaining any exported tuple first.
+reference at dominance-scope exit, retaining any exported tuple first.
 Result attributes move to the call's payload result, with an empty entry for success.
 Local callee resolution, argument matching and the `emit_tvm_ffi_abi`
 requirement are deferred to lowering for unlowered callees. This local-symbol
@@ -343,8 +343,8 @@ independent importers sharing the parent module, and return Results for the
 parent visitor to bind. Input tables cache complete Results, never extraction
 bind payloads. Cached Results must belong to an ancestor block; sibling scopes
 rebuild their extraction. Semantic reference lifetimes extend to the defining
-IR block exit, independently of Python context-manager exits. Guards and backend
-input flattening use fresh tables. Construction exceptions propagate; discard
+IR block's dominance-scope exit, independently of Python context-manager exits.
+Guards and backend input flattening use fresh tables. Construction exceptions propagate; discard
 an importer and its tables after a construction failure.
 
 Each guard-expression visitor caches one recursive analysis per AST node for its
@@ -378,74 +378,123 @@ Failure tuples contain None. Both the Python `pure` helper and low-level
 `MonadPureOp` borrow their inputs: tuple construction retains each occurrence,
 including repeated payloads. No transfer mode or ownership attribute is needed.
 
-`decompose-tvm-ffi` validates lexical ownership scopes without tracing value
-provenance or collecting ownership actions. `ReplacementConversionPattern<SourceOp>`
-derives from `OpConversionPattern` and provides protected static replacement
-helpers. Producers explicitly select its `OwnershipConversionPattern<SourceOp>`
-subclass, whose helpers register local releases for original Opaque result types
-in a `tvm_ffi.defer`, in reverse result order, before delegating replacement.
-Representation-only patterns select their base through a template parameter;
-there is no runtime producer classification in the replacement helpers.
-Scope validation checks region structure, while conversion legality depends on
-types. Casts, parameters and captures borrow and create no local cleanup
-responsibility. Tensor storage aliases do not imply borrowed object references.
+`decompose-tvm-ffi` uses conversion legality rather than a parent-operation
+whitelist. Synchronous nested regions may borrow captured semantic references;
+local producers register cleanup in their own region. Region boundaries carrying
+semantic values require dedicated ownership conversion patterns. Functions,
+explicit defer bodies, `scf.if`, `scf.for` and `scf.while` are supported;
+unsupported semantic boundaries fail legalization. Cleanup region structure is
+validated by `lower-tvm-ffi-defer`. This policy assumes synchronous execution;
+asynchronous reference lifetimes are outside the automatic ownership contract.
 
-Each return or yield pattern retains every Opaque operand in operand order,
-including repeated values, borrowed parameters and values widened from Base or
-POD types. The operand's source does not affect this export rule. Each `scf.if`
-Opaque result receives an independent reference from its selected branch and
-registers a release in its enclosing block. Nested regions use the same rule
-without propagating ownership through Base-valued results.
+Each supported SCF operation has its own conversion pattern. Parent patterns
+convert their operands, results and region signatures, move existing regions and
+register result cleanup. The for and while patterns retain initial values and
+register per-execution entry argument cleanup. This also preserves results when
+a for loop executes zero times. Independent yield and condition conversion
+patterns retain each outgoing semantic slot using their own remapped adaptors.
+Yield ownership applies to if, for and while boundaries. The condition predicate
+is not retained; both condition outcomes share the same outgoing payload
+reference. Repeated semantic slots retain separate references.
+
+Parent patterns inspect original semantic types before converting signatures
+through the conversion rewriter. Child operations, including terminators, are
+left to their own conversion patterns.
+There is no generic region-boundary conversion or module-wide ownership plan.
+Function arguments, implicit captures and internal CFG block arguments borrow;
+loop entry arguments receive owned references and release them on every region
+execution, after outgoing references have been retained.
+
+All decomposition patterns derive directly from `mlir::OpConversionPattern`.
+Borrowing patterns use the rewriter's replacement methods; producers explicitly
+register local releases for original Opaque result types in a `tvm_ffi.defer`,
+in result order, before replacing the operation. Representation-only
+patterns use `ConvertGenericOp<Op, OwnsResults>`, with ownership disabled by
+default and explicitly enabled for producers at registration. The replacement
+path is selected at compile time without runtime producer classification.
+Conversion legality depends on types; defer lowering validates cleanup region
+structure. Casts, function parameters, internal CFG parameters and captures borrow;
+forwarded region entry parameters own their received references. Tensor storage
+aliases do not imply borrowed object references.
+
+Function returns retain every Opaque operand in operand order, including repeated
+values, borrowed parameters and values widened from Base or POD types. Region
+exports also retain each forwarded Opaque slot, including direct producer results.
+Producer references always receive local cleanup; there is no implicit reference
+transfer optimization. Original Base slots remain manually managed even when
+their representation matches an Opaque slot.
 
 The decomposition implementation separates representation mapping, container
 runtime calls, ownership completion and conversion configuration. Array and Tuple
 construction share one pattern; container patterns explicitly release their
-temporary Base function handles after each runtime call. Producer patterns inherit
-the ownership-aware conversion pattern base and use its replacement helpers,
-which register semantic cleanup through the driver-provided rewriter in the same
+temporary Base function handles after each runtime call. Producer patterns
+register semantic cleanup through the driver-provided rewriter in the same
 conversion transaction. Value replacements register cleanup at the current
 insertion point; operation replacements place it
-after the replacement operation. Dedicated return/yield
-patterns retain exported operands without applying producer ownership rules.
-The pass validates scopes, converts operations, then recursively converts
-type-bearing attributes.
+after the replacement operation. Dedicated function return patterns retain exported
+operands without applying producer ownership rules. Dedicated for and while
+patterns insert initial-value retains and entry cleanups. The if, for and while
+patterns directly register result cleanup. Independent yield and condition
+patterns retain transferred payloads and replace their own terminators using
+adaptor values. Patterns retain original Opaque slots directly; shared helpers register
+deferred releases in slot order. Patterns do not analyze region control flow.
+The pass converts operations, then recursively converts type-bearing attributes.
 
-Patterns use original types to classify ownership and remapped operands and
-replacement results to emit reference operations. Any/Union become CAny, so
-type legality forces their ownership patterns to run once without tracking
+Patterns use original types to classify ownership. Retains and cleanup
+use remapped operands and replacement values, including child exit retains
+whose values come from the terminator pattern's adaptor. Any/Union become CAny,
+so type legality forces their ownership patterns to run once without tracking
 completed replacements. Patterns run before conversion-time folding so
 a producer or branch cannot vanish before registering its ownership. Region
 conversion moves existing child operations rather than cloning them.
 
-`lower-tvm-ffi-defer` moves cleanup bodies before the registering block's
-terminator, after all export retains. Each enclosing region must be single-block.
-Inner lexical scopes run before outer scopes; registrations in the same block
-run in reverse order, preserving operation order and SSA data flow within each
-body. Runtime-tagged reference checks
-handle CAny payloads, including scalar-only values. Temporary Base
-function handles created by decomposition keep their immediate, explicit
-releases; generated runtime calls are not reclassified as semantic producers.
+`lower-tvm-ffi-defer` clones cleanup bodies at registration dominance-scope
+exits, after all export retains. A registration remains active through blocks
+dominated by its registering block. An edge leaving that dominance scope runs
+the cleanup; an edge back to the registering block also cleans up the previous
+iteration before registering again. Region returns and yields clean up all
+remaining active registrations. Relative execution order between defers at the
+same exit is unspecified; operations requiring an order must share one body.
+Operation order and SSA data flow within each body are preserved. Edge-specific
+cleanup blocks preserve branch operands, including distinct edges to the same
+successor. Runtime-tagged reference
+checks handle CAny payloads, including scalar-only values. Temporary Base function
+handles created by decomposition retain their immediate, explicit releases.
 Original Base results remain manually managed, including Base-typed container
 extractions. A manually managed reference exposed through an Opaque return or
-yield still receives the independent export reference required by that boundary;
-its original reference remains the caller's responsibility to manage explicitly.
+yield still receives an independent export reference.
 
-Automatic management requires single-block regions and currently supports
-functions and `scf.if`. Required ownership across multi-block CFG edges or
-unsupported region exits is diagnosed rather than silently skipped. The dedicated
-`lower-tvm-ffi-defer` cleanup pass runs immediately after decomposition. Each
-defer has a single block without arguments, captures its inputs, and ends in
-`tvm_ffi.defer_yield`. Nested regions and additional terminators in cleanup
-bodies are rejected. Automatically generated cleanup stays within its
-registering block, including `scf.if` branches; it does not unwind aborts or
-exceptions. Defer lowering supports only single-block `tvm_ffi.func`, `func.func`
-and `scf.if` regions with `tvm_ffi.return`, `func.return` or `scf.yield` exits.
-Multi-block regions, unsupported enclosing operations and unsupported exits
-produce diagnostics before any cleanup is moved.
-Decomposition is a once-only lowering boundary and does not promise idempotent
-reference materialization. Defer lowering is a no-op when no defers remain.
-There is no early-release optimization or complete borrow checker; callers must
-preserve lexical validity.
+Automatic management supports multi-block function CFGs and the three supported
+SCF operations. CFG block arguments remain borrowed: forwarding a reference across a
+branch does not extend the owner's dominance scope or transfer ownership.
+Code using such a value after its owner scope ends must already hold an independent
+reference. Internal CFG forwarding does not infer ownership; region entry
+forwarding instead follows the operation-specific rules above.
+Explicit defer lowering supports loops as described below.
+
+The dedicated `lower-tvm-ffi-defer` pass runs immediately after decomposition.
+Each defer body has a single block without arguments, captures its inputs, and
+ends in `tvm_ffi.defer_yield`. Nested regions and additional terminators in cleanup
+bodies are rejected. Cleanup does not unwind aborts or exceptions.
+Explicit defer lowering supports any SSACFG region with block terminators,
+independent of the enclosing operation or exit kind. MLIR dominance analysis
+must establish SSA semantics; graph regions and unknown single-block regions are
+rejected. CFG branches must implement `BranchOpInterface`. A terminator without
+CFG successors ends this execution of the region, so all active cleanups run
+before it. This includes `scf.condition` on either outcome and transfers to
+another region. Each region execution has independent registrations; a zero-trip
+for-loop executes no body cleanup. No operation-specific adapters are required.
+This pass does not retain exported operands or infer loop-carried ownership.
+Callers using explicit defer must independently preserve forwarded references.
+Unsupported region structure and CFG branches within active scopes are diagnosed
+before any cleanup is cloned or CFG edges are changed. Unreachable registrations
+are removed without generating cleanup. Empty bodies and edges requiring no
+cleanup may produce forwarding blocks, which later canonicalization can remove.
+Automatic cleanup registration may emit an argument-free block containing only
+`tvm_ffi.defer_yield` when no values need releasing; this is a valid empty defer.
+Decomposition remains a once-only lowering boundary; defer lowering is a no-op
+when no defers remain. There is no early-release optimization or complete borrow
+checker; callers must preserve reference validity.
 
 Generated private graph Results use failure for specialization rejection. At the
 Python-built graph-call boundary, the wrapper checks all Result success bits,

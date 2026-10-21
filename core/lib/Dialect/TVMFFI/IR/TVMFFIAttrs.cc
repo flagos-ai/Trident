@@ -31,12 +31,11 @@
 
 namespace trident::tvm_ffi {
 
-namespace {
-
 // Recursive traversal mirrors the nested tuple attribute structure.
 // NOLINTBEGIN(misc-no-recursion)
-mlir::Value buildConstantValue(mlir::OpBuilder &builder, mlir::Location loc,
-                               mlir::Attribute value) {
+static mlir::Value buildConstantValue(mlir::OpBuilder &builder,
+                                      mlir::Location loc,
+                                      mlir::Attribute value) {
   return llvm::TypeSwitch<mlir::Attribute, mlir::Value>(value)
       .Case<mlir::ArrayAttr>([&](mlir::ArrayAttr array) -> mlir::Value {
         llvm::SmallVector<mlir::Value> const elements = llvm::map_to_vector(
@@ -73,8 +72,8 @@ mlir::Value buildConstantValue(mlir::OpBuilder &builder, mlir::Location loc,
       });
 }
 
-mlir::Type getConstantValueType(mlir::Attribute value,
-                                mlir::MLIRContext *context) {
+static mlir::Type getConstantValueType(mlir::Attribute value,
+                                       mlir::MLIRContext *context) {
   return llvm::TypeSwitch<mlir::Attribute, mlir::Type>(value)
       .Case<mlir::ArrayAttr>([&](mlir::ArrayAttr) -> mlir::Type {
         return tvm_ffi::CArrayType::get(context);
@@ -93,7 +92,7 @@ mlir::Type getConstantValueType(mlir::Attribute value,
       });
 }
 
-bool isValidConstantValue(mlir::Attribute value) {
+static bool isValidConstantValue(mlir::Attribute value) {
   if (mlir::isa<mlir::StringAttr>(value)) {
     return true;
   }
@@ -108,8 +107,6 @@ bool isValidConstantValue(mlir::Attribute value) {
   return type.isInteger(1) || type.isInteger(64) || type.isF64();
 }
 // NOLINTEND(misc-no-recursion)
-
-} // namespace
 
 mlir::Value ConstantSpecializationAttr::buildCheck(mlir::OpBuilder &builder,
                                                    mlir::Location loc,

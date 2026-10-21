@@ -28,8 +28,8 @@ tvm_ffi.func @empty() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi}
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[ALIAS]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[ALIAS]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[BORROWED]] : !tvm_ffi.c.tensor
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[SECOND]] : !tvm_ffi.c.tensor
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.tensor
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[SECOND]] : !tvm_ffi.c.tensor
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.tensor
 // CHECK-NEXT: return %[[ALIAS]], %[[ALIAS]], %[[BORROWED]]
 func.func @aliases(%input: !tvm_ffi.tensor) -> (!tvm_ffi.any, !tvm_ffi.any, !tvm_ffi.tensor) {
   %first = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
@@ -81,6 +81,14 @@ func.func @base_handle_call(%handle: !tvm_ffi.c.function) -> !tvm_ffi.any {
 }
 
 // Base extraction and branch results keep explicit ownership transfers.
+// DEFER-LABEL: func.func @base_results(
+// DEFER: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"
+// DEFER: %[[ELEMENT:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]]
+// DEFER-NEXT: tvm_ffi.ObjectDecRef %[[HANDLE]] : !tvm_ffi.c.function
+// DEFER-NEXT: tvm_ffi.defer {
+// DEFER-NEXT: tvm_ffi.defer_yield
+// DEFER-NEXT: }
+// DEFER-NEXT: scf.yield %[[ELEMENT]] : !tvm_ffi.c.tensor
 // CHECK-LABEL: func.func @base_results(
 // CHECK-SAME: %[[TUPLE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.array, %[[FALLBACK:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[READY:[a-zA-Z0-9_]+]]: i1)
 // CHECK-NEXT: %[[SELECTED:[a-zA-Z0-9_]+]] = scf.if %[[READY]] -> (!tvm_ffi.c.tensor)
@@ -102,6 +110,71 @@ func.func @base_results(%tuple: !tvm_ffi.tuple<!tvm_ffi.c.tensor>, %fallback: !t
     scf.yield %fallback : !tvm_ffi.c.tensor
   }
   return %selected : !tvm_ffi.c.tensor
+}
+
+// CFG parameters borrow; the entry-owned reference stays alive across the join.
+// DEFER-LABEL: func.func @cfg_borrow(
+// DEFER-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor,
+// DEFER: %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.tensor.clone %[[INPUT]]
+// DEFER-NEXT: tvm_ffi.defer {
+// DEFER-NEXT: tvm_ffi.ObjectDecRef %[[VALUE]]
+// DEFER: cf.cond_br
+// DEFER: return
+// CHECK-LABEL: func.func @cfg_borrow(
+// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[COND:[a-zA-Z0-9_]+]]: i1)
+// CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.tensor.clone %[[INPUT]]
+// CHECK-NEXT: cf.cond_br %[[COND]], ^[[LEFT:bb[0-9]+]](%[[VALUE]] : !tvm_ffi.c.tensor), ^[[JOIN:bb[0-9]+]](%[[VALUE]] : !tvm_ffi.c.tensor)
+// CHECK: ^[[LEFT]](%[[BORROWED:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor):
+// CHECK-NEXT: cf.br ^[[LEFT_BODY:bb[0-9]+]](%[[BORROWED]] : !tvm_ffi.c.tensor)
+// CHECK: ^[[LEFT_BODY]](%[[LEFT_VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor):
+// CHECK-NEXT: cf.br ^[[LEFT_EDGE:bb[0-9]+]](%[[LEFT_VALUE]] : !tvm_ffi.c.tensor)
+// CHECK: ^[[JOIN]](%[[DIRECT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor):
+// CHECK-NEXT: cf.br ^[[FINAL:bb[0-9]+]](%[[DIRECT]] : !tvm_ffi.c.tensor)
+// CHECK: ^[[LEFT_EDGE]](%[[FORWARDED:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor):
+// CHECK-NEXT: cf.br ^[[FINAL]](%[[FORWARDED]] : !tvm_ffi.c.tensor)
+// CHECK: ^[[FINAL]](%[[RESULT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor):
+// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[RESULT]]
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[VALUE]]
+// CHECK-NEXT: return %[[RESULT]]
+func.func @cfg_borrow(%input: !tvm_ffi.tensor, %condition: i1) -> !tvm_ffi.tensor {
+  %value = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
+  cf.cond_br %condition, ^left(%value : !tvm_ffi.tensor), ^join(%value : !tvm_ffi.tensor)
+^left(%borrowed: !tvm_ffi.tensor):
+  cf.br ^join(%borrowed : !tvm_ffi.tensor)
+^join(%result: !tvm_ffi.tensor):
+  return %result : !tvm_ffi.tensor
+}
+
+// Packed function CFG exits each export before releasing the shared owner.
+// DEFER-LABEL: tvm_ffi.func @cfg_packed(
+// DEFER: tvm_ffi.defer {
+// DEFER: cf.cond_br
+// CHECK-LABEL: tvm_ffi.func @cfg_packed(
+// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[COND:[a-zA-Z0-9_]+]]: i1)
+// CHECK: %[[CLONE:[a-zA-Z0-9_]+]] = tvm_ffi.tensor.clone %[[INPUT]]
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[CLONE]]
+// CHECK: cf.cond_br %[[COND]], ^[[LEFT:bb[0-9]+]], ^[[RIGHT:bb[0-9]+]]
+// CHECK: ^[[LEFT]]:
+// CHECK-NEXT: cf.br ^[[LEFT_BODY:bb[0-9]+]]
+// CHECK: ^[[LEFT_BODY]]:
+// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[PAYLOAD]]
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[CLONE]]
+// CHECK-NEXT: tvm_ffi.return %[[OK:[a-zA-Z0-9_]+]], %[[PAYLOAD]]
+// CHECK: ^[[RIGHT]]:
+// CHECK-NEXT: cf.br ^[[RIGHT_BODY:bb[0-9]+]]
+// CHECK: ^[[RIGHT_BODY]]:
+// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[PAYLOAD]]
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[CLONE]]
+// CHECK-NEXT: tvm_ffi.return %[[OK]], %[[PAYLOAD]]
+tvm_ffi.func @cfg_packed(%input: !tvm_ffi.tensor, %condition: i1) -> !tvm_ffi.tensor {
+  %clone = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
+  %payload = tvm_ffi.upcast %clone : !tvm_ffi.tensor -> !tvm_ffi.any
+  %ok = tvm_ffi.constant.bool true
+  cf.cond_br %condition, ^left, ^right
+^left:
+  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+^right:
+  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
 }
 
 // The conversion driver must apply the ownership pattern before folding a
@@ -209,8 +282,8 @@ func.func @mixed_if(%condition: i1, %owned: !tvm_ffi.tensor, %manual: !tvm_ffi.c
 // DEFER: %[[LAST:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[LAST_HANDLE]] : !tvm_ffi.c.function(%[[TUPLE]], %[[LAST_INDEX:[a-zA-Z0-9_]+]])
 // DEFER-NEXT: tvm_ffi.ObjectDecRef %[[LAST_HANDLE]] : !tvm_ffi.c.function
 // DEFER-NEXT: tvm_ffi.defer {
-// DEFER-NEXT: tvm_ffi.ObjectDecRef %[[LAST]] : !tvm_ffi.c.any
 // DEFER-NEXT: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.tensor
+// DEFER-NEXT: tvm_ffi.ObjectDecRef %[[LAST]] : !tvm_ffi.c.any
 // DEFER-NEXT: tvm_ffi.defer_yield
 // DEFER-NEXT: }
 // DEFER-NEXT: tvm_ffi.ObjectDecRef %[[MANUAL]] : !tvm_ffi.c.tensor
@@ -227,8 +300,8 @@ func.func @mixed_if(%condition: i1, %owned: !tvm_ffi.tensor, %manual: !tvm_ffi.c
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[FIRST]] : !tvm_ffi.c.tensor
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[LAST]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[FIRST]] : !tvm_ffi.c.tensor
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[LAST]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.tensor
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[LAST]] : !tvm_ffi.c.any
 // CHECK-NEXT: return %[[FIRST]], %[[LAST]], %[[FIRST]], %[[SCALAR]]
 func.func @mixed_results(%tuple: !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.c.tensor, !tvm_ffi.int, !tvm_ffi.any>) -> (!tvm_ffi.tensor, !tvm_ffi.any, !tvm_ffi.tensor, !tvm_ffi.int) {
   %first, %manual, %scalar, %last = tvm_ffi.tuple.unconstruct %tuple : (!tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.c.tensor, !tvm_ffi.int, !tvm_ffi.any>) -> (!tvm_ffi.tensor, !tvm_ffi.c.tensor, !tvm_ffi.int, !tvm_ffi.any)
@@ -237,8 +310,8 @@ func.func @mixed_results(%tuple: !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.c.tens
 }
 
 // The shared Array/Tuple construction protocol borrows its elements. Temporary
-// runtime handles are released immediately; containers are released in reverse
-// construction order after all exports. Semantic strings keep their tagged
+// runtime handles are released immediately; containers are released after all
+// exports without prescribing their relative order. Semantic strings keep their tagged
 // cleanup contract even when the underlying constant uses static storage.
 // CHECK-LABEL: func.func @nested_construction()
 // CHECK-NEXT: %[[RAW:[a-zA-Z0-9_]+]] = tvm_ffi.constant.raw_str "text"
@@ -251,9 +324,9 @@ func.func @mixed_results(%tuple: !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.c.tens
 // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[TUPLE_HANDLE]] : !tvm_ffi.c.function
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[TUPLE]] : !tvm_ffi.c.array
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[TEXT]] : !tvm_ffi.c.any
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[TUPLE]] : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[ARRAY]] : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[TEXT]] : !tvm_ffi.c.any
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[TUPLE]] : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[ARRAY]] : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[TEXT]] : !tvm_ffi.c.any
 // CHECK-NEXT: return %[[TUPLE]], %[[TEXT]]
 func.func @nested_construction() -> (!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.str>, !tvm_ffi.str>, !tvm_ffi.str) {
   %text = tvm_ffi.constant.str "text"
@@ -270,7 +343,12 @@ func.func @nested_construction() -> (!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.str>
 // DEFER: %[[INNER:[a-zA-Z0-9_]+]] = scf.if %[[COND]]
 // DEFER: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"
 // DEFER: %[[ELEMENT:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]] : !tvm_ffi.c.function(%[[TUPLE]], %[[OFFSET:[a-zA-Z0-9_]+]])
-// DEFER: tvm_ffi.ObjectIncRef %[[ELEMENT]] : !tvm_ffi.c.tensor
+// DEFER-NEXT: tvm_ffi.ObjectDecRef %[[HANDLE]] : !tvm_ffi.c.function
+// DEFER-NEXT: tvm_ffi.defer {
+// DEFER-NEXT: tvm_ffi.ObjectDecRef %[[ELEMENT]] : !tvm_ffi.c.tensor
+// DEFER-NEXT: tvm_ffi.defer_yield
+// DEFER-NEXT: }
+// DEFER-NEXT: tvm_ffi.ObjectIncRef %[[ELEMENT]] : !tvm_ffi.c.tensor
 // DEFER-NEXT: scf.yield %[[ELEMENT]]
 // DEFER: tvm_ffi.ObjectIncRef %[[FALLBACK]] : !tvm_ffi.c.tensor
 // DEFER-NEXT: scf.yield %[[FALLBACK]]
@@ -318,8 +396,8 @@ func.func @nested_opaque(%condition: i1, %tuple: !tvm_ffi.tuple<!tvm_ffi.tensor>
 // CHECK: %[[SECOND_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array"
 // CHECK: %[[SECOND:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[SECOND_HANDLE]] : !tvm_ffi.c.function(%[[SECOND_OK:[a-zA-Z0-9_]+]], %[[SECOND_VALUE]])
 // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[SECOND_HANDLE]] : !tvm_ffi.c.function
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[SECOND]] : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[SECOND]] : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.array
 // CHECK-NEXT: return
 func.func @pure_borrows(%input: !tvm_ffi.tensor) {
   %results:2 = tvm_ffi.monad.pure %input, %input : (!tvm_ffi.tensor, !tvm_ffi.tensor) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>)
@@ -328,22 +406,29 @@ func.func @pure_borrows(%input: !tvm_ffi.tensor) {
 
 // Both successful and failed Result branches export independent references.
 // CHECK-LABEL: func.func @result_exports(
+// CHECK: %[[STATUS_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"
+// CHECK: %[[PAYLOAD_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.ArrayGetItem"
+// CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[PAYLOAD_HANDLE]]
 // CHECK: %[[RESULTS:[a-zA-Z0-9_]+]]:2 = scf.if %[[READY:[a-zA-Z0-9_]+]]
 // CHECK: tvm_ffi.ObjectIncRef %[[SUCCESS:[a-zA-Z0-9_]+]] : !tvm_ffi.c.array
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[SUCCESS]] : !tvm_ffi.c.array
 // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[SUCCESS]] : !tvm_ffi.c.array
 // CHECK-NEXT: scf.yield %[[SUCCESS]], %[[SUCCESS]]
 // CHECK-NEXT: } else {
-// CHECK: tvm_ffi.ObjectIncRef %[[FAILURE_FIRST:[a-zA-Z0-9_]+]] : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[FAILURE_SECOND:[a-zA-Z0-9_]+]] : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FAILURE_SECOND]] : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[FAILURE_FIRST]] : !tvm_ffi.c.array
+// CHECK: %[[FAILURE_FIRST:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall
+// CHECK: %[[FAILURE_SECOND:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[HANDLE:[a-zA-Z0-9_]+]] : !tvm_ffi.c.function
+// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[FAILURE_FIRST]] : !tvm_ffi.c.array
+// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[FAILURE_SECOND]] : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[FAILURE_SECOND]] : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[FAILURE_FIRST]] : !tvm_ffi.c.array
 // CHECK-NEXT: scf.yield %[[FAILURE_FIRST]], %[[FAILURE_SECOND]]
 // CHECK-NEXT: }
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[RESULTS]]#0 : !tvm_ffi.c.array
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[RESULTS]]#1 : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULTS]]#1 : !tvm_ffi.c.array
-// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[RESULTS]]#0 : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[PAYLOAD]] : !tvm_ffi.c.any
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[RESULTS]]#0 : !tvm_ffi.c.array
+// CHECK-DAG: tvm_ffi.ObjectDecRef %[[RESULTS]]#1 : !tvm_ffi.c.array
 // CHECK: return %[[RESULTS]]#0, %[[RESULTS]]#1
 func.func @result_exports(%input: !tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>) {
   %outputs:2 = tvm_ffi.monad.bind %input : (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>) {
@@ -376,8 +461,11 @@ func.func @scalar_union(%handle: !tvm_ffi.function) -> !tvm_ffi.union<!tvm_ffi.i
   return %value : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>
 }
 
-// An empty extraction produces no runtime call, result, or defer.
+// An empty extraction registers a terminator-only defer without runtime calls.
 // DEFER-LABEL: func.func @zero_results(
+// DEFER-NEXT: tvm_ffi.defer {
+// DEFER-NEXT: tvm_ffi.defer_yield
+// DEFER-NEXT: }
 // DEFER-NEXT: return
 // CHECK-LABEL: func.func @zero_results(
 // CHECK-NEXT: return

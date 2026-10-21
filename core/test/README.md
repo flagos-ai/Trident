@@ -31,8 +31,8 @@ adding a file for each type, arity or operator name.
 | `Transforms/lower-monad` | Result construction/unpack, continuations, independent input/output arities, local call attributes and CFG signature conversion |
 | `Transforms/decompose-representations` | Opaque/Base mapping, recursive Result/attribute conversion, borrowing casts, local calls and string elements |
 | `Transforms/decompose-containers` | Checked container calls, nested types/attributes and captured values inside nested continuations |
-| `Transforms/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, branches and rejected ownership scopes/legalization |
-| `Transforms/lower-defer*` | Reverse cleanup order, branch isolation, empty bodies, repeat lowering and rejected cleanup scopes/exits |
+| `Transforms/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, region transfers, loop-carried references, direct producer exports, CFG type conversion and synchronous captures and rejected legalization |
+| `Transforms/lower-defer*` | Generic SSACFG dominance-scope cleanup, CFG edges/loops, generic region exits, SSA cloning, empty bodies, repeat lowering and rejected region structure |
 | `DLPackToLLVM/metadata`, `FinalizeTVMFFI/metadata` | Metadata field mapping at each conversion boundary |
 | `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Wrapper guards, CFG cloning, opt-in wrappers, output writes, return status and symbol collision |
 | `TVMFFIToGPU/kernel-launch`, `invalid` | Launch arguments/stream, constant/variable specializations, Result success/rejection and unsupported native operands |
@@ -50,11 +50,21 @@ and subset variations. Identity folds use scalar, container, function and union
 representatives. Scalar constants reuse boxing coverage; DType packing and None
 initialization keep their own checks.
 
-Automatic ownership checks both defer registration (`DEFER`) and final cleanup
-(`CHECK`). Original Base values stay manually managed. Exports retain independent
-references before reverse local releases, including repeated exports and branch
-results. Monad lowering precedes decomposition; defer lowering immediately follows
-it, before inlining or SCF-to-CFG conversion. Semantic tuple inputs rely on this
+Automatic ownership checks producer defer registration (`DEFER`) and final cleanup
+(`CHECK`); region transfers check the resulting retains and releases directly. Original Base values stay manually managed. Exports retain independent
+references before local releases, including repeated exports and branch
+results. Region tests cover loop initialization, per-execution entry cleanup,
+results and condition forwarding in if/for/while, with representative full LLVM
+lowering. Synchronous execute_region captures and local cleanup are accepted;
+negative cases reject unsupported semantic execute_region and index_switch
+boundaries. Base-only regions remain accepted. Internal CFG
+block arguments borrow; branch forwarding does not extend owner
+lifetimes. CFG cleanup runs on dominance-scope exits and registration-block
+re-entry, without prescribing relative order between defers at the same exit.
+Empty and unreachable registrations are covered together; upstream CFG
+canonicalization does not need its own cleanup fixture.
+Monad lowering precedes decomposition; defer lowering immediately follows it,
+before inlining or SCF-to-CFG conversion. Semantic tuple inputs rely on this
 policy without manual retains.
 
 Pipeline cases are selected by interaction:
@@ -85,7 +95,7 @@ separate files when pass requirements conflict.
 
 Use `CHECK-LABEL` for each function and bind relevant SSA values, including
 arguments, to verify data flow. Avoid incidental IDs and printed argument names.
-Use `CHECK-NEXT` for intentional order, such as export retains preceding reverse
+Use `CHECK-NEXT` for intentional order, such as export retains preceding
 local releases. Keep lookup status, non-null handles, call status, ABI zero
 initialization and success-only output-slot reads explicit. Never replace SSA
 captures with unconstrained wildcards. Use a single space after directive colons.

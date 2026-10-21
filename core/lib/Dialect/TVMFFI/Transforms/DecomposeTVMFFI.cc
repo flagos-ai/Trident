@@ -10,13 +10,13 @@
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/SmallVectorExtras.h>
+#include <llvm/ADT/StringRef.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/ControlFlow/Transforms/StructuralTypeConversions.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/Func/Transforms/FuncConversions.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
-#include <mlir/Dialect/SCF/Transforms/Patterns.h>
 #include <mlir/IR/AttrTypeSubElements.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
@@ -30,12 +30,11 @@
 #include <mlir/IR/Region.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
-#include <mlir/IR/Visitors.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Support/LLVM.h>
 #include <mlir/Support/LogicalResult.h>
-#include <mlir/Support/WalkResult.h>
 #include <mlir/Transforms/DialectConversion.h>
+#include <optional>
 #include <utility>
 
 namespace trident::tvm_ffi {
@@ -44,54 +43,43 @@ namespace trident::tvm_ffi {
 
 namespace {
 
-mlir::LogicalResult validateOwnershipScopes(mlir::Operation *root) {
-  mlir::WalkResult const result = root->walk<mlir::WalkOrder::PreOrder>(
-      [&](mlir::Operation *op) -> mlir::WalkResult {
-        auto isOpaque = [](mlir::Type type) -> bool {
-          return mlir::isa<TVMFFICOpaqueABIType>(type);
-        };
-        if (!llvm::any_of(op->getOperandTypes(), isOpaque) &&
-            !llvm::any_of(op->getResultTypes(), isOpaque) &&
-            !llvm::any_of(op->getRegions(), [&](mlir::Region &region) -> bool {
-              return llvm::any_of(
-                  region.getBlocks(), [&](mlir::Block &block) -> bool {
-                    return llvm::any_of(block.getArgumentTypes(), isOpaque);
-                  });
-            })) {
-          return mlir::WalkResult::advance();
-        }
-        // Borrowed operands and exported values also require supported scopes:
-        // their lifetimes cannot be inferred across CFG edges or loop
-        // iterations.
-        auto validateRegion = [&](mlir::Region &region) -> mlir::LogicalResult {
-          mlir::Operation *parent = region.getParentOp();
-          if (!mlir::isa<mlir::FunctionOpInterface, mlir::scf::IfOp>(parent)) {
-            return op->emitError(
-                "unsupported region operation for automatic TVM FFI ownership");
-          }
-          if (!region.empty() && !region.hasOneBlock()) {
-            return op->emitError(
-                "automatic TVM FFI ownership requires a single-block region");
-          }
-          return mlir::success();
-        };
-        for (mlir::Region &region : op->getRegions()) {
-          if (mlir::failed(validateRegion(region))) {
-            return mlir::WalkResult::interrupt();
-          }
-        }
-        for (mlir::Region *region = op->getParentRegion(); region != nullptr;
-             region = region->getParentRegion()) {
-          if (mlir::isa<mlir::ModuleOp>(region->getParentOp())) {
-            break;
-          }
-          if (mlir::failed(validateRegion(*region))) {
-            return mlir::WalkResult::interrupt();
-          }
-        }
-        return mlir::WalkResult::advance();
-      });
-  return mlir::failure(result.wasInterrupted());
+static mlir::Value
+createGlobalFunctionCall(mlir::ConversionPatternRewriter &rewriter,
+                         mlir::Location location, llvm::StringRef name,
+                         mlir::Type resultType, mlir::ValueRange arguments) {
+  mlir::Value const handle = FunctionGetGlobalOp::create(
+      rewriter, location, CFunctionType::get(rewriter.getContext()), name);
+  mlir::Value const result =
+      FunctionCallOp::create(rewriter, location, resultType, handle, arguments);
+  ObjectDecRefOp::create(rewriter, location, handle);
+  return result;
+}
+
+static void createObjectDecRefs(mlir::ConversionPatternRewriter &rewriter,
+                                mlir::Location location, mlir::TypeRange types,
+                                mlir::ValueRange values) {
+  DeferOp cleanup = DeferOp::create(rewriter, location);
+  rewriter.setInsertionPointToEnd(cleanup.addEntryBlock(rewriter));
+  for (auto [type, value] : llvm::make_filter_range(
+           llvm::zip_equal(types, values), [](auto it) -> bool {
+             auto [type, _] = it;
+             return mlir::isa<TVMFFICOpaqueABIType>(type);
+           })) {
+    ObjectDecRefOp::create(rewriter, location, value);
+  }
+  DeferYieldOp::create(rewriter, location);
+}
+
+static void createObjectIncRefs(mlir::ConversionPatternRewriter &rewriter,
+                                mlir::Location location, mlir::TypeRange types,
+                                mlir::ValueRange values) {
+  for (auto [type, value] : llvm::make_filter_range(
+           llvm::zip_equal(types, values), [](auto it) -> bool {
+             auto [type, _] = it;
+             return mlir::isa<TVMFFICOpaqueABIType>(type);
+           })) {
+    ObjectIncRefOp::create(rewriter, location, value);
+  }
 }
 
 class DecomposeTVMFFITypeConverter final : public mlir::TypeConverter {
@@ -99,12 +87,12 @@ public:
   explicit DecomposeTVMFFITypeConverter(mlir::MLIRContext *context) {
     // Register the identity fallback first: specific conversions take priority.
     addConversion([](mlir::Type type) -> mlir::Type { return type; });
-    addConversion([this](mlir::FunctionType type) -> mlir::Type {
+    addConversion([this](mlir::FunctionType type) -> std::optional<mlir::Type> {
       llvm::SmallVector<mlir::Type> inputs;
       llvm::SmallVector<mlir::Type> outputs;
       if (mlir::failed(convertTypes(type.getInputs(), inputs)) ||
           mlir::failed(convertTypes(type.getResults(), outputs))) {
-        return {};
+        return std::nullopt;
       }
       return mlir::FunctionType::get(type.getContext(), inputs, outputs);
     });
@@ -136,115 +124,28 @@ public:
   }
 };
 
-// Replacement helpers for patterns whose results do not acquire references.
-template <typename SourceOp>
-class ReplacementConversionPattern
-    : public mlir::OpConversionPattern<SourceOp> {
-public:
-  using mlir::OpConversionPattern<SourceOp>::OpConversionPattern;
-
-protected:
-  static void replaceOp(mlir::ConversionPatternRewriter &rewriter, SourceOp op,
-                        mlir::ValueRange results) {
-    rewriter.replaceOp(op, results);
-  }
-
-  static void replaceOp(mlir::ConversionPatternRewriter &rewriter, SourceOp op,
-                        mlir::Operation *replacement) {
-    mlir::OpBuilder::InsertionGuard const guard(rewriter);
-    rewriter.setInsertionPointAfter(replacement);
-    replaceOp(rewriter, op, replacement->getResults());
-  }
-
-  template <typename Op, typename... Args>
-  static Op replaceOpWithNewOp(mlir::ConversionPatternRewriter &rewriter,
-                               SourceOp op, Args &&...args) {
-    Op replacement =
-        Op::create(rewriter, op->getLoc(), std::forward<Args>(args)...);
-    replaceOp(rewriter, op, replacement.getOperation());
-    return replacement;
-  }
-};
-
-// Producers explicitly select this base to register ownership in the same
-// conversion transaction as replacement.
-template <typename SourceOp>
-class OwnershipConversionPattern
-    : public ReplacementConversionPattern<SourceOp> {
-public:
-  using ReplacementConversionPattern<SourceOp>::ReplacementConversionPattern;
-
-protected:
-  static void replaceOp(mlir::ConversionPatternRewriter &rewriter, SourceOp op,
-                        mlir::ValueRange results) {
-    assert(op->getNumResults() == results.size() &&
-           "ownership replacement requires one value per original result");
-    // Ownership belongs to the original Opaque boundary, not to the concrete
-    // Base representation or the provenance of an operand.
-    llvm::SmallVector<mlir::Value> owned;
-    for (mlir::OpResult const result : op->getResults()) {
-      uint32_t const index = result.getResultNumber();
-      if (mlir::isa<TVMFFICOpaqueABIType>(result.getType())) {
-        owned.push_back(results[index]);
-      }
-    }
-    if (!owned.empty()) {
-      mlir::OpBuilder::InsertionGuard const guard(rewriter);
-      DeferOp cleanup = DeferOp::create(rewriter, op->getLoc());
-      mlir::Block *body = rewriter.createBlock(&cleanup.getBody());
-      rewriter.setInsertionPointToEnd(body);
-      for (mlir::Value const value : llvm::reverse(owned)) {
-        ObjectDecRefOp::create(rewriter, cleanup.getLoc(), value);
-      }
-      DeferYieldOp::create(rewriter, cleanup.getLoc());
-    }
-    ReplacementConversionPattern<SourceOp>::replaceOp(rewriter, op, results);
-  }
-
-  // These overloads deliberately call this class's replaceOp: inherited static
-  // helpers would bind to the borrowing base and skip ownership registration.
-  static void replaceOp(mlir::ConversionPatternRewriter &rewriter, SourceOp op,
-                        mlir::Operation *replacement) {
-    mlir::OpBuilder::InsertionGuard const guard(rewriter);
-    rewriter.setInsertionPointAfter(replacement);
-    replaceOp(rewriter, op, replacement->getResults());
-  }
-
-  template <typename Op, typename... Args>
-  static Op replaceOpWithNewOp(mlir::ConversionPatternRewriter &rewriter,
-                               SourceOp op, Args &&...args) {
-    Op replacement =
-        Op::create(rewriter, op->getLoc(), std::forward<Args>(args)...);
-    replaceOp(rewriter, op, replacement.getOperation());
-    return replacement;
-  }
-};
-
 // Arrays and tuples share the runtime representation and construction protocol.
 template <typename Op>
-class ConvertArrayConstructionOp final : public OwnershipConversionPattern<Op> {
+class ConvertArrayConstructionOp final : public mlir::OpConversionPattern<Op> {
 public:
-  using OwnershipConversionPattern<Op>::OwnershipConversionPattern;
+  using mlir::OpConversionPattern<Op>::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    mlir::Value const handle = FunctionGetGlobalOp::create(
-        rewriter, op.getLoc(), CFunctionType::get(rewriter.getContext()),
-        "ffi.Array");
-    mlir::Value const result = FunctionCallOp::create(
-        rewriter, op.getLoc(),
-        this->getTypeConverter()->convertType(op.getType()), handle,
+    mlir::Value const result = createGlobalFunctionCall(
+        rewriter, op.getLoc(), "ffi.Array",
+        this->getTypeConverter()->convertType(op.getType()),
         adaptor.getOperands());
-    ObjectDecRefOp::create(rewriter, op.getLoc(), handle);
-    this->replaceOp(rewriter, op, {result});
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(), {result});
+    rewriter.replaceOp(op, {result});
     return mlir::success();
   }
 };
 
-class ConvertArrayGetOp final : public OwnershipConversionPattern<ArrayGetOp> {
+class ConvertArrayGetOp final : public mlir::OpConversionPattern<ArrayGetOp> {
 public:
-  using OwnershipConversionPattern::OwnershipConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(ArrayGetOp op, OpAdaptor adaptor,
@@ -252,58 +153,72 @@ public:
     mlir::Value const index =
         ToOp::create(rewriter, op.getLoc(), IntType::get(rewriter.getContext()),
                      adaptor.getIndex());
-    mlir::Value const handle = FunctionGetGlobalOp::create(
-        rewriter, op.getLoc(), CFunctionType::get(rewriter.getContext()),
-        "ffi.ArrayGetItem");
-    mlir::Value const result = FunctionCallOp::create(
-        rewriter, op.getLoc(), getTypeConverter()->convertType(op.getType()),
-        handle, mlir::ValueRange{adaptor.getContainer(), index});
-    ObjectDecRefOp::create(rewriter, op.getLoc(), handle);
-    this->replaceOp(rewriter, op, {result});
+    mlir::Value const result = createGlobalFunctionCall(
+        rewriter, op.getLoc(), "ffi.ArrayGetItem",
+        getTypeConverter()->convertType(op.getType()),
+        mlir::ValueRange{adaptor.getContainer(), index});
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(), {result});
+    rewriter.replaceOp(op, {result});
     return mlir::success();
   }
 };
 
-class ConvertArraySizeOp final
-    : public ReplacementConversionPattern<ArraySizeOp> {
+class ConvertArraySizeOp final : public mlir::OpConversionPattern<ArraySizeOp> {
 public:
-  using ReplacementConversionPattern::ReplacementConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(ArraySizeOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    mlir::Value const handle = FunctionGetGlobalOp::create(
-        rewriter, op.getLoc(), CFunctionType::get(rewriter.getContext()),
-        "ffi.ArraySize");
-    mlir::Value const result = FunctionCallOp::create(
-        rewriter, op.getLoc(), getTypeConverter()->convertType(op.getType()),
-        handle, adaptor.getContainer());
-    ObjectDecRefOp::create(rewriter, op.getLoc(), handle);
-    this->replaceOp(rewriter, op, {result});
+    mlir::Value const result = createGlobalFunctionCall(
+        rewriter, op.getLoc(), "ffi.ArraySize",
+        getTypeConverter()->convertType(op.getType()), adaptor.getContainer());
+    rewriter.replaceOp(op, {result});
+    return mlir::success();
+  }
+};
+
+class ConvertConditionOp final
+    : public mlir::OpConversionPattern<mlir::scf::ConditionOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::scf::ConditionOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Both outcomes forward the payload; the native predicate is borrowed.
+    createObjectIncRefs(rewriter, op.getLoc(), op.getArgs().getTypes(),
+                        adaptor.getArgs());
+    rewriter.replaceOpWithNewOp<mlir::scf::ConditionOp>(
+        op, mlir::TypeRange{}, adaptor.getOperands(), op->getAttrs());
     return mlir::success();
   }
 };
 
 class ConvertConstantStrOp final
-    : public OwnershipConversionPattern<ConstantStrOp> {
+    : public mlir::OpConversionPattern<ConstantStrOp> {
 public:
-  using OwnershipConversionPattern::OwnershipConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(ConstantStrOp op, OpAdaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value const raw =
         ConstantRawStrOp::create(rewriter, op.getLoc(), op.getValueAttr());
-    this->template replaceOpWithNewOp<UpcastOp>(
-        rewriter, op, getTypeConverter()->convertType(op.getType()), raw);
+    UpcastOp const newOp =
+        UpcastOp::create(rewriter, op.getLoc(),
+                         getTypeConverter()->convertType(op.getType()), raw);
+    rewriter.setInsertionPointAfter(newOp);
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(),
+                        newOp->getResults());
+    rewriter.replaceOp(op, newOp->getResults());
     return mlir::success();
   }
 };
 
-class ConvertDowncastOp final
-    : public ReplacementConversionPattern<DowncastOp> {
+class ConvertDowncastOp final : public mlir::OpConversionPattern<DowncastOp> {
 public:
-  using ReplacementConversionPattern::ReplacementConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(DowncastOp op, OpAdaptor adaptor,
@@ -312,11 +227,11 @@ public:
     // TODO: Preserve finite Union/Str type constraints before erasing them to
     // CAny and materialize runtime type checks.
     if (adaptor.getValue().getType() == target) {
-      replaceOp(rewriter, op, adaptor.getValue());
+      rewriter.replaceOp(op, adaptor.getValue());
     } else {
-      replaceOpWithNewOp<DowncastOp>(rewriter, op, mlir::TypeRange{target},
-                                     mlir::ValueRange{adaptor.getValue()},
-                                     op->getAttrs());
+      rewriter.replaceOpWithNewOp<DowncastOp>(
+          op, mlir::TypeRange{target}, mlir::ValueRange{adaptor.getValue()},
+          op->getAttrs());
     }
     return mlir::success();
   }
@@ -325,37 +240,64 @@ public:
 // Exports retain each original Opaque operand, including repeated occurrences.
 // Keep this boundary rule separate from the ownership of producer results.
 template <typename Op>
-class ConvertExportOp final : public ReplacementConversionPattern<Op> {
+class ConvertExportOp final : public mlir::OpConversionPattern<Op> {
 public:
   ConvertExportOp(const mlir::TypeConverter &converter,
                   mlir::MLIRContext *context)
-      : ReplacementConversionPattern<Op>(converter, context, 2) {}
+      : mlir::OpConversionPattern<Op>(converter, context, 2) {}
 
   mlir::LogicalResult
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    for (const mlir::OpOperand &operand : op->getOpOperands()) {
-      if (mlir::isa<TVMFFICOpaqueABIType>(operand.get().getType())) {
-        ObjectIncRefOp::create(
-            rewriter, op->getLoc(),
-            adaptor.getOperands()[operand.getOperandNumber()]);
-      }
+    createObjectIncRefs(rewriter, op.getLoc(), op->getOperandTypes(),
+                        adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<Op>(op, mlir::TypeRange{},
+                                    adaptor.getOperands(), op->getAttrs());
+    return mlir::success();
+  }
+};
+
+class ConvertForOp final : public mlir::OpConversionPattern<mlir::scf::ForOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::scf::ForOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    llvm::SmallVector<mlir::Type> const argumentTypes(
+        op.getInitArgs().getTypes());
+    createObjectIncRefs(rewriter, op.getLoc(), op.getInitArgs().getTypes(),
+                        adaptor.getInitArgs());
+    if (mlir::failed(rewriter.convertRegionTypes(&op.getRegion(),
+                                                 *getTypeConverter()))) {
+      return mlir::failure();
     }
-    this->template replaceOpWithNewOp<Op>(
-        rewriter, op, mlir::TypeRange{}, adaptor.getOperands(), op->getAttrs());
+    mlir::scf::ForOp newOp = mlir::scf::ForOp::create(
+        rewriter, op.getLoc(), adaptor.getLowerBound(), adaptor.getUpperBound(),
+        adaptor.getStep(), adaptor.getInitArgs(), nullptr, op.getUnsignedCmp());
+    newOp->setAttrs(op->getAttrs());
+    rewriter.eraseBlock(newOp.getBody());
+    rewriter.inlineRegionBefore(op.getRegion(), newOp.getRegion(),
+                                newOp.getRegion().end());
+    rewriter.setInsertionPointToStart(newOp.getBody());
+    createObjectDecRefs(rewriter, op.getLoc(), argumentTypes,
+                        newOp.getRegionIterArgs());
+    rewriter.setInsertionPointAfter(newOp);
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(),
+                        newOp->getResults());
+    rewriter.replaceOp(op, newOp->getResults());
     return mlir::success();
   }
 };
 
 // Only explicitly registered regionless operations use this representation-only
-// rewrite. Producer registrations select the ownership-aware base explicitly.
-template <typename Op,
-          template <typename> class Base = ReplacementConversionPattern>
-class ConvertGenericOp final : public Base<Op> {
+// rewrite. Producer registrations explicitly enable result ownership.
+template <typename Op, bool OwnsResults = false>
+class ConvertGenericOp final : public mlir::OpConversionPattern<Op> {
 public:
   ConvertGenericOp(const mlir::TypeConverter &converter,
                    mlir::MLIRContext *context)
-      : Base<Op>(converter, context, 2) {}
+      : mlir::OpConversionPattern<Op>(converter, context, 2) {}
 
   mlir::LogicalResult
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
@@ -365,17 +307,24 @@ public:
             op->getResultTypes(), types))) {
       return mlir::failure();
     }
-    this->template replaceOpWithNewOp<Op>(
-        rewriter, op, types, adaptor.getOperands(), op->getAttrs());
+    if constexpr (OwnsResults) {
+      Op newOp = Op::create(rewriter, op.getLoc(), types, adaptor.getOperands(),
+                            op->getAttrs());
+      rewriter.setInsertionPointAfter(newOp);
+      createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(),
+                          newOp->getResults());
+      rewriter.replaceOp(op, newOp->getResults());
+    } else {
+      rewriter.replaceOpWithNewOp<Op>(op, types, adaptor.getOperands(),
+                                      op->getAttrs());
+    }
     return mlir::success();
   }
 };
 
-// Move branch regions without cloning their producers or cleanup registrations.
-class ConvertIfOp final : public OwnershipConversionPattern<mlir::scf::IfOp> {
+class ConvertIfOp final : public mlir::OpConversionPattern<mlir::scf::IfOp> {
 public:
-  ConvertIfOp(const mlir::TypeConverter &converter, mlir::MLIRContext *context)
-      : OwnershipConversionPattern(converter, context, 2) {}
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(mlir::scf::IfOp op, OpAdaptor adaptor,
@@ -385,23 +334,25 @@ public:
             getTypeConverter()->convertTypes(op.getResultTypes(), types))) {
       return mlir::failure();
     }
-    mlir::scf::IfOp replacement = mlir::scf::IfOp::create(
-        rewriter, op.getLoc(), types, adaptor.getCondition(), false);
-    replacement->setAttrs(op->getAttrs());
-    rewriter.eraseBlock(replacement.thenBlock());
-    rewriter.inlineRegionBefore(op.getThenRegion(), replacement.getThenRegion(),
-                                replacement.getThenRegion().end());
-    rewriter.inlineRegionBefore(op.getElseRegion(), replacement.getElseRegion(),
-                                replacement.getElseRegion().end());
-    this->replaceOp(rewriter, op, replacement.getOperation());
+    mlir::scf::IfOp newOp = mlir::scf::IfOp::create(
+        rewriter, op.getLoc(), types, adaptor.getCondition(), false, false);
+    newOp->setAttrs(op->getAttrs());
+    rewriter.inlineRegionBefore(op.getThenRegion(), newOp.getThenRegion(),
+                                newOp.getThenRegion().end());
+    rewriter.inlineRegionBefore(op.getElseRegion(), newOp.getElseRegion(),
+                                newOp.getElseRegion().end());
+    rewriter.setInsertionPointAfter(newOp);
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(),
+                        newOp->getResults());
+    rewriter.replaceOp(op, newOp->getResults());
     return mlir::success();
   }
 };
 
 class ConvertTupleUnconstructOp final
-    : public OwnershipConversionPattern<TupleUnconstructOp> {
+    : public mlir::OpConversionPattern<TupleUnconstructOp> {
 public:
-  using OwnershipConversionPattern::OwnershipConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(TupleUnconstructOp op, OpAdaptor adaptor,
@@ -414,16 +365,76 @@ public:
           mlir::Value const boxed =
               ToOp::create(rewriter, op.getLoc(),
                            IntType::get(rewriter.getContext()), offset);
-          mlir::Value const handle = FunctionGetGlobalOp::create(
-              rewriter, op.getLoc(), CFunctionType::get(rewriter.getContext()),
-              "ffi.ArrayGetItem");
-          mlir::Value const result = FunctionCallOp::create(
-              rewriter, op.getLoc(), getTypeConverter()->convertType(type),
-              handle, mlir::ValueRange{adaptor.getContainer(), boxed});
-          ObjectDecRefOp::create(rewriter, op.getLoc(), handle);
-          return result;
+          return createGlobalFunctionCall(
+              rewriter, op.getLoc(), "ffi.ArrayGetItem",
+              getTypeConverter()->convertType(type),
+              mlir::ValueRange{adaptor.getContainer(), boxed});
         });
-    this->replaceOp(rewriter, op, results);
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(), results);
+    rewriter.replaceOp(op, results);
+    return mlir::success();
+  }
+};
+
+class ConvertWhileOp final
+    : public mlir::OpConversionPattern<mlir::scf::WhileOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::scf::WhileOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    llvm::SmallVector<mlir::Type> const beforeTypes(op.getInits().getTypes());
+    llvm::SmallVector<mlir::Type> const afterTypes(op.getResultTypes());
+    llvm::SmallVector<mlir::Type> types;
+    if (mlir::failed(getTypeConverter()->convertTypes(afterTypes, types))) {
+      return mlir::failure();
+    }
+    createObjectIncRefs(rewriter, op.getLoc(), op.getInits().getTypes(),
+                        adaptor.getInits());
+    if (mlir::failed(rewriter.convertRegionTypes(&op.getBefore(),
+                                                 *getTypeConverter())) ||
+        mlir::failed(
+            rewriter.convertRegionTypes(&op.getAfter(), *getTypeConverter()))) {
+      return mlir::failure();
+    }
+    mlir::scf::WhileOp newOp = mlir::scf::WhileOp::create(
+        rewriter, op.getLoc(), types, adaptor.getInits());
+    newOp->setAttrs(op->getAttrs());
+    rewriter.inlineRegionBefore(op.getBefore(), newOp.getBefore(),
+                                newOp.getBefore().end());
+    rewriter.inlineRegionBefore(op.getAfter(), newOp.getAfter(),
+                                newOp.getAfter().end());
+    rewriter.setInsertionPointToStart(newOp.getBeforeBody());
+    createObjectDecRefs(rewriter, op.getLoc(), beforeTypes,
+                        newOp.getBeforeArguments());
+    rewriter.setInsertionPointToStart(newOp.getAfterBody());
+    createObjectDecRefs(rewriter, op.getLoc(), afterTypes,
+                        newOp.getAfterArguments());
+    rewriter.setInsertionPointAfter(newOp);
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(),
+                        newOp->getResults());
+    rewriter.replaceOp(op, newOp->getResults());
+    return mlir::success();
+  }
+};
+
+class ConvertYieldOp final
+    : public mlir::OpConversionPattern<mlir::scf::YieldOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::scf::YieldOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    if (!mlir::isa<mlir::scf::ForOp, mlir::scf::IfOp, mlir::scf::WhileOp>(
+            op->getParentOp())) {
+      return rewriter.notifyMatchFailure(op, "unsupported region boundary");
+    }
+    createObjectIncRefs(rewriter, op.getLoc(), op.getOperandTypes(),
+                        adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<mlir::scf::YieldOp>(
+        op, mlir::TypeRange{}, adaptor.getOperands(), op->getAttrs());
     return mlir::success();
   }
 };
@@ -432,60 +443,50 @@ class DecomposeTVMFFIPass final
     : public impl::DecomposeTVMFFIBase<DecomposeTVMFFIPass> {
   void runOnOperation() override {
     mlir::Operation *op = getOperation();
-    if (mlir::failed(validateOwnershipScopes(op))) {
-      signalPassFailure();
-      return;
-    }
     mlir::MLIRContext *context = op->getContext();
     DecomposeTVMFFITypeConverter const converter(context);
     // TODO: Preserve finite Union/Str alternatives across type erasure for
     // packed ABI argument validation and success-only return checks.
     mlir::RewritePatternSet conversions(context);
     mlir::ConversionTarget target(*context);
-    // Boundary patterns use benefit 2 to precede structural patterns (benefit
-    // 1).
+    // Materialize ownership before conversion-time folding.
     conversions.add<
         ConvertArrayConstructionOp<ArrayCreateOp>,
         ConvertArrayConstructionOp<TupleConstructOp>, ConvertArrayGetOp,
         ConvertArraySizeOp, ConvertConstantStrOp, ConvertDowncastOp,
         ConvertExportOp<ReturnOp>, ConvertExportOp<mlir::func::ReturnOp>,
-        ConvertExportOp<mlir::scf::YieldOp>,
-        ConvertGenericOp<CallOp, OwnershipConversionPattern>,
-        ConvertGenericOp<EqOp>,
-        ConvertGenericOp<ExceptionOp, OwnershipConversionPattern>,
-        ConvertGenericOp<FunctionCallOp, OwnershipConversionPattern>,
-        ConvertGenericOp<FunctionGetGlobalOp, OwnershipConversionPattern>,
-        ConvertGenericOp<GetOp>, ConvertGenericOp<MonadFailOp>,
-        ConvertGenericOp<MonadPureOp>, ConvertGenericOp<MonadUnpackOp>,
-        ConvertGenericOp<ObjectDecRefOp>, ConvertGenericOp<ObjectIncRefOp>,
-        ConvertGenericOp<TensorCloneOp, OwnershipConversionPattern>,
+        ConvertGenericOp<CallOp, true>, ConvertGenericOp<EqOp>,
+        ConvertGenericOp<ExceptionOp, true>,
+        ConvertGenericOp<FunctionCallOp, true>,
+        ConvertGenericOp<FunctionGetGlobalOp, true>, ConvertGenericOp<GetOp>,
+        ConvertGenericOp<MonadFailOp>, ConvertGenericOp<MonadPureOp>,
+        ConvertGenericOp<MonadUnpackOp>, ConvertGenericOp<ObjectDecRefOp>,
+        ConvertGenericOp<ObjectIncRefOp>, ConvertGenericOp<TensorCloneOp, true>,
         ConvertGenericOp<TensorCopyOp>, ConvertGenericOp<TensorDTypeOp>,
         ConvertGenericOp<TensorDeviceOp>, ConvertGenericOp<TensorDimOp>,
-        ConvertGenericOp<TensorLiteralOp, OwnershipConversionPattern>,
-        ConvertGenericOp<TensorSizeOp>, ConvertGenericOp<TensorStorageOffsetOp>,
+        ConvertGenericOp<TensorLiteralOp, true>, ConvertGenericOp<TensorSizeOp>,
+        ConvertGenericOp<TensorStorageOffsetOp>,
         ConvertGenericOp<TensorStrideOp>, ConvertGenericOp<UpcastOp>,
-        ConvertGenericOp<mlir::func::CallOp, OwnershipConversionPattern>,
-        ConvertIfOp, ConvertTupleUnconstructOp>(converter, context);
+        ConvertGenericOp<mlir::func::CallOp, true>, ConvertTupleUnconstructOp>(
+        converter, context);
+    conversions.add<ConvertConditionOp, ConvertForOp, ConvertIfOp,
+                    ConvertWhileOp, ConvertYieldOp>(converter, context);
     mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(conversions,
                                                                    converter);
     mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(
         conversions, converter);
-    mlir::scf::populateSCFStructuralTypeConversionsAndLegality(
-        converter, conversions, target);
     mlir::cf::populateCFStructuralTypeConversionsAndLegality(
         converter, conversions, target);
-    auto isLegal = [&](mlir::Operation *operation) -> bool {
-      return converter.isLegal(operation) &&
-             llvm::all_of(operation->getRegions(),
-                          [&](mlir::Region &region) -> bool {
-                            return converter.isLegal(&region);
-                          });
-    };
     target.addIllegalOp<ArrayCreateOp, ArrayGetOp, ArraySizeOp, ConstantStrOp,
                         TupleConstructOp, TupleUnconstructOp>();
-    target.markUnknownOpDynamicallyLegal(isLegal);
-    // Apply the same representation legality to SCF boundaries.
-    target.addDynamicallyLegalOp<mlir::scf::IfOp, mlir::scf::YieldOp>(isLegal);
+    target.markUnknownOpDynamicallyLegal(
+        [&](mlir::Operation *operation) -> bool {
+          return converter.isLegal(operation) &&
+                 llvm::all_of(operation->getRegions(),
+                              [&](mlir::Region &region) -> bool {
+                                return converter.isLegal(&region);
+                              });
+        });
     target.addDynamicallyLegalOp<FuncOp, mlir::func::FuncOp>(
         [&](mlir::Operation *operation) -> bool {
           mlir::FunctionOpInterface function =

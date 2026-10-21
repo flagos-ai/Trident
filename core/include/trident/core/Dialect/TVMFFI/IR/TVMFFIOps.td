@@ -125,19 +125,30 @@ def TVMFFI_ConstantStrOp
 
 // Deliberately not Pure: a failed check must trap even if the result is unused.
 def TVMFFI_DeferOp : TVMFFI_Op<"defer", [SingleBlock]> {
-  let summary = "Execute cleanup before leaving the current block";
+  let summary = "Execute cleanup when leaving the registration dominance scope";
   let description = [{
     Registers cleanup without executing it immediately. Cleanup regions capture
-    external values and execute before the current block terminator in reverse
-    registration order, preserving operation order within each body. The enclosing
-    region must be single-block and belong to tvm_ffi.func, func.func or scf.if,
-    exiting through tvm_ffi.return, func.return or scf.yield.
+    external values and execute when control leaves the registering block's
+    dominance scope. Relative execution order between defers at the same exit
+    is unspecified; operations requiring an order must share one body. Body
+    operation order is preserved. Re-entry into the registering block cleans up the previous
+    iteration. The enclosing region must have SSA control flow and block
+    terminators. Cleanup runs before any terminator without CFG successors,
+    including transfers to another region. CFG branches use BranchOpInterface.
+    Each execution of a region has independent registrations.
+    CFG block arguments borrow; forwarding a value does not extend its lifetime.
     Lower before inlining or control-flow conversion. The body has
     no arguments and ends in defer_yield; nested regions are not supported.
     This operation deliberately retains conservative side effects.
   }];
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = "$body attr-dict";
+  let extraClassDeclaration = [{
+    /// Return the entry block, creating it through the builder if needed.
+    ::mlir::Block *addEntryBlock(::mlir::OpBuilder &builder);
+    /// Return the entry block, or null when the body is empty.
+    ::mlir::Block *getEntryBlock();
+  }];
   let hasVerifier = 1;
 }
 

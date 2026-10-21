@@ -11,11 +11,16 @@ def DecomposeTVMFFI : Pass<"decompose-tvm-ffi", "mlir::ModuleOp"> {
   let summary = "Lower semantic object types to their C ABI representations";
   let description = [{
     Preserve local calls while converting semantic containers to CArray,
-    Tensor/Exception/Function to their Base types, and Str to a representation
-    Union. Recursively convert signatures, regions and type-bearing attributes.
-    Automatically retain semantic exports and register local releases in defer
-    regions. Run after monad lowering and before defer lowering and inlining.
-    Automatic lifetimes require single-block regions; Base IR remains manual.
+    Tensor/Exception/Function to their Base types, and Str to CAny. Recursively convert signatures, regions and type-bearing attributes.
+    Dedicated scf.if, scf.for and scf.while conversion patterns retain semantic
+    exports and register argument/result releases in defer regions, including
+    loop-carried values and zero-trip results. Every forwarded semantic slot
+    retains a reference; producer cleanup remains local. Synchronous captures
+    borrow outer references. Unsupported semantic region boundaries fail
+    legalization; defer lowering validates cleanup region structure.
+    Run after monad lowering and before defer lowering and inlining.
+    Automatic lifetimes follow registration dominance scopes; Base IR remains
+    manual.
   }];
   let dependentDialects = [
     "mlir::arith::ArithDialect",
@@ -26,15 +31,22 @@ def DecomposeTVMFFI : Pass<"decompose-tvm-ffi", "mlir::ModuleOp"> {
 }
 
 def LowerTVMFFIDefer : Pass<"lower-tvm-ffi-defer", "mlir::ModuleOp"> {
-  let summary = "Expand deferred cleanup before the current block terminator";
+  let summary = "Expand deferred cleanup at dominance-scope exits";
   let description = [{
-    Move defer bodies before their enclosing block terminator in reverse
-    registration order, preserving operation order within each body and running
-    after existing export retains. Require single-block tvm_ffi.func, func.func
-    or scf.if regions with tvm_ffi.return, func.return or scf.yield exits.
+    Clone defer bodies at registration dominance-scope exits with unspecified
+    relative order, preserving operation order within each body and running
+    after existing export retains. Support SSACFG regions with block terminators,
+    independent of enclosing operation or exit kind. Terminators without CFG
+    successors end the region execution; CFG branches implement BranchOpInterface.
+    Each region execution has independent registrations. This pass does not
+    infer ownership; decomposition supplies region argument and result cleanup.
+    Internal CFG forwarding remains borrowed.
+    Re-entry into a registration block cleans up the previous iteration.
     Run after decomposition and before inlining or SCF-to-CFG lowering.
   }];
-  let dependentDialects = ["trident::tvm_ffi::TVMFFIDialect"];
+  let dependentDialects = [
+    "mlir::cf::ControlFlowDialect", "trident::tvm_ffi::TVMFFIDialect"
+  ];
 }
 
 def LowerTVMFFIMonad : Pass<"lower-tvm-ffi-monad", "mlir::ModuleOp"> {

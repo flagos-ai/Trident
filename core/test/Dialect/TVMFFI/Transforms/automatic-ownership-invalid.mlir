@@ -14,37 +14,49 @@ func.func @base_multiple_blocks(%input: !tvm_ffi.c.tensor, %condition: i1) -> !t
 
 // -----
 
-func.func @loop_carried(%initial: !tvm_ffi.array<!tvm_ffi.int>, %bound: index) -> !tvm_ffi.array<!tvm_ffi.int> {
-  %lower = arith.constant 0 : index
-  %step = arith.constant 1 : index
-  // expected-error@+1 {{unsupported region operation for automatic TVM FFI ownership}}
-  %result = scf.for %iv = %lower to %bound step %step iter_args(%current = %initial) -> (!tvm_ffi.array<!tvm_ffi.int>) {
-    scf.yield %current : !tvm_ffi.array<!tvm_ffi.int>
+// Region boundaries without semantic types remain manually managed.
+func.func @base_regions(%input: !tvm_ffi.c.tensor, %index: index) -> !tvm_ffi.c.tensor {
+  %value = scf.execute_region -> !tvm_ffi.c.tensor {
+    scf.yield %input : !tvm_ffi.c.tensor
   }
-  return %result : !tvm_ffi.array<!tvm_ffi.int>
+  %selected = scf.index_switch %index -> !tvm_ffi.c.tensor
+  case 0 {
+    scf.yield %value : !tvm_ffi.c.tensor
+  }
+  default {
+    scf.yield %input : !tvm_ffi.c.tensor
+  }
+  return %selected : !tvm_ffi.c.tensor
 }
 
 // -----
 
-func.func @loop_capture(%input: !tvm_ffi.tensor, %bound: index) {
-  %lower = arith.constant 0 : index
-  %step = arith.constant 1 : index
-  scf.for %iv = %lower to %bound step %step {
-    // expected-error@+1 {{unsupported region operation for automatic TVM FFI ownership}}
-    %rank = tvm_ffi.tensor.dim %input : !tvm_ffi.tensor
+func.func @execute_cfg(%condition: i1, %input: !tvm_ffi.tensor) {
+  // expected-error@+1 {{failed to legalize operation 'scf.execute_region'}}
+  %result = scf.execute_region -> !tvm_ffi.tensor {
+    %clone = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
+    cf.cond_br %condition, ^left(%clone : !tvm_ffi.tensor), ^right
+  ^left(%borrowed: !tvm_ffi.tensor):
+    scf.yield %borrowed : !tvm_ffi.tensor
+  ^right:
+    scf.yield %clone : !tvm_ffi.tensor
   }
   return
 }
 
 // -----
 
-// expected-error@+1 {{automatic TVM FFI ownership requires a single-block region}}
-func.func @multiple_blocks(%input: !tvm_ffi.tensor, %condition: i1) -> !tvm_ffi.tensor {
-  cf.cond_br %condition, ^first, ^second
-^first:
-  return %input : !tvm_ffi.tensor
-^second:
-  return %input : !tvm_ffi.tensor
+func.func @switch_capture(%index: index, %input: !tvm_ffi.tensor) {
+  // expected-error@+1 {{failed to legalize operation 'scf.index_switch'}}
+  %result = scf.index_switch %index -> !tvm_ffi.tensor
+  case 0 {
+    scf.yield %input : !tvm_ffi.tensor
+  }
+  default {
+    %clone = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
+    scf.yield %clone : !tvm_ffi.tensor
+  }
+  return
 }
 
 // -----
