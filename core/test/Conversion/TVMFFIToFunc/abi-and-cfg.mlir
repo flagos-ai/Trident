@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -split-input-file -decompose-tvm-ffi -convert-tvm-ffi-to-func | FileCheck %s --check-prefix=CHECK
+// RUN: trident-core-opt %s -split-input-file -convert-tvm-ffi-to-func | FileCheck %s --check-prefix=CHECK
 
 // TVMFFIToFunc preserves CFG block argument types and forwards values directly.
 // The unified LLVM conversion later converts both the branch and block.
@@ -26,11 +26,11 @@ tvm_ffi.func @branch_argument() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
 
 ^bb1(%arg: !tvm_ffi.int):
 
-  %return_value_1 = tvm_ffi.upcast %arg : !tvm_ffi.int -> !tvm_ffi.any
+  %return_value_1 = tvm_ffi.upcast %arg : !tvm_ffi.int -> !tvm_ffi.c.any
 
   %return_flag_1 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return  %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // -----
@@ -55,18 +55,18 @@ tvm_ffi.func @cond_branch_arguments() -> !tvm_ffi.int attributes {emit_tvm_ffi_a
 
 ^true(%true_arg: !tvm_ffi.int):
 
-  %return_value_2 = tvm_ffi.upcast %true_arg : !tvm_ffi.int -> !tvm_ffi.any
+  %return_value_2 = tvm_ffi.upcast %true_arg : !tvm_ffi.int -> !tvm_ffi.c.any
 
   %return_flag_2 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return  %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.c.any
 ^false(%false_arg: !tvm_ffi.int):
 
-  %return_value_3 = tvm_ffi.upcast %false_arg : !tvm_ffi.int -> !tvm_ffi.any
+  %return_value_3 = tvm_ffi.upcast %false_arg : !tvm_ffi.int -> !tvm_ffi.c.any
 
   %return_flag_3 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return  %return_flag_3, %return_value_3 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_3, %return_value_3 : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // -----
@@ -80,20 +80,20 @@ tvm_ffi.func @cond_branch_arguments() -> !tvm_ffi.int attributes {emit_tvm_ffi_a
 // CHECK: return
 // CHECK: ^[[DEFINITION]]:
 // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array"
-// CHECK: %[[ARRAY]] = tvm_ffi.FunctionCall %[[HANDLE]](%[[ONE:[a-zA-Z0-9_]+]])
+// CHECK: %[[ARRAY]] = tvm_ffi.FunctionCall %[[HANDLE]] : !tvm_ffi.c.function(%[[ONE:[a-zA-Z0-9_]+]])
 // CHECK: cf.br ^[[CLEANUP]]
 tvm_ffi.func @forward_block_use() -> !tvm_ffi.none {
   cf.br ^definition
 ^cleanup:
   tvm_ffi.ObjectDecRef %array : !tvm_ffi.c.array
   %unit_none = tvm_ffi.constant.none
-  %return_value_4 = tvm_ffi.upcast %unit_none : !tvm_ffi.none -> !tvm_ffi.any
+  %return_value_4 = tvm_ffi.upcast %unit_none : !tvm_ffi.none -> !tvm_ffi.c.any
   %return_flag_4 = tvm_ffi.constant.bool true
-  tvm_ffi.return  %return_flag_4, %return_value_4 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_4, %return_value_4 : !tvm_ffi.bool, !tvm_ffi.c.any
 ^definition:
   %one = tvm_ffi.constant.int 1
-  %function = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.object
-  %array = tvm_ffi.FunctionCall %function(%one) : (!tvm_ffi.int) -> !tvm_ffi.c.array
+  %function = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.c.function
+  %array = tvm_ffi.FunctionCall %function : !tvm_ffi.c.function(%one) : (!tvm_ffi.int) -> !tvm_ffi.c.array
   cf.br ^cleanup
 }
 
@@ -114,11 +114,11 @@ tvm_ffi.func @forward_block_use() -> !tvm_ffi.none {
 // CHECK: return
 tvm_ffi.func @guarded(%arg0: !tvm_ffi.int, %arg1: !tvm_ffi.bool) -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
 
-  %return_value_5 = tvm_ffi.upcast %arg0 : !tvm_ffi.int -> !tvm_ffi.any
+  %return_value_5 = tvm_ffi.upcast %arg0 : !tvm_ffi.int -> !tvm_ffi.c.any
 
   %return_flag_5 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return  %return_flag_5, %return_value_5 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_5, %return_value_5 : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // -----
@@ -133,11 +133,11 @@ tvm_ffi.func @guarded(%arg0: !tvm_ffi.int, %arg1: !tvm_ffi.bool) -> !tvm_ffi.int
 tvm_ffi.func @make_int() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
   %0 = tvm_ffi.constant.int 42
 
-  %return_value_6 = tvm_ffi.upcast %0 : !tvm_ffi.int -> !tvm_ffi.any
+  %return_value_6 = tvm_ffi.upcast %0 : !tvm_ffi.int -> !tvm_ffi.c.any
 
   %return_flag_6 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return  %return_flag_6, %return_value_6 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_6, %return_value_6 : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // -----
@@ -150,11 +150,11 @@ tvm_ffi.func @make_int() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
 tvm_ffi.func @no_wrapper() -> !tvm_ffi.int {
   %value = tvm_ffi.constant.int 3
 
-  %return_value_7 = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.any
+  %return_value_7 = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.c.any
 
   %return_flag_7 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return  %return_flag_7, %return_value_7 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_7, %return_value_7 : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // -----
@@ -162,7 +162,7 @@ tvm_ffi.func @no_wrapper() -> !tvm_ffi.int {
 // Switch destinations and forwarded operands are lowered by the standard CF
 // interface using the shared LLVM type converter.
 // CHECK-LABEL: func.func @switch_argument(
-// CHECK-SAME: %[[TENSOR:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[DEFAULT:[a-zA-Z0-9_]+]]: !tvm_ffi.int, %[[CASE:[a-zA-Z0-9_]+]]: !tvm_ffi.int
+// CHECK-SAME: %[[TENSOR:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[DEFAULT:[a-zA-Z0-9_]+]]: !tvm_ffi.int, %[[CASE:[a-zA-Z0-9_]+]]: !tvm_ffi.int
 // CHECK: %[[SELECTOR:[a-zA-Z0-9_]+]], %[[DEVICE:[a-zA-Z0-9_]+]] = tvm_ffi.tensor.device %[[TENSOR]]
 // CHECK: cf.switch %[[SELECTOR]] : i32, [
 // CHECK: default: ^[[MERGE:bb[0-9]+]](%[[DEFAULT]] : !tvm_ffi.int),
@@ -170,10 +170,10 @@ tvm_ffi.func @no_wrapper() -> !tvm_ffi.int {
 // CHECK: ^[[MERGE]](%[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.int):
 // CHECK: tvm_ffi.upcast %[[VALUE]]
 tvm_ffi.func @switch_argument(
-    %tensor: !tvm_ffi.tensor,
+    %tensor: !tvm_ffi.c.tensor,
     %default_value: !tvm_ffi.int,
     %case_value: !tvm_ffi.int) -> !tvm_ffi.int {
-  %selector, %device_index = tvm_ffi.tensor.device %tensor : !tvm_ffi.tensor
+  %selector, %device_index = tvm_ffi.tensor.device %tensor : !tvm_ffi.c.tensor
   cf.switch %selector : i32, [
     default: ^merge(%default_value : !tvm_ffi.int),
     1: ^merge(%case_value : !tvm_ffi.int)
@@ -181,25 +181,27 @@ tvm_ffi.func @switch_argument(
 
 ^merge(%value: !tvm_ffi.int):
 
-  %return_value_8 = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.any
+  %return_value_8 = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.c.any
 
   %return_flag_8 = tvm_ffi.constant.bool true
 
-  tvm_ffi.return  %return_flag_8, %return_value_8 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_8, %return_value_8 : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // -----
 
 // CHECK-LABEL: func.func @tuple_return(
-// CHECK-SAME: %[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[THIRD:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
+// CHECK-SAME: %[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[THIRD:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor
 // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionGetGlobal "ffi.Array"
-// CHECK: %[[TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]](%[[FIRST]], %[[SECOND]], %[[THIRD]])
+// CHECK: %[[TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall %[[HANDLE]] : !tvm_ffi.c.function(%[[FIRST]], %[[SECOND]], %[[THIRD]])
 // CHECK: tvm_ffi.upcast %[[TUPLE]]
 // CHECK-LABEL: func.func @__tvm_ffi_tuple_return(
 // CHECK: func.call @tuple_return
-tvm_ffi.func @tuple_return(%arg0: !tvm_ffi.tensor, %arg1: !tvm_ffi.tensor, %arg2: !tvm_ffi.tensor) -> !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor> attributes {emit_tvm_ffi_abi} {
-  %tuple = tvm_ffi.tuple.construct(%arg0, %arg1, %arg2) : (!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor) -> !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor>
-  %return_value_9 = tvm_ffi.upcast %tuple : !tvm_ffi.tuple<!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor> -> !tvm_ffi.any
+tvm_ffi.func @tuple_return(%arg0: !tvm_ffi.c.tensor, %arg1: !tvm_ffi.c.tensor, %arg2: !tvm_ffi.c.tensor) -> !tvm_ffi.c.array attributes {emit_tvm_ffi_abi} {
+  %handle = tvm_ffi.FunctionGetGlobal "ffi.Array" : !tvm_ffi.c.function
+  %tuple = tvm_ffi.FunctionCall %handle : !tvm_ffi.c.function(%arg0, %arg1, %arg2) : (!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor) -> !tvm_ffi.c.array
+  tvm_ffi.ObjectDecRef %handle : !tvm_ffi.c.function
+  %return_value_9 = tvm_ffi.upcast %tuple : !tvm_ffi.c.array -> !tvm_ffi.c.any
   %return_flag_9 = tvm_ffi.constant.bool true
-  tvm_ffi.return  %return_flag_9, %return_value_9 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_9, %return_value_9 : !tvm_ffi.bool, !tvm_ffi.c.any
 }

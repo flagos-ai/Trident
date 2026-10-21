@@ -1,7 +1,7 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s -canonicalize -convert-tvm-ffi-to-llvm -canonicalize | FileCheck %s
+// RUN: trident-core-opt %s -canonicalize --decompose-tvm-ffi --lower-tvm-ffi-defer -convert-tvm-ffi-to-llvm -canonicalize | FileCheck %s
 
 // CHECK: llvm.func @abort()
 // CHECK-LABEL: func.func @checked_int(
@@ -22,20 +22,14 @@ func.func @checked_int(%value: !tvm_ffi.any) -> !tvm_ffi.int {
   return %result : !tvm_ffi.int
 }
 
-// CHECK-LABEL: func.func @checked_union(
-// CHECK-DAG: %[[FLOAT_TAG:[a-zA-Z0-9_]+]] = llvm.mlir.constant(3 : i32)
-// CHECK-DAG: %[[INT_TAG:[a-zA-Z0-9_]+]] = llvm.mlir.constant(1 : i32)
-// CHECK: %[[FALSE:[a-zA-Z0-9_]+]] = llvm.mlir.constant(false) : i1
-// CHECK: %[[TAG:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[VALUE:[a-zA-Z0-9_]+]][0]
-// CHECK: %[[INT:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[TAG]], %[[INT_TAG]]
-// CHECK: %[[FIRST:[a-zA-Z0-9_]+]] = llvm.or %[[FALSE]], %[[INT]]
-// CHECK: %[[FLOAT:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[TAG]], %[[FLOAT_TAG]]
-// CHECK: %[[EITHER:[a-zA-Z0-9_]+]] = llvm.or %[[FIRST]], %[[FLOAT]]
-// CHECK: llvm.cond_br %[[EITHER]],
-// CHECK: llvm.call @abort()
-// CHECK: llvm.unreachable
+// Finite Union constraints are deferred; exporting the CAny value still retains it.
+// CHECK-LABEL: func.func @erased_union(
+// CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>)
+// CHECK-NOT: llvm.call @abort()
+// CHECK: llvm.call @TVMFFIObjectIncRef
+// CHECK-NOT: llvm.call @abort()
 // CHECK: return %[[VALUE]]
-func.func @checked_union(%value: !tvm_ffi.any) -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.float> {
+func.func @erased_union(%value: !tvm_ffi.any) -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.float> {
   %result = tvm_ffi.downcast %value : !tvm_ffi.any -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.float>
   return %result : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.float>
 }
@@ -49,8 +43,8 @@ func.func @checked_union(%value: !tvm_ffi.any) -> !tvm_ffi.union<!tvm_ffi.int, !
 // CHECK: llvm.call @abort()
 // CHECK: llvm.unreachable
 // CHECK: return
-func.func @unused_checks(%first: !tvm_ffi.any, %second: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.none>) {
+func.func @unused_checks(%first: !tvm_ffi.any, %second: !tvm_ffi.union<!tvm_ffi.c.tensor, !tvm_ffi.none>) {
   %a = tvm_ffi.downcast %first : !tvm_ffi.any -> !tvm_ffi.c.array
-  %b = tvm_ffi.downcast %second : !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.none> -> !tvm_ffi.tensor
+  %b = tvm_ffi.downcast %second : !tvm_ffi.union<!tvm_ffi.c.tensor, !tvm_ffi.none> -> !tvm_ffi.c.tensor
   return
 }

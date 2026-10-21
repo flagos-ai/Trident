@@ -1,7 +1,7 @@
 # Part of the Trident project, under the MIT License.
 # SPDX-License-Identifier: MIT
 
-"""Explicit cleanup, explicit exports and block-local cache reuse."""
+"""Automatic semantic ownership, exports and block-local cache reuse."""
 
 import unittest
 
@@ -17,7 +17,7 @@ from trident.ir import (
     container_create,
     pure,
 )
-from trident.ownership import CLEANUP_ATTR, RETAIN_ATTR, has_cleanup_owner
+from trident.ownership import is_value_in_scope
 
 from test.support.ir import new_context
 
@@ -34,13 +34,6 @@ class CleanupTest(unittest.TestCase):
 
         module.operation.walk(collect)
         return len(extractions)
-
-    def test_cleanup_unit_attribute(self) -> None:
-        with new_context(), ir.Location.unknown():
-            attribute = ir.UnitAttr.get()
-            parsed = ir.Attribute.parse(f"{attribute}")
-            self.assertIsInstance(parsed, ir.UnitAttr)
-            self.assertEqual(f"{parsed}", "unit")
 
     def test_bind_get_entry_block(self) -> None:
         with new_context(), ir.Location.unknown():
@@ -69,19 +62,19 @@ class CleanupTest(unittest.TestCase):
                 self.assertEqual(len(operation.body.blocks), 1)
                 self.assertEqual(ir.InsertionPoint.current.block, entry)
                 with ir.InsertionPoint(body):
-                    terminator = ffi.MonadYieldOp([])
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    ffi.MonadYieldOp([])
+
                 empty = ffi.MonadBindOp([], [])
                 self.assertIsNone(empty.get_entry_block())
                 with ir.InsertionPoint(empty.add_entry_block()):
                     self.assertEqual(len(empty.arguments), 0)
-                    terminator = ffi.MonadYieldOp([])
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    ffi.MonadYieldOp([])
+
                 self.assertEqual(empty.get_entry_block(), empty.body.blocks[0])
                 self.assertEqual(empty.add_entry_block(), empty.body.blocks[0])
                 self.assertEqual(len(empty.body.blocks), 1)
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                func.ReturnOp([])
+
             self.assertTrue(module.operation.verify())
 
     def test_bind_arities(self) -> None:
@@ -107,16 +100,16 @@ class CleanupTest(unittest.TestCase):
                         values = (
                             pure([constant(7)] * output_count) if output_count else []
                         )
-                        terminator = ffi.MonadYieldOp(values)
-                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                        ffi.MonadYieldOp(values)
+
                     self.assertEqual(ir.InsertionPoint.current.block, block)
                     self.assertEqual(len(operation.outputs), output_count)
-                    terminator = func.ReturnOp(operation.outputs)
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    func.ReturnOp(operation.outputs)
+
                 self.assertTrue(module.operation.verify())
                 register_all_passes()
                 pipeline = passmanager.PassManager.parse(
-                    "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
+                    "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,lower-tvm-ffi-defer)"
                 )
                 pipeline.run(module.operation)
                 self.assertTrue(module.operation.verify())
@@ -133,52 +126,12 @@ class CleanupTest(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "stop"),
                     bind([], result_types=[]),
                 ):
-                    terminator = ffi.MonadYieldOp([])
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    ffi.MonadYieldOp([])
+
                     raise RuntimeError("stop")
                 self.assertEqual(ir.InsertionPoint.current.block, block)
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            self.assertTrue(module.operation.verify())
+                func.ReturnOp([])
 
-    def test_borrowed_alias_and_independent_exports(self) -> None:
-        with new_context(), ir.Location.unknown():
-            module = ir.Module.create()
-            with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([], [ffi.AnyType.get()] * 2))
-                block = function.add_entry_block()
-            with ir.InsertionPoint(block):
-                value = ffi.exception("GuardMatch")
-                value.owner.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-                borrowed = ffi.upcast(ffi.AnyType.get(), value)
-                terminator = func.ReturnOp([borrowed, borrowed])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                self.assertTrue(has_cleanup_owner(value))
-                self.assertFalse(has_cleanup_owner(borrowed))
-            self.assertTrue(module.operation.verify())
-            self.assertNotIn("ObjectIncRef", f"{module}")
-            self.assertIn(RETAIN_ATTR, f"{module}")
-            register_all_passes()
-            pipeline = passmanager.PassManager.parse(
-                "builtin.module(materialize-tvm-ffi-cleanup)"
-            )
-            pipeline.run(module.operation)
-            materialized = f"{module}"
-            pipeline.run(module.operation)
-            self.assertEqual(f"{module}", materialized)
-            self.assertNotIn(RETAIN_ATTR, materialized)
-            references = [
-                op for op in block.operations if isinstance(op, ffi.ObjectIncRefOp)
-            ]
-            self.assertEqual([op.object for op in references], [borrowed, borrowed])
-            self.assertEqual(
-                [
-                    op.object
-                    for op in block.operations
-                    if isinstance(op, ffi.ObjectDecRefOp)
-                ],
-                [value],
-            )
             self.assertTrue(module.operation.verify())
 
     def test_cache_lives_until_defining_block_exit(self) -> None:
@@ -200,18 +153,18 @@ class CleanupTest(unittest.TestCase):
                 with bind(first, result_types=[unit]):
                     cached = table.extract(("values", 0))
                     with bind(cached, result_types=[unit]) as reused:
-                        terminator = ffi.MonadYieldOp(pure([]))
-                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                    terminator = ffi.MonadYieldOp(reused.outputs)
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                        ffi.MonadYieldOp(pure([]))
+
+                    ffi.MonadYieldOp(reused.outputs)
+
                 # Ending the Python context does not end the IR block lifetime.
-                self.assertTrue(has_cleanup_owner(first[0]))
+                self.assertTrue(is_value_in_scope(first[0]))
                 cached = table.extract(("values", 0))
                 with bind(cached, result_types=[unit]):
-                    terminator = ffi.MonadYieldOp(pure([]))
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    ffi.MonadYieldOp(pure([]))
+
+                func.ReturnOp([])
+
             self.assertEqual(self._extraction_count(module), 1)
             self.assertTrue(module.operation.verify())
 
@@ -236,252 +189,14 @@ class CleanupTest(unittest.TestCase):
                     with ir.InsertionPoint(child):
                         values = table.extract(("values", 0))
                         with bind(values, result_types=[unit]):
-                            terminator = ffi.MonadYieldOp(pure([]))
-                            terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                        terminator = scf.YieldOp([])
-                        terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                            ffi.MonadYieldOp(pure([]))
+
+                        scf.YieldOp([])
+
+                func.ReturnOp([])
+
             self.assertEqual(self._extraction_count(module), 2)
             self.assertTrue(module.operation.verify())
-
-    def test_created_resources_are_marked_before_binding(self) -> None:
-        with new_context(), ir.Location.unknown():
-            module = ir.Module.create()
-            tensor = ffi.TensorType.get()
-            result_type = ffi.ResultType.get(tensor)
-            with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([tensor], []))
-                block = function.add_entry_block()
-            with ir.InsertionPoint(block):
-                literal = constant(torch.ones(1))
-                self.assertTrue(has_cleanup_owner(literal))
-                call = checked_call("test.identity", block.arguments, tensor)
-                container = container_create(block.arguments, ffi.ArrayType.get(tensor))
-                for values in (call, container):
-                    for value in values:
-                        self.assertTrue(has_cleanup_owner(value))
-                        self.assertIsInstance(
-                            value.owner.attributes[CLEANUP_ATTR], ir.UnitAttr
-                        )
-                with bind(call, result_types=[result_type]) as operation:
-                    self.assertFalse(has_cleanup_owner(operation.arguments[0]))
-                    terminator = ffi.MonadYieldOp(pure(operation.arguments))
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                self.assertIsInstance(
-                    call[0].owner.attributes[CLEANUP_ATTR], ir.UnitAttr
-                )
-                self.assertTrue(has_cleanup_owner(operation.outputs[0]))
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            self.assertTrue(module.operation.verify())
-
-    def test_explicit_cleanup_and_materialization(self) -> None:
-        with new_context(), ir.Location.unknown():
-            module = ir.Module.create()
-            with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([], []))
-                block = function.add_entry_block()
-            with ir.InsertionPoint(block):
-                value = ffi.exception("GuardMatch")
-                self.assertFalse(has_cleanup_owner(value))
-                value.owner.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-                self.assertTrue(has_cleanup_owner(value))
-                # Marking an operation twice still releases each result once.
-                value.owner.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            register_all_passes()
-            pipeline = passmanager.PassManager.parse(
-                "builtin.module(materialize-tvm-ffi-cleanup)"
-            )
-            pipeline.run(module.operation)
-            materialized = f"{module}"
-            pipeline.run(module.operation)
-            self.assertEqual(f"{module}", materialized)
-            with ir.InsertionPoint(block):
-                self.assertFalse(has_cleanup_owner(value))
-            self.assertEqual(
-                [
-                    op.object
-                    for op in block.operations
-                    if isinstance(op, ffi.ObjectDecRefOp)
-                ],
-                [value],
-            )
-            self.assertNotIn(CLEANUP_ATTR, materialized)
-            self.assertTrue(module.operation.verify())
-
-    def test_scalar_and_empty_cleanup_intent(self) -> None:
-        with new_context(), ir.Location.unknown():
-            module = ir.Module.create()
-            with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([], []))
-                block = function.add_entry_block()
-            with ir.InsertionPoint(block):
-                scalar = constant(7)
-                self.assertFalse(has_cleanup_owner(scalar))
-                scalar.owner.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-                self.assertTrue(has_cleanup_owner(scalar))
-                [result] = pure([scalar])
-                self.assertTrue(has_cleanup_owner(result))
-                with bind([], result_types=[]) as empty:
-                    terminator = ffi.MonadYieldOp([])
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                for operation in (scalar.owner, result.owner, empty):
-                    self.assertIsInstance(
-                        operation.attributes[CLEANUP_ATTR], ir.UnitAttr
-                    )
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            self.assertTrue(module.operation.verify())
-            register_all_passes()
-            pipeline = passmanager.PassManager.parse(
-                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
-            )
-            pipeline.run(module.operation)
-            materialized = f"{module}"
-            self.assertNotIn(CLEANUP_ATTR, materialized)
-            self.assertNotIn(RETAIN_ATTR, materialized)
-            self.assertIn("ObjectDecRef", materialized)
-            self.assertNotIn("tvm_ffi.monad.", materialized)
-            for op in block.operations:
-                if isinstance(op, (ffi.ObjectIncRefOp, ffi.ObjectDecRefOp)):
-                    self.assertNotEqual(op.object, scalar)
-            self.assertTrue(module.operation.verify())
-            pipeline.run(module.operation)
-            self.assertEqual(f"{module}", materialized)
-
-    def test_marks_all_resource_results_once(self) -> None:
-        with new_context(), ir.Location.unknown():
-            module = ir.Module.create()
-            tensor = ffi.TensorType.get()
-            with ir.InsertionPoint(module.body):
-                function = func.FuncOp(
-                    "test",
-                    ([ffi.TupleType.get([tensor, tensor, ffi.IntType.get()])], []),
-                )
-                block = function.add_entry_block()
-            with ir.InsertionPoint(block):
-                unpack = ffi.TupleUnconstructOp(
-                    [tensor, tensor, ffi.IntType.get()], block.arguments[0]
-                )
-                unpack.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-                self.assertTrue(has_cleanup_owner(unpack.elements[0]))
-                self.assertTrue(has_cleanup_owner(unpack.elements[1]))
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            register_all_passes()
-            passmanager.PassManager.parse(
-                "builtin.module(materialize-tvm-ffi-cleanup)"
-            ).run(module.operation)
-            self.assertEqual(
-                [
-                    op.object
-                    for op in block.operations
-                    if isinstance(op, ffi.ObjectDecRefOp)
-                ],
-                [unpack.elements[1], unpack.elements[0]],
-            )
-            self.assertTrue(module.operation.verify())
-
-    def test_container_ownership_is_materialized_after_decomposition(self) -> None:
-        with new_context(), ir.Location.unknown():
-            module = ir.Module.create()
-            container_type = ffi.TupleType.get([])
-            with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([container_type], []))
-                block = function.add_entry_block()
-            with ir.InsertionPoint(block):
-                borrowed = block.arguments[0]
-                self.assertFalse(has_cleanup_owner(borrowed))
-                container = container_create([], container_type)
-                with bind(
-                    container, result_types=[ffi.ResultType.get(container_type)]
-                ) as operation:
-                    results = pure([operation.arguments[0], operation.arguments[0]])
-                    terminator = ffi.MonadYieldOp(results[:1])
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                self.assertTrue(has_cleanup_owner(container[0]))
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            self.assertTrue(module.operation.verify())
-            self.assertNotIn("ObjectIncRef", f"{module}")
-            register_all_passes()
-            pipeline = passmanager.PassManager.parse(
-                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
-            )
-            pipeline.run(module.operation)
-            self.assertTrue(module.operation.verify())
-            self.assertIsInstance(function.arguments[0].type, ffi.CArrayType)
-            materialized = f"{module}"
-            self.assertNotIn(RETAIN_ATTR, materialized)
-            self.assertNotIn(CLEANUP_ATTR, materialized)
-            self.assertNotIn("tvm_ffi.monad.bind", materialized)
-            self.assertIn("tvm_ffi.ObjectIncRef", materialized)
-            self.assertIn("tvm_ffi.ObjectDecRef", materialized)
-            pipeline.run(module.operation)
-            self.assertEqual(f"{module}", materialized)
-
-    def test_pure_borrows_each_payload_reference(self) -> None:
-        with new_context(), ir.Location.unknown():
-            module = ir.Module.create()
-            with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([], []))
-                block = function.add_entry_block()
-            with ir.InsertionPoint(block):
-                value = ffi.exception("GuardMatch")
-                value.owner.attributes[CLEANUP_ATTR] = ir.UnitAttr.get()
-                results = pure([value, value, constant(1), constant(None)])
-                terminator = func.ReturnOp([])
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-            self.assertIsInstance(value.owner.attributes[CLEANUP_ATTR], ir.UnitAttr)
-            self.assertIsInstance(
-                results[0].owner.attributes[CLEANUP_ATTR], ir.UnitAttr
-            )
-            self.assertEqual(
-                [
-                    op.object
-                    for op in block.operations
-                    if isinstance(op, ffi.ObjectIncRefOp)
-                ],
-                [],
-            )
-            self.assertIn(RETAIN_ATTR, results[0].owner.attributes)
-            payloads = list(results[0].owner.opview.values)
-            for payload in payloads[:2]:
-                cast = payload.owner.opview
-                self.assertIsInstance(cast, ffi.UpcastOp)
-                self.assertEqual(cast.value, value)
-                self.assertEqual(payload.type, value.type)
-            self.assertTrue(module.operation.verify())
-            register_all_passes()
-            passmanager.PassManager.parse("builtin.module(lower-tvm-ffi-monad)").run(
-                module.operation
-            )
-            tuples = [
-                op for op in block.operations if isinstance(op, ffi.TupleConstructOp)
-            ]
-            self.assertEqual(len(tuples), 4)
-            for op, payload in zip(tuples[:2], payloads[:2], strict=True):
-                cast = op.elements[1].owner.opview
-                self.assertIsInstance(cast, ffi.UpcastOp)
-                self.assertEqual(cast.value, payload)
-            # Borrowing pure must not consume either occurrence of the input.
-            self.assertFalse(
-                any(isinstance(op, ffi.ObjectDecRefOp) for op in block.operations)
-            )
-            pipeline = passmanager.PassManager.parse(
-                "builtin.module(decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
-            )
-            pipeline.run(module.operation)
-            self.assertTrue(module.operation.verify())
-            self.assertNotIn(RETAIN_ATTR, f"{module}")
-            self.assertNotIn(CLEANUP_ATTR, f"{module}")
-            self.assertIn("tvm_ffi.ObjectDecRef", f"{module}")
-            materialized = f"{module}"
-            pipeline.run(module.operation)
-            self.assertEqual(f"{module}", materialized)
 
     def test_result_tuple_exports_retain_both_branches(self) -> None:
         with new_context(), ir.Location.unknown():
@@ -496,14 +211,11 @@ class CleanupTest(unittest.TestCase):
                 inputs = pure([block.arguments[0], block.arguments[0]])
                 with bind(inputs, result_types=[result_type, result_type]) as operation:
                     yielded = pure([operation.arguments[0]])
-                    terminator = ffi.MonadYieldOp([*yielded, *yielded])
-                    terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
-                terminator = func.ReturnOp(operation.outputs)
-                terminator.attributes[RETAIN_ATTR] = ir.UnitAttr.get()
+                    ffi.MonadYieldOp([*yielded, *yielded])
+
+                func.ReturnOp(operation.outputs)
+
             self.assertTrue(module.operation.verify())
-            for value in inputs:
-                self.assertIsInstance(value.owner.attributes[CLEANUP_ATTR], ir.UnitAttr)
-            self.assertIsInstance(operation.attributes[CLEANUP_ATTR], ir.UnitAttr)
             self.assertEqual(
                 [
                     op.object
@@ -521,17 +233,12 @@ class CleanupTest(unittest.TestCase):
 
             module.operation.walk(collect)
             self.assertEqual(branches, [])
-            self.assertIn(RETAIN_ATTR, f"{module}")
             register_all_passes()
             pipeline = passmanager.PassManager.parse(
-                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,materialize-tvm-ffi-cleanup)"
+                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,lower-tvm-ffi-defer)"
             )
             pipeline.run(module.operation)
             self.assertTrue(module.operation.verify())
-            self.assertNotIn(RETAIN_ATTR, f"{module}")
-            materialized = f"{module}"
-            pipeline.run(module.operation)
-            self.assertEqual(f"{module}", materialized)
             module.operation.walk(collect)
             self.assertEqual(len(branches), 1)
             success, failure = branches[0].regions
@@ -551,3 +258,107 @@ class CleanupTest(unittest.TestCase):
                 ]
                 for value in exit_values:
                     self.assertIn(value, releases)
+
+    def test_frontend_resources_need_no_ownership_attributes(self) -> None:
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            tensor = ffi.TensorType.get()
+            result_type = ffi.ResultType.get(tensor)
+            with ir.InsertionPoint(module.body):
+                function = func.FuncOp("resources", ([tensor], []))
+                block = function.add_entry_block()
+            with ir.InsertionPoint(block):
+                constant(torch.ones(1))
+                values = checked_call("test.identity", block.arguments, tensor)
+                container_create(block.arguments, ffi.ArrayType.get(tensor))
+                with bind(values, result_types=[result_type]) as operation:
+                    ffi.MonadYieldOp(pure(operation.arguments))
+                func.ReturnOp([])
+            self.assertTrue(module.operation.verify())
+            self.assertNotIn("tvm_ffi.cleanup", f"{module}")
+            self.assertNotIn("tvm_ffi.retain", f"{module}")
+            register_all_passes()
+            passmanager.PassManager.parse(
+                "builtin.module(lower-tvm-ffi-monad,decompose-tvm-ffi,lower-tvm-ffi-defer)"
+            ).run(module.operation)
+            self.assertTrue(module.operation.verify())
+            self.assertIn("ObjectDecRef", f"{module}")
+
+    def test_borrowed_alias_and_repeated_exports(self) -> None:
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            any_type = ffi.AnyType.get()
+            with ir.InsertionPoint(module.body):
+                function = func.FuncOp("exports", ([], [any_type, any_type]))
+                block = function.add_entry_block()
+            with ir.InsertionPoint(block):
+                value = ffi.exception("GuardMatch")
+                borrowed = ffi.upcast(any_type, value)
+                func.ReturnOp([borrowed, borrowed])
+            register_all_passes()
+            passmanager.PassManager.parse("builtin.module(decompose-tvm-ffi)").run(
+                module.operation
+            )
+            cleanups = [op for op in block.operations if isinstance(op, ffi.DeferOp)]
+            self.assertEqual(len(cleanups), 1)
+            body = list(cleanups[0].body.blocks[0].operations)
+            self.assertIsInstance(body[0], ffi.ObjectDecRefOp)
+            self.assertIsInstance(body[-1], ffi.DeferYieldOp)
+            self.assertTrue(module.operation.verify())
+            passmanager.PassManager.parse("builtin.module(lower-tvm-ffi-defer)").run(
+                module.operation
+            )
+            self.assertNotIn("tvm_ffi.defer", f"{module}")
+            operations = list(block.operations)
+            exports = list(operations[-1].operands)
+            retains = [op for op in operations if isinstance(op, ffi.ObjectIncRefOp)]
+            releases = [op for op in operations if isinstance(op, ffi.ObjectDecRefOp)]
+            self.assertEqual([op.object for op in retains], exports)
+            self.assertEqual(len(releases), 1)
+            self.assertIsInstance(releases[0].object.type, ffi.CExceptionType)
+            self.assertLess(
+                operations.index(retains[-1]), operations.index(releases[0])
+            )
+            self.assertTrue(module.operation.verify())
+
+    def test_low_level_pure_borrows_repeated_payloads(self) -> None:
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            tensor = ffi.TensorType.get()
+            with ir.InsertionPoint(module.body):
+                function = func.FuncOp("borrow", ([tensor], []))
+                block = function.add_entry_block()
+            with ir.InsertionPoint(block):
+                ffi.MonadPureOp(
+                    [ffi.ResultType.get(tensor)] * 2, [block.arguments[0]] * 2
+                )
+                func.ReturnOp([])
+            register_all_passes()
+            passmanager.PassManager.parse("builtin.module(lower-tvm-ffi-monad)").run(
+                module.operation
+            )
+            self.assertNotIn("ObjectDecRef", f"{module}")
+            self.assertEqual(
+                len(
+                    [
+                        op
+                        for op in block.operations
+                        if isinstance(op, ffi.TupleConstructOp)
+                    ]
+                ),
+                2,
+            )
+            passmanager.PassManager.parse(
+                "builtin.module(decompose-tvm-ffi,lower-tvm-ffi-defer)"
+            ).run(module.operation)
+            lowered = module.body.operations[0].entry_block
+            releases = [
+                op.object
+                for op in lowered.operations
+                if isinstance(op, ffi.ObjectDecRefOp)
+            ]
+            self.assertEqual(
+                sum(isinstance(value.type, ffi.CArrayType) for value in releases), 2
+            )
+            self.assertNotIn(lowered.arguments[0], releases)
+            self.assertTrue(module.operation.verify())

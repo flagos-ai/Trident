@@ -44,7 +44,9 @@ mlir::Value buildConstantValue(mlir::OpBuilder &builder, mlir::Location loc,
               return buildConstantValue(builder, loc, element);
             });
         tvm_ffi::FunctionGetGlobalOp handle =
-            tvm_ffi::FunctionGetGlobalOp::create(builder, loc, "ffi.Array");
+            tvm_ffi::FunctionGetGlobalOp::create(
+                builder, loc, tvm_ffi::CFunctionType::get(builder.getContext()),
+                "ffi.Array");
         tvm_ffi::FunctionCallOp call = tvm_ffi::FunctionCallOp::create(
             builder, loc, tvm_ffi::CArrayType::get(builder.getContext()),
             handle.getResult(), elements);

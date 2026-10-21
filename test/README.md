@@ -76,14 +76,12 @@ outside that allocator.
 `unit/test_guards.py` covers guard parsing, supported expression IR, invalid
 comparisons, tensor metadata, nested container-length extraction without an FX
 importer, and the conservative `_base` fallback.
-`unit/test_cleanup.py` checks UnitAttr cleanup markers, explicit operation
-cleanup intent for scalars and zero-result operations, borrowed Result
-construction with repeated payloads, deferred container cleanup
-and payload retains after decomposition, borrowed exports,
-direct terminator export attributes, success-only retains and cache
-reuse through lexical block lifetimes. C++ retain/release ordering and the four
-supported terminators are covered by Lit.
-`unit/test_importer.py` checks C ABI type spellings and Python type registration,
+`unit/test_cleanup.py` checks attribute-free semantic resource construction,
+borrowing low-level pure payloads, repeated and borrowed exports, Result branch
+exports, independent bind arities and lexical input-cache reuse. Lit owns
+reference ordering, mixed extraction, manual Base behavior and unsupported CFG
+diagnostics. CUDA checks cover PyTorch-managed allocations, not CPU FFI objects.
+`unit/test_importer.py` checks C ABI type spellings and Python type registration (including CAny),
 semantic container bindings and construction, Result binding, payload type registration, parsed
 OpView payload access, CABI-only Result validation, shared boxed Result type inference and boundary
 boxing/widening, owned string Result boundaries, insertion-point restoration, empty argument construction,
@@ -93,10 +91,11 @@ branches, symbolic shapes, specialization reuse, aliases and mutations. Containe
 execution tests also return borrowed inputs and repeated resource outputs, then
 drop one alias and continue using another to check independent output references.
 `e2e/test_local_call.py` executes local packed calls through the complete
-lowering pipeline, covering direct and monadic success/failure, zero arguments
-and payload ownership with repeated CUDA tensor payloads.
-`e2e/test_kernel_launch.py` covers mutation-only Triton launches and their None
-Result payloads; container tests include empty containers and consecutive None
+lowering pipeline, covering direct and monadic success/failure, zero arguments,
+Union/Str boundaries erased to CAny, failure-path output-slot gating, and payload
+ownership with repeated CUDA tensor payloads.
+`e2e/test_kernel_launch.py` covers mutation-only Triton launches, string
+specializations and their None Result payloads; container tests include empty containers and consecutive None
 outputs. Verifier diagnostics and Result lowering belong to the focused Lit
 tests under `core/test/Dialect/TVMFFI/` and `core/test/Conversion/`.
 
@@ -143,7 +142,7 @@ The following table maps the former flat test layout to current tests.
 | Pipeline all-dims, overwrite and tensor-literal duplicated graph bodies | One public FFI function per semantic case, preserving pipeline checks and runtime semantics. |
 | GPU scalar get fixture | `TVMFFIToLLVM/scalar-extraction.mlir`, running only its owning conversion. |
 | Combined GPU/ABI/LLVM and metadata tests | `Pipeline/kernel-launch.mlir` and `Pipeline/metadata.mlir`; the local GPU fixture checks semantic operands separately. |
-| Legacy ownership pass tests | Block-local cleanup pass tests and `unit/test_cleanup.py` cover marked ownership; CFG inference is removed. |
+| Legacy ownership pass tests | Automatic decomposition ownership tests and `unit/test_cleanup.py` cover reference lifetimes without attributes; CFG inference is unsupported. |
 | Conversion bool/int pure printing | Existing dialect get/to tests; bool-to-int LLVM data flow remains in the conversion test. |
 | Scalar min/max pure printing and unrelated arith folding | Pure printing and upstream-only folding checks are removed; no standalone scalar execution suite remains. |
 | Full-pipeline ABI checks mixed with pass-local CFG tests | Dedicated `Pipeline/packed-abi.mlir`; local scalar/multi-result and CFG checks remain in `TVMFFIToFunc/abi-and-cfg.mlir`. |

@@ -44,10 +44,10 @@ module {
 // -----
 
 module {
-  func.func @specializations_size(%tensor: !tvm_ffi.tensor, %value: !tvm_ffi.int) {
+  func.func @specializations_size(%tensor: !tvm_ffi.c.tensor, %value: !tvm_ffi.int) {
     %one = arith.constant 1 : i64
     // expected-error@+1 {{'tvm_ffi.kernel_launch' op specializations and kernel operands must have the same size}}
-    %result = "tvm_ffi.kernel_launch"(%one, %one, %one, %one, %one, %one, %tensor, %value) <{kernel = @kernel::@entry, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2>, specializations = [#tvm_ffi.variable_specialization<kind = !llvm.ptr, divisibility = 16>]}> : (i64, i64, i64, i64, i64, i64, !tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+    %result = "tvm_ffi.kernel_launch"(%one, %one, %one, %one, %one, %one, %tensor, %value) <{kernel = @kernel::@entry, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2>, specializations = [#tvm_ffi.variable_specialization<kind = !llvm.ptr, divisibility = 16>]}> : (i64, i64, i64, i64, i64, i64, !tvm_ffi.c.tensor, !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     func.return
   }
 }

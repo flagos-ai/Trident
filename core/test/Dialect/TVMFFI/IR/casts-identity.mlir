@@ -34,10 +34,10 @@ func.func @array(%arg: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.array<!tvm_ffi.
 // FOLD-LABEL: func.func @function(
 // FOLD-SAME: %[[INPUT:[a-zA-Z0-9_]+]]:
 // FOLD-NEXT: return %[[INPUT]]
-func.func @function(%arg: !tvm_ffi.function) -> !tvm_ffi.function {
-  %wide = tvm_ffi.upcast %arg : !tvm_ffi.function -> !tvm_ffi.function
-  %narrow = tvm_ffi.downcast %wide : !tvm_ffi.function -> !tvm_ffi.function
-  return %narrow : !tvm_ffi.function
+func.func @function(%arg: !tvm_ffi.c.function) -> !tvm_ffi.c.function {
+  %wide = tvm_ffi.upcast %arg : !tvm_ffi.c.function -> !tvm_ffi.c.function
+  %narrow = tvm_ffi.downcast %wide : !tvm_ffi.c.function -> !tvm_ffi.c.function
+  return %narrow : !tvm_ffi.c.function
 }
 
 // PARSE-LABEL: func.func @int(

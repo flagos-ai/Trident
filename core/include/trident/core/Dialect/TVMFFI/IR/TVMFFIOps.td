@@ -9,27 +9,12 @@
 #ifndef TRIDENT_CORE_DIALECT_TVMFFI_IR_TVMFFIOPS_TD_
 #define TRIDENT_CORE_DIALECT_TVMFFI_IR_TVMFFIOPS_TD_
 
-include "mlir/IR/OpAsmInterface.td"
-include "mlir/IR/CommonAttrConstraints.td"
-include "mlir/IR/CommonTypeConstraints.td"
-include "mlir/IR/SymbolInterfaces.td"
-include "mlir/Interfaces/ControlFlowInterfaces.td"
-include "mlir/Interfaces/CastInterfaces.td"
-include "mlir/Interfaces/FunctionInterfaces.td"
-include "mlir/Interfaces/InferTypeOpInterface.td"
-include "mlir/Interfaces/SideEffectInterfaces.td"
-include "trident/core/Dialect/TVMFFI/IR/TVMFFIBase.td"
-include "trident/core/Dialect/TVMFFI/IR/TVMFFIInterfaces.td"
-include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.td"
-include "trident/core/Dialect/TVMFFI/IR/TVMFFIAttrs.td"
-
-class TVMFFI_Op<string mnemonic, list<Trait> traits = []>
-    : Op<TVMFFI_Dialect, mnemonic, traits>;
+include "trident/core/Dialect/TVMFFI/IR/TVMFFIOpBase.td"
 
 class TVMFFI_TensorIndexedMetadataOp<string mnemonic>
     : TVMFFI_Op<mnemonic, [Pure,
         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-  let arguments = (ins TVMFFI_TensorType : $tensor, I64 : $index);
+  let arguments = (ins TVMFFI_TensorValue : $tensor, I64 : $index);
   let results = (outs I64 : $result);
   let assemblyFormat = "$tensor `[` $index `]` attr-dict `:` type($tensor)";
 }
@@ -64,7 +49,7 @@ def TVMFFI_AsOp : TVMFFI_Op<"as", [Pure]> {
   let assemblyFormat = "$object attr-dict `:` type($object) `->` type($result)";
 }
 
-def TVMFFI_CallOp : TVMFFI_Op<"call", [TVMFFI_ObjectOwnershipOpInterface]> {
+def TVMFFI_CallOp : TVMFFI_Op<"call"> {
   let summary = "Call a local TVM FFI function and return success and payload";
   let description = [{
     Returns separate Bool and Any values: (true, payload) on success or
@@ -76,7 +61,11 @@ def TVMFFI_CallOp : TVMFFI_Op<"call", [TVMFFI_ObjectOwnershipOpInterface]> {
                        Variadic<AnyTVMFFIAnyABIType>:$operands,
                        OptionalAttr<DictArrayAttr>:$arg_attrs,
                        OptionalAttr<DictArrayAttr>:$res_attrs);
-  let results = (outs TVMFFI_BoolType:$success, TVMFFI_AnyType:$value);
+  let results = (outs TVMFFI_BoolType:$success, TVMFFI_AnyValue:$value);
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                        ::mlir::TypeRange rhs);
+  }];
   let hasVerifier = 1;
   let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` "
                        "functional-type($operands, results)";
@@ -84,8 +73,7 @@ def TVMFFI_CallOp : TVMFFI_Op<"call", [TVMFFI_ObjectOwnershipOpInterface]> {
 
 class TVMFFI_ConstantOp<string mnemonic, Type resultType, Attr valueType>
     : TVMFFI_Op<mnemonic, [
-        DeclareOpInterfaceMethods<InferTypeOpInterface>,
-        TVMFFI_ObjectOwnershipOpInterface]> {
+        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let arguments = (ins valueType:$value);
   let results = (outs resultType:$result);
   let assemblyFormat = "$value attr-dict";
@@ -119,8 +107,7 @@ def TVMFFI_ConstantIntOp
 
 def TVMFFI_ConstantNoneOp
     : TVMFFI_Op<"constant.none", [
-        DeclareOpInterfaceMethods<InferTypeOpInterface>,
-        TVMFFI_ObjectOwnershipOpInterface]> {
+        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Create a TVM FFI None constant";
   let results = (outs TVMFFI_NoneType:$result);
   let assemblyFormat = "attr-dict";
@@ -131,11 +118,37 @@ def TVMFFI_ConstantRawStrOp
   let summary = "Create a TVM FFI raw string constant";
 }
 
+def TVMFFI_ConstantStrOp
+    : TVMFFI_ConstantOp<"constant.str", TVMFFI_StrType, StrAttr> {
+  let summary = "Create a semantic string constant";
+}
+
 // Deliberately not Pure: a failed check must trap even if the result is unused.
+def TVMFFI_DeferOp : TVMFFI_Op<"defer", [SingleBlock]> {
+  let summary = "Execute cleanup before leaving the current block";
+  let description = [{
+    Registers cleanup without executing it immediately. Cleanup regions capture
+    external values and execute before the current block terminator in reverse
+    registration order, preserving operation order within each body. The enclosing
+    region must be single-block and belong to tvm_ffi.func, func.func or scf.if,
+    exiting through tvm_ffi.return, func.return or scf.yield.
+    Lower before inlining or control-flow conversion. The body has
+    no arguments and ends in defer_yield; nested regions are not supported.
+    This operation deliberately retains conservative side effects.
+  }];
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$body attr-dict";
+  let hasVerifier = 1;
+}
+
+def TVMFFI_DeferYieldOp : TVMFFI_Op<"defer_yield", [Terminator]> {
+  let summary = "End a deferred cleanup body";
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+}
+
 def TVMFFI_DowncastOp
-    : TVMFFI_Op<"downcast", [DeclareOpInterfaceMethods<CastOpInterface>,
-        DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
-                                  ["getObjectResultOwnership"]>]> {
+    : TVMFFI_Op<"downcast", [DeclareOpInterfaceMethods<CastOpInterface>]> {
   let summary = "Check and narrow a TVM FFI value, or preserve its type";
   let description = [{
     Identical source and result types are a no-op. Otherwise the source must
@@ -158,12 +171,15 @@ def TVMFFI_EqOp : TVMFFI_Op<"eq", [Pure,
 
 def TVMFFI_ExceptionOp
     : TVMFFI_Op<"exception", [
-        DeclareOpInterfaceMethods<InferTypeOpInterface>,
-        TVMFFI_ObjectOwnershipOpInterface]> {
+        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Create a Trident FFI exception object";
   let arguments = (ins StrAttr : $kind);
-  let results = (outs TVMFFI_ExceptionType : $result);
+  let results = (outs TVMFFI_ExceptionValue : $result);
   let assemblyFormat = "$kind attr-dict `:` type($result)";
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                        ::mlir::TypeRange rhs);
+  }];
 }
 
 def TVMFFI_FuncOp : TVMFFI_Op<"func", [
@@ -210,22 +226,25 @@ def TVMFFI_FuncOp : TVMFFI_Op<"func", [
 }
 
 def TVMFFI_FunctionCallOp
-    : TVMFFI_Op<"FunctionCall", [TVMFFI_ObjectOwnershipOpInterface]> {
+    : TVMFFI_Op<"FunctionCall"> {
   let summary = "Call a TVM FFI function handle";
-  let arguments = (ins TVMFFI_ObjectType:$callee,
+  let arguments = (ins TVMFFI_FunctionValue:$callee,
                        Variadic<AnyTVMFFISemanticType>:$arguments);
   let results = (outs AnyTVMFFISemanticType:$result);
-  let assemblyFormat = "$callee `(` $arguments `)` attr-dict `:` functional-type($arguments, $result)";
+  let assemblyFormat = "$callee `:` type($callee) `(` $arguments `)` attr-dict `:` functional-type($arguments, $result)";
 }
 
 def TVMFFI_FunctionGetGlobalOp
     : TVMFFI_Op<"FunctionGetGlobal", [
-        DeclareOpInterfaceMethods<InferTypeOpInterface>,
-        TVMFFI_ObjectOwnershipOpInterface]> {
+        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Get a TVM FFI global function by name";
   let arguments = (ins StrAttr:$name);
-  let results = (outs TVMFFI_ObjectType:$result);
+  let results = (outs TVMFFI_FunctionValue:$result);
   let assemblyFormat = "$name attr-dict `:` type($result)";
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                        ::mlir::TypeRange rhs);
+  }];
 }
 
 def TVMFFI_GetOp : TVMFFI_Op<"get", [Pure,
@@ -312,91 +331,15 @@ let extraClassDeclaration = [{
 }];
 }
 
-def TVMFFI_MonadBindOp : TVMFFI_Op<"monad.bind", [SingleBlock, RecursiveMemoryEffects]> {
-  let summary = "Run a continuation only when every input Result succeeds";
-  let description = [{
-    Input and output Result counts are independent and may be zero. With no
-    inputs the body runs unconditionally. With no outputs the body is used only
-    for effects, and failed inputs skip those effects without producing Results.
-    Body arguments match input payloads and yielded Results match output types.
-  }];
-  let arguments = (ins Variadic<TVMFFI_ResultType>:$inputs);
-  let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
-  let regions = (region SizedRegion<1>:$body);
-  let assemblyFormat = "$inputs `:` functional-type($inputs, $outputs) $body attr-dict";
-  let extraClassDeclaration = [{
-    /// Return the entry block, creating it through the builder if needed.
-    ::mlir::Block *addEntryBlock(::mlir::OpBuilder &builder);
-    /// Return the entry block, or null when the body is empty.
-    ::mlir::Block *getEntryBlock();
-  }];
-  let hasVerifier = 1;
-}
+include "trident/core/Dialect/TVMFFI/IR/Monad/TVMFFIOps.td"
 
-def TVMFFI_MonadCallOp : TVMFFI_Op<"monad.call", [TVMFFI_ObjectOwnershipOpInterface]> {
-  let summary = "Call a local TVM FFI function and return its Result";
-  let arguments = (ins FlatSymbolRefAttr:$callee,
-                       Variadic<AnyTVMFFIAnyABIType>:$operands,
-                       OptionalAttr<DictArrayAttr>:$arg_attrs,
-                       OptionalAttr<DictArrayAttr>:$res_attrs);
-  let results = (outs TVMFFI_ResultType:$result);
-  let hasVerifier = 1;
-  let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` "
-                       "functional-type($operands, $result)";
-}
-
-def TVMFFI_MonadFailOp : TVMFFI_Op<"monad.fail", [Pure]> {
-  let summary = "Construct failed Results without changing the runtime error";
-  let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
-  let assemblyFormat = "attr-dict `:` type($outputs)";
-  let hasVerifier = 1;
-}
-
-def TVMFFI_MonadPureOp : TVMFFI_Op<"monad.pure", [Pure]> {
-  let summary = "Wrap payloads in successful Results";
-  let description = [{
-    Transfers payload references by default. Frontend builders may attach the
-    tvm_ffi.retain UnitAttr to borrow payloads instead: cleanup
-    materialization retains each occurrence after semantic container erasure.
-  }];
-  let arguments = (ins Variadic<AnyType>:$values);
-  let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
-  let assemblyFormat = "$values attr-dict `:` functional-type($values, $outputs)";
-  let hasVerifier = 1;
-}
-
-def TVMFFI_MonadUnpackOp : TVMFFI_Op<"monad.unpack", [Pure,
-    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-  let summary = "Expose Result success and its payload, widening tagged ABI values";
-  let description = [{
-    Returns success followed by the payload. Payloads supporting upcast to Any
-    produce Any, with None on failure. Other payload types are preserved and
-    their values may only be used on success. Does not clear runtime errors.
-  }];
-  let arguments = (ins TVMFFI_ResultType:$input);
-  let results = (outs I1:$success, AnyType:$value);
-  let assemblyFormat = "$input attr-dict `:` functional-type(operands, results)";
-}
-
-def TVMFFI_MonadYieldOp
-    : TVMFFI_Op<"monad.yield", [Terminator]> {
-  let summary = "Yield Results from a bind continuation";
-  let arguments = (ins Variadic<AnyType>:$values);
-  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
-  let hasVerifier = 1;
-}
-
-def TVMFFI_ObjectDecRefOp : TVMFFI_Op<"ObjectDecRef", [
-    DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
-                              ["getObjectOperandOwnership"]>]> {
+def TVMFFI_ObjectDecRefOp : TVMFFI_Op<"ObjectDecRef"> {
   let summary = "Decrement a TVM FFI object reference";
   let arguments = (ins AnyTVMFFIObjectOrAnyType:$object);
   let assemblyFormat = "$object attr-dict `:` type($object)";
 }
 
-def TVMFFI_ObjectIncRefOp : TVMFFI_Op<"ObjectIncRef", [
-    DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
-                              ["getObjectOperandOwnership"]>]> {
+def TVMFFI_ObjectIncRefOp : TVMFFI_Op<"ObjectIncRef"> {
   let summary = "Increment a TVM FFI object reference";
   let arguments = (ins AnyTVMFFIObjectOrAnyType:$object);
   let assemblyFormat = "$object attr-dict `:` type($object)";
@@ -411,32 +354,35 @@ def TVMFFI_ReturnOp
     or None on failure. ABI lowering stores the payload only on success and
     preserves the runtime error on failure.
   }];
-  let arguments = (ins TVMFFI_BoolType:$success, TVMFFI_AnyType:$value);
+  let arguments = (ins TVMFFI_BoolType:$success, TVMFFI_AnyValue:$value);
   let assemblyFormat = "attr-dict $success `,` $value `:` type($success) `,` type($value)";
 }
 
 def TVMFFI_TensorCloneOp
     : TVMFFI_Op<"tensor.clone", [
-        DeclareOpInterfaceMethods<InferTypeOpInterface>,
-        TVMFFI_ObjectOwnershipOpInterface]> {
+        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Create an independent tensor copy preserving the layout";
-  let arguments = (ins TVMFFI_TensorType:$tensor);
-  let results = (outs TVMFFI_TensorType:$result);
+  let arguments = (ins TVMFFI_TensorValue:$tensor);
+  let results = (outs TVMFFI_TensorValue:$result);
   let assemblyFormat = "$tensor attr-dict `:` type($tensor) `->` type($result)";
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                        ::mlir::TypeRange rhs);
+  }];
 }
 
 def TVMFFI_TensorCopyOp
-    : TVMFFI_Op<"tensor.copy_", []> {
+    : TVMFFI_Op<"tensor.copy_", [SameTypeOperands]> {
   let summary = "Copy tensor contents into an existing tensor in place";
-  let arguments = (ins TVMFFI_TensorType:$destination,
-                       TVMFFI_TensorType:$source);
+  let arguments = (ins TVMFFI_TensorValue:$destination,
+                       TVMFFI_TensorValue:$source);
   let assemblyFormat = "$destination `,` $source attr-dict `:` type($destination)";
 }
 
 def TVMFFI_TensorDTypeOp : TVMFFI_Op<"tensor.dtype", [Pure,
     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read DLPack dtype fields from a runtime tensor";
-  let arguments = (ins TVMFFI_TensorType:$tensor);
+  let arguments = (ins TVMFFI_TensorValue:$tensor);
   let results = (outs I8:$code, I8:$bits, I16:$lanes);
   let assemblyFormat = "$tensor attr-dict `:` type($tensor)";
 }
@@ -444,7 +390,7 @@ def TVMFFI_TensorDTypeOp : TVMFFI_Op<"tensor.dtype", [Pure,
 def TVMFFI_TensorDeviceOp : TVMFFI_Op<"tensor.device", [Pure,
     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read DLPack device fields from a runtime tensor";
-  let arguments = (ins TVMFFI_TensorType:$tensor);
+  let arguments = (ins TVMFFI_TensorValue:$tensor);
   let results = (outs I32:$device_type, I32:$device_index);
   let assemblyFormat = "$tensor attr-dict `:` type($tensor)";
 }
@@ -452,20 +398,23 @@ def TVMFFI_TensorDeviceOp : TVMFFI_Op<"tensor.device", [Pure,
 def TVMFFI_TensorDimOp : TVMFFI_Op<"tensor.dim", [Pure,
     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read the rank of a runtime tensor";
-  let arguments = (ins TVMFFI_TensorType:$tensor);
+  let arguments = (ins TVMFFI_TensorValue:$tensor);
   let results = (outs I64:$result);
   let assemblyFormat = "$tensor attr-dict `:` type($tensor)";
 }
 
 def TVMFFI_TensorLiteralOp
     : TVMFFI_Op<"tensor.literal", [
-        DeclareOpInterfaceMethods<InferTypeOpInterface>,
-        TVMFFI_ObjectOwnershipOpInterface]> {
+        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Create an owned TVM FFI tensor from a dense literal";
   let arguments = (ins ElementsAttr:$value);
-  let results = (outs TVMFFI_TensorType:$result);
+  let results = (outs TVMFFI_TensorValue:$result);
   let assemblyFormat = "$value attr-dict `:` type($result)";
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                        ::mlir::TypeRange rhs);
+  }];
 }
 
 def TVMFFI_TensorSizeOp
@@ -477,7 +426,7 @@ def TVMFFI_TensorStorageOffsetOp
     : TVMFFI_Op<"tensor.storage_offset", [Pure,
         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read a runtime tensor storage offset";
-  let arguments = (ins TVMFFI_TensorType:$tensor);
+  let arguments = (ins TVMFFI_TensorValue:$tensor);
   let results = (outs I64:$result);
   let assemblyFormat = "$tensor attr-dict `:` type($tensor)";
 }
@@ -518,9 +467,7 @@ def TVMFFI_TupleUnconstructOp : TVMFFI_Op<"tuple.unconstruct", [
 }
 
 def TVMFFI_UpcastOp
-    : TVMFFI_Op<"upcast", [Pure, DeclareOpInterfaceMethods<CastOpInterface>,
-        DeclareOpInterfaceMethods<TVMFFI_ObjectOwnershipOpInterface,
-                                  ["getObjectResultOwnership"]>]> {
+    : TVMFFI_Op<"upcast", [Pure, DeclareOpInterfaceMethods<CastOpInterface>]> {
   let summary = "Widen a TVM FFI value, or preserve its type";
   let description = [{
     Identical source and result types are a no-op. Otherwise the result must

@@ -15,7 +15,6 @@
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/SmallVectorExtras.h>
-#include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/FormatVariadic.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h> // NOLINT(misc-include-cleaner)
@@ -24,6 +23,7 @@
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/IR/Attributes.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinOps.h>
@@ -45,24 +45,6 @@ namespace trident::conversion {
 
 namespace {
 
-llvm::SmallVector<int32_t> getExpectedTypeIndices(mlir::Type type) {
-  return llvm::TypeSwitch<mlir::Type, llvm::SmallVector<int32_t>>(type)
-      .Case<tvm_ffi::UnionType>(
-          [](tvm_ffi::UnionType unionType) -> llvm::SmallVector<int32_t> {
-            return llvm::map_to_vector(
-                unionType.getTypes(), [](mlir::Type member) -> int32_t {
-                  return mlir::cast<tvm_ffi::TVMFFITypeIndexInterface>(member)
-                      .getTypeIndex();
-                });
-          })
-      .Case<tvm_ffi::TVMFFITypeIndexInterface>(
-          [](tvm_ffi::TVMFFITypeIndexInterface indexedType)
-              -> llvm::SmallVector<int32_t> {
-            return {indexedType.getTypeIndex()};
-          })
-      .Default([](mlir::Type) -> llvm::SmallVector<int32_t> { return {}; });
-}
-
 mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
                                 mlir::ValueRange slots,
                                 mlir::Type payloadType) {
@@ -77,7 +59,7 @@ mlir::LogicalResult lowerReturn(tvm_ffi::ReturnOp op, mlir::OpBuilder &builder,
   mlir::Value const checked = builder.createOrFold<tvm_ffi::DowncastOp>(
       op.getLoc(), payloadType, op.getValue());
   mlir::Value const payload = builder.createOrFold<tvm_ffi::UpcastOp>(
-      op.getLoc(), tvm_ffi::AnyType::get(builder.getContext()), checked);
+      op.getLoc(), tvm_ffi::CAnyType::get(builder.getContext()), checked);
   mlir::Value const value = mlir::UnrealizedConversionCastOp::create(
                                 builder, op.getLoc(), anyType, payload)
                                 .getResult(0);
@@ -177,9 +159,9 @@ class ConvertTVMFFIToFuncPass final
             builder.getBoolAttr(true));
         for (auto [index, type] :
              llvm::enumerate(tvmffiFuncOp.getArgumentTypes())) {
-          llvm::SmallVector<int32_t> const expected =
-              getExpectedTypeIndices(type);
-          if (expected.empty() && !mlir::isa<tvm_ffi::AnyType>(type)) {
+          tvm_ffi::TVMFFITypeIndexInterface const indexed =
+              mlir::dyn_cast<tvm_ffi::TVMFFITypeIndexInterface>(type);
+          if (!indexed && !mlir::isa<tvm_ffi::CAnyType>(type)) {
             tvmffiFuncOp.emitError("unsupported packed argument type ") << type;
             signalPassFailure();
             return mlir::WalkResult::interrupt();
@@ -190,30 +172,24 @@ class ConvertTVMFFIToFuncPass final
           const mlir::Value value = mlir::LLVM::LoadOp::create(
               builder, tvmffiFuncOp.getLoc(), llvmAnyTy, slot);
           mlir::Type const argumentType =
-              mlir::isa<tvm_ffi::FunctionType>(type)
-                  ? mlir::Type(tvm_ffi::AnyType::get(context))
+              mlir::isa<tvm_ffi::CFunctionType>(type)
+                  ? mlir::Type(tvm_ffi::CAnyType::get(context))
                   : type;
           arguments.push_back(
               mlir::UnrealizedConversionCastOp::create(
                   builder, tvmffiFuncOp.getLoc(), argumentType, value)
                   .getResult(0));
-          if (expected.empty()) {
+          if (!indexed) {
             continue;
           }
           const mlir::Value actual = mlir::LLVM::ExtractValueOp::create(
               builder, tvmffiFuncOp.getLoc(), i32Ty, value,
               llvm::ArrayRef<int64_t>{0});
-          mlir::Value condition = mlir::arith::ConstantIntOp::create(
-              builder, tvmffiFuncOp.getLoc(), 0, 1);
-          for (int32_t const expectedIndex : expected) {
-            mlir::Value const matches = mlir::LLVM::ICmpOp::create(
-                builder, tvmffiFuncOp.getLoc(), mlir::LLVM::ICmpPredicate::eq,
-                actual,
-                mlir::LLVM::ConstantOp::create(builder, tvmffiFuncOp.getLoc(),
-                                               i32Ty, expectedIndex));
-            condition = mlir::arith::OrIOp::create(
-                builder, tvmffiFuncOp.getLoc(), condition, matches);
-          }
+          mlir::Value const condition = mlir::LLVM::ICmpOp::create(
+              builder, tvmffiFuncOp.getLoc(), mlir::LLVM::ICmpPredicate::eq,
+              actual,
+              mlir::LLVM::ConstantOp::create(builder, tvmffiFuncOp.getLoc(),
+                                             i32Ty, indexed.getTypeIndex()));
           allTypesMatch = mlir::arith::AndIOp::create(
               builder, tvmffiFuncOp.getLoc(), allTypesMatch, condition);
         }
@@ -224,7 +200,7 @@ class ConvertTVMFFIToFuncPass final
         builder.setInsertionPointToStart(guard.thenBlock());
         for (auto [index, type] :
              llvm::enumerate(tvmffiFuncOp.getArgumentTypes())) {
-          if (mlir::isa<tvm_ffi::FunctionType>(type)) {
+          if (mlir::isa<tvm_ffi::CFunctionType>(type)) {
             arguments[index] = tvm_ffi::DowncastOp::create(
                 builder, tvmffiFuncOp.getLoc(), type, arguments[index]);
           }

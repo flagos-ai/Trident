@@ -23,14 +23,14 @@
 // CHECK: %[[RESULT_SLOT:[a-zA-Z0-9_]+]] = llvm.alloca
 // CHECK: llvm.call @overwrite(%[[WRAPPER_SOURCE]], %[[WRAPPER_DESTINATION]], %[[RESULT_SLOT]]) : (!llvm.struct<(i32, i32, i64)>, !llvm.struct<(i32, i32, i64)>, !llvm.ptr) -> i32
 
-tvm_ffi.func @overwrite(%source: !tvm_ffi.tensor,
-                         %destination: !tvm_ffi.tensor) -> !tvm_ffi.none
+tvm_ffi.func @overwrite(%source: !tvm_ffi.c.tensor,
+                         %destination: !tvm_ffi.c.tensor) -> !tvm_ffi.none
     attributes {emit_tvm_ffi_abi} {
-  tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.tensor
+  tvm_ffi.tensor.copy_ %destination, %source : !tvm_ffi.c.tensor
 
   %returned_none = tvm_ffi.constant.none
-  %returned = tvm_ffi.monad.pure %returned_none {tvm_ffi.cleanup} : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  %returned = tvm_ffi.monad.pure %returned_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
   %return_ok_1, %return_value_1 = tvm_ffi.monad.unpack %returned : (!tvm_ffi.monad.result<!tvm_ffi.none>) -> (i1, !tvm_ffi.any)
   %return_flag_1 = tvm_ffi.to %return_ok_1 : i1 -> !tvm_ffi.bool
-  tvm_ffi.return {tvm_ffi.retain} %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }

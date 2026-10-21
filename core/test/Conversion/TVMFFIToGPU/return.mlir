@@ -16,11 +16,11 @@ module attributes {gpu.container_module} {
   // CHECK: %[[REJECTION:[a-zA-Z0-9_]+]] = tvm_ffi.monad.fail
   // CHECK: scf.yield %[[REJECTION]]
   // CHECK: return %[[OUTCOME]]
-  func.func @monadic_launch(%tensor: !tvm_ffi.tensor, %scalar: i64) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
+  func.func @monadic_launch(%tensor: !tvm_ffi.c.tensor, %scalar: i64) -> !tvm_ffi.monad.result<!tvm_ffi.none> {
     %one = arith.constant 1 : i64
     %launch = tvm_ffi.kernel_launch @kernel::@entry
       blocks in (%one, %one, %one) : i64 threads in (%one, %one, %one)
-      args (%tensor : !tvm_ffi.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr>, %scalar : i64 #tvm_ffi.variable_specialization<kind = i64, divisibility = 16>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+      args (%tensor : !tvm_ffi.c.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr>, %scalar : i64 #tvm_ffi.variable_specialization<kind = i64, divisibility = 16>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     func.return %launch : !tvm_ffi.monad.result<!tvm_ffi.none>
   }
 }

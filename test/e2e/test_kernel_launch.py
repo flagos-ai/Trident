@@ -20,6 +20,13 @@ def increment_kernel(value: tl.tensor, BLOCK: tl.constexpr):
     tl.store(value + offsets, tl.load(value + offsets) + 1)
 
 
+@triton.jit
+def shift_kernel(value: tl.tensor, BLOCK: tl.constexpr, MODE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK)
+    delta = 1 if MODE == "increment" else -1
+    tl.store(value + offsets, tl.load(value + offsets) + delta)
+
+
 class KernelLaunchTest(unittest.TestCase):
     def test_cleanup_after_rejection(self) -> None:
         @trident.jit
@@ -94,6 +101,23 @@ class KernelLaunchTest(unittest.TestCase):
                 "!tvm_ffi.monad.result<!tvm_ffi.none>",
                 f"{increment._sub_modules[0]}",
             )
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
+    def test_string_specialization(self) -> None:
+        @trident.jit
+        def shift(value: torch.Tensor, mode: str) -> None:
+            shift_kernel[(1, 1, 1)](value, BLOCK=64, MODE=mode)
+
+        def check() -> None:
+            for mode, delta in (("increment", 1), ("decrement", -1)):
+                for phase in ("first", "cached"):
+                    with self.subTest(mode=mode, phase=phase):
+                        value = torch.zeros(64, device="cuda")
+                        self.assertIsNone(shift(value, mode))
+                        torch.testing.assert_close(value, torch.full_like(value, delta))
+            self.assertEqual(len(shift._sub_modules), 2)
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

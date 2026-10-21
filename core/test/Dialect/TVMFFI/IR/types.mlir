@@ -24,6 +24,13 @@ func.func private @type_bool(%value: !tvm_ffi.bool) -> !tvm_ffi.bool {
   return %value : !tvm_ffi.bool
 }
 
+// CHECK-LABEL: func.func private @type_c_any(
+// CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.any) -> !tvm_ffi.c.any
+// CHECK: return %[[VALUE]] : !tvm_ffi.c.any
+func.func private @type_c_any(%value: !tvm_ffi.c.any) -> !tvm_ffi.c.any {
+  return %value : !tvm_ffi.c.any
+}
+
 // CHECK-LABEL: func.func private @type_device(
 // CHECK-SAME: %[[VALUE_DEVICE:[a-zA-Z0-9_]+]]: !tvm_ffi.device) -> !tvm_ffi.device
 // CHECK: return %[[VALUE_DEVICE]] : !tvm_ffi.device
@@ -39,10 +46,10 @@ func.func private @type_dtype(%value: !tvm_ffi.dtype) -> !tvm_ffi.dtype {
 }
 
 // CHECK-LABEL: func.func private @type_extensions(
-// CHECK-SAME: %[[EXTENSION:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
-// CHECK: return %[[EXTENSION]] : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
-func.func private @type_extensions(%value: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>> {
-  return %value : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>>
+// CHECK-SAME: %[[EXTENSION:[a-zA-Z0-9_]+]]: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.c.exception>>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.c.exception>>
+// CHECK: return %[[EXTENSION]] : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.c.exception>>
+func.func private @type_extensions(%value: !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.c.exception>>) -> !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.c.exception>> {
+  return %value : !tvm_ffi.monad.result<!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.c.exception>>
 }
 // CHECK-LABEL: func.func private @type_float(
 // CHECK-SAME: %[[VALUE_FLOAT:[a-zA-Z0-9_]+]]: !tvm_ffi.float) -> !tvm_ffi.float
@@ -52,10 +59,10 @@ func.func private @type_float(%value: !tvm_ffi.float) -> !tvm_ffi.float {
 }
 
 // CHECK-LABEL: func.func private @type_function(
-// CHECK-SAME: %[[VALUE_FUNCTION:[a-zA-Z0-9_]+]]: !tvm_ffi.function) -> !tvm_ffi.function
-// CHECK: return %[[VALUE_FUNCTION]] : !tvm_ffi.function
-func.func private @type_function(%value: !tvm_ffi.function) -> !tvm_ffi.function {
-  return %value : !tvm_ffi.function
+// CHECK-SAME: %[[VALUE_FUNCTION:[a-zA-Z0-9_]+]]: !tvm_ffi.c.function) -> !tvm_ffi.c.function
+// CHECK: return %[[VALUE_FUNCTION]] : !tvm_ffi.c.function
+func.func private @type_function(%value: !tvm_ffi.c.function) -> !tvm_ffi.c.function {
+  return %value : !tvm_ffi.c.function
 }
 
 // CHECK-LABEL: func.func private @type_int(
@@ -94,16 +101,16 @@ func.func private @type_small_str(%value: !tvm_ffi.small_str) -> !tvm_ffi.small_
 }
 
 // CHECK-LABEL: func.func private @type_str(
-// CHECK-SAME: %[[VALUE_STR:[a-zA-Z0-9_]+]]: !tvm_ffi.str) -> !tvm_ffi.str
-// CHECK: return %[[VALUE_STR]] : !tvm_ffi.str
-func.func private @type_str(%value: !tvm_ffi.str) -> !tvm_ffi.str {
-  return %value : !tvm_ffi.str
+// CHECK-SAME: %[[VALUE_STR:[a-zA-Z0-9_]+]]: !tvm_ffi.c.str) -> !tvm_ffi.c.str
+// CHECK: return %[[VALUE_STR]] : !tvm_ffi.c.str
+func.func private @type_str(%value: !tvm_ffi.c.str) -> !tvm_ffi.c.str {
+  return %value : !tvm_ffi.c.str
 }
 
 // CHECK-LABEL: func.func private @type_tensor(
-// CHECK-SAME: %[[VALUE_TENSOR:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor) -> !tvm_ffi.tensor
-// CHECK: return %[[VALUE_TENSOR]] : !tvm_ffi.tensor
-func.func private @type_tensor(%value: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
-  return %value : !tvm_ffi.tensor
+// CHECK-SAME: %[[VALUE_TENSOR:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor
+// CHECK: return %[[VALUE_TENSOR]] : !tvm_ffi.c.tensor
+func.func private @type_tensor(%value: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor {
+  return %value : !tvm_ffi.c.tensor
 }
 

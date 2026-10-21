@@ -3,7 +3,7 @@
 
 // RUN: trident-core-opt %s --convert-tvm-ffi-to-llvm --verify-each | FileCheck %s --implicit-check-not='tvm_ffi.call' --implicit-check-not='scf.' --implicit-check-not='ffi.Array' --implicit-check-not='TVMFFIFunction' --implicit-check-not='TVMFFIObject'
 
-func.func private @callee(!tvm_ffi.tensor, !tvm_ffi.int, !llvm.ptr) -> i32 attributes {emit_tvm_ffi_abi}
+func.func private @callee(!tvm_ffi.c.tensor, !tvm_ffi.int, !llvm.ptr) -> i32 attributes {emit_tvm_ffi_abi}
 func.func private @empty(!llvm.ptr) -> i32 attributes {emit_tvm_ffi_abi}
 func.func private @__tvm_ffi_callee(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 func.func private @__tvm_ffi_empty(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
@@ -33,9 +33,9 @@ func.func private @__tvm_ffi_empty(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK-NEXT: llvm.br ^[[CONTINUE]](%[[PAYLOAD]] :
 // CHECK: ^[[CONTINUE]](%[[VALUE:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>):
 // CHECK-NEXT: return %[[FLAG]], %[[VALUE]]
-func.func @invoke(%input: !tvm_ffi.tensor, %second: !tvm_ffi.int) -> (!tvm_ffi.bool, !tvm_ffi.any) {
-  %ok, %value = tvm_ffi.call @callee(%input, %second) : (!tvm_ffi.tensor, !tvm_ffi.int) -> (!tvm_ffi.bool, !tvm_ffi.any)
-  return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
+func.func @invoke(%input: !tvm_ffi.c.tensor, %second: !tvm_ffi.int) -> (!tvm_ffi.bool, !tvm_ffi.c.any) {
+  %ok, %value = tvm_ffi.call @callee(%input, %second) : (!tvm_ffi.c.tensor, !tvm_ffi.int) -> (!tvm_ffi.bool, !tvm_ffi.c.any)
+  return %ok, %value : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 // CHECK-LABEL: func.func @invoke_empty(
 // CHECK: %[[EMPTY_COUNT:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i64)
@@ -45,9 +45,9 @@ func.func @invoke(%input: !tvm_ffi.tensor, %second: !tvm_ffi.int) -> (!tvm_ffi.b
 // CHECK-NEXT: %[[EMPTY_ARITY:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: %[[EMPTY_STATUS:[a-zA-Z0-9_]+]] = call @__tvm_ffi_empty(%[[EMPTY_CONTEXT]], %[[EMPTY_ARGS]], %[[EMPTY_ARITY]], %[[EMPTY_OUTPUT]])
 // CHECK: llvm.icmp "eq" %[[EMPTY_STATUS]], %[[EMPTY_ZERO:[a-zA-Z0-9_]+]]
-func.func @invoke_empty() -> (!tvm_ffi.bool, !tvm_ffi.any) {
-  %ok, %value = tvm_ffi.call @empty() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
-  return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
+func.func @invoke_empty() -> (!tvm_ffi.bool, !tvm_ffi.c.any) {
+  %ok, %value = tvm_ffi.call @empty() : () -> (!tvm_ffi.bool, !tvm_ffi.c.any)
+  return %ok, %value : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // Repeated calls reuse the wrapper supplied by TVMFFIToFunc.
@@ -57,7 +57,7 @@ func.func private @__tvm_ffi_repeated(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i
 // CHECK: call @__tvm_ffi_repeated
 // CHECK: call @__tvm_ffi_repeated
 func.func @invoke_repeated() {
-  %first_ok, %first = tvm_ffi.call @repeated() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
-  %second_ok, %second = tvm_ffi.call @repeated() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
+  %first_ok, %first = tvm_ffi.call @repeated() : () -> (!tvm_ffi.bool, !tvm_ffi.c.any)
+  %second_ok, %second = tvm_ffi.call @repeated() : () -> (!tvm_ffi.bool, !tvm_ffi.c.any)
   return
 }

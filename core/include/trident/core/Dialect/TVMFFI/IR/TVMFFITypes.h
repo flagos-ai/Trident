@@ -82,12 +82,11 @@ public:
   static ::mlir::LLVM::LLVMStructType getLLVMType(::mlir::MLIRContext *context);
 };
 
-/// A type with a public C representation or object layout and a type index.
+/// A type with a public C representation or object layout.
 class TVMFFICBaseABIType : public TVMFFICABIType {
 public:
   using TVMFFICABIType::TVMFFICABIType;
 
-  int32_t getTypeIndex() const;
   static bool classof(::mlir::Type type);
 };
 

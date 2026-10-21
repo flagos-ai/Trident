@@ -18,9 +18,7 @@
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIOps.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <llvm/ADT/ArrayRef.h>
-#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLExtras.h>
-#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/TypeSwitch.h>             // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h> // NOLINT(misc-include-cleaner)
 #include <mlir/IR/Attributes.h>
@@ -67,7 +65,8 @@ struct TVMFFIInlinerInterface final : mlir::DialectInlinerInterface {
 namespace {
 
 bool isTaggedCastType(mlir::Type type) {
-  if (mlir::isa<AnyType, ArrayType, TupleType>(type)) {
+  if (mlir::isa<AnyType, CAnyType, ArrayType, ExceptionType, FunctionType,
+                StrType, TensorType, TupleType>(type)) {
     return true;
   }
   if (UnionType const unionType = mlir::dyn_cast<UnionType>(type)) {
@@ -79,14 +78,6 @@ bool isTaggedCastType(mlir::Type type) {
 
 } // namespace
 
-mlir::LogicalResult
-ArrayType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
-                  TVMFFICABIType element) {
-  return TVMFFICABIType::classof(element)
-             ? mlir::success()
-             : emitError() << "array element must be a TVM FFI C ABI type";
-}
-
 bool DowncastOp::areCastCompatible(mlir::TypeRange inputs,
                                    mlir::TypeRange outputs) {
   if (inputs.size() != 1 || outputs.size() != 1 ||
@@ -96,18 +87,23 @@ bool DowncastOp::areCastCompatible(mlir::TypeRange inputs,
   if (inputs[0] == outputs[0]) {
     return true;
   }
-  if (mlir::isa<AnyType>(outputs[0])) {
+  if (mlir::isa<AnyType, CAnyType>(outputs[0])) {
     return false;
   }
-  if (mlir::isa<AnyType>(inputs[0])) {
-    return true;
-  }
-  UnionType const source = mlir::dyn_cast<UnionType>(inputs[0]);
-  if (!source || !source.contains(mlir::cast<TVMFFICABIType>(outputs[0]))) {
-    return false;
-  }
-  UnionType const target = mlir::dyn_cast<UnionType>(outputs[0]);
-  return !target || !target.contains(mlir::cast<TVMFFICABIType>(inputs[0]));
+  return llvm::TypeSwitch<mlir::Type, bool>(inputs[0])
+      .Case<AnyType, CAnyType>([](mlir::Type) -> bool { return true; })
+      .Case<StrType>([&](StrType) -> bool {
+        return mlir::isa<RawStrType, SmallStrType, CStrType>(outputs[0]);
+      })
+      .Case<UnionType>([&](UnionType source) -> bool {
+        if (!source.contains(mlir::cast<TVMFFICABIType>(outputs[0]))) {
+          return false;
+        }
+        UnionType const target = mlir::dyn_cast<UnionType>(outputs[0]);
+        return !target ||
+               !target.contains(mlir::cast<TVMFFICABIType>(inputs[0]));
+      })
+      .Default([](mlir::Type) -> bool { return false; });
 }
 
 void FuncOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
@@ -149,14 +145,6 @@ void FuncOp::print(mlir::OpAsmPrinter &p) {
       getArgAttrsAttrName(), getResAttrsAttrName());
 }
 
-mlir::LogicalResult
-ResultType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
-                   TVMFFICABIType payload) {
-  return TVMFFICABIType::classof(payload)
-             ? mlir::success()
-             : emitError() << "Result payload must be a TVM FFI C ABI type";
-}
-
 void TVMFFIDialect::initialize() {
   addInterfaces<TVMFFIInlinerInterface>();
   addAttributes<
@@ -174,109 +162,6 @@ void TVMFFIDialect::initialize() {
       >();
 }
 
-mlir::Type TupleType::parse(mlir::AsmParser &parser) {
-  llvm::SMLoc loc = parser.getCurrentLocation();
-  llvm::SmallVector<TVMFFICABIType> types;
-  if (mlir::failed(parser.parseCommaSeparatedList(
-          mlir::AsmParser::Delimiter::LessGreater, [&]() -> mlir::ParseResult {
-            mlir::Type type;
-            if (mlir::failed(parser.parseType(type))) {
-              return mlir::failure();
-            }
-            TVMFFICABIType const member = mlir::dyn_cast<TVMFFICABIType>(type);
-            if (!member) {
-              return parser.emitError(loc)
-                     << "tuple elements must be TVM FFI C ABI types";
-            }
-            types.push_back(member);
-            return mlir::success();
-          }))) {
-    return {};
-  }
-  return getChecked(
-      [&]() -> mlir::InFlightDiagnostic { return parser.emitError(loc); },
-      parser.getContext(), llvm::ArrayRef<TVMFFICABIType>(types));
-}
-
-void TupleType::print(mlir::AsmPrinter &printer) const {
-  printer << '<';
-  llvm::interleaveComma(getTypes(), printer);
-  printer << '>';
-}
-
-mlir::LogicalResult
-TupleType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
-                  llvm::ArrayRef<TVMFFICABIType> types) {
-  return llvm::all_of(types,
-                      [](TVMFFICABIType type) -> bool {
-                        return TVMFFICABIType::classof(type);
-                      })
-             ? mlir::success()
-             : emitError() << "tuple elements must be TVM FFI C ABI types";
-}
-
-bool UnionType::contains(TVMFFICABIType type) const {
-  if (const UnionType unionType = mlir::dyn_cast<UnionType>(type)) {
-    return llvm::all_of(unionType.getTypes(),
-                        [&](const mlir::Type member) -> bool {
-                          return llvm::is_contained(getTypes(), member);
-                        });
-  }
-  return llvm::is_contained(getTypes(), type);
-}
-
-mlir::Type UnionType::parse(mlir::AsmParser &parser) {
-  llvm::SMLoc loc = parser.getCurrentLocation();
-  llvm::SmallVector<TVMFFICABIType> types;
-  if (mlir::failed(parser.parseCommaSeparatedList(
-          mlir::AsmParser::Delimiter::LessGreater, [&]() -> mlir::ParseResult {
-            mlir::Type type;
-            if (mlir::failed(parser.parseType(type))) {
-              return mlir::failure();
-            }
-            TVMFFICABIType const member = mlir::dyn_cast<TVMFFICABIType>(type);
-            if (!member) {
-              return parser.emitError(loc)
-                     << "union members must be TVM FFI C ABI types";
-            }
-            types.push_back(member);
-            return mlir::success();
-          }))) {
-    return {};
-  }
-  return getChecked(
-      [&]() -> mlir::InFlightDiagnostic { return parser.emitError(loc); },
-      parser.getContext(), llvm::ArrayRef<TVMFFICABIType>(types));
-}
-
-void UnionType::print(mlir::AsmPrinter &printer) const {
-  printer << '<';
-  llvm::interleaveComma(getTypes(), printer);
-  printer << '>';
-}
-
-mlir::LogicalResult
-UnionType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
-                  llvm::ArrayRef<TVMFFICABIType> types) {
-  if (types.size() < 2) {
-    return emitError() << "union requires at least two member types";
-  }
-  llvm::SmallDenseSet<mlir::Type> uniqueTypes;
-  for (mlir::Type const type : types) {
-    if (!mlir::isa<TVMFFICABIType>(type) ||
-        mlir::isa<AnyType, UnionType>(type)) {
-      return emitError() << "invalid union member type " << type;
-    }
-    if (!mlir::isa<TVMFFITypeIndexInterface>(type)) {
-      return emitError() << "invalid union member type " << type;
-    }
-    if (!uniqueTypes.insert(type).second) {
-      return emitError() << "union member types must be unique";
-    }
-  }
-  return mlir::success();
-}
-
 bool UpcastOp::areCastCompatible(mlir::TypeRange inputs,
                                  mlir::TypeRange outputs) {
   if (inputs.size() != 1 || outputs.size() != 1) {
@@ -285,7 +170,9 @@ bool UpcastOp::areCastCompatible(mlir::TypeRange inputs,
   mlir::Type const input = inputs[0];
   mlir::Type output = outputs[0];
   return isTaggedCastType(input) && isTaggedCastType(output) &&
-         (input == output || mlir::isa<AnyType>(output) ||
+         (input == output || mlir::isa<AnyType, CAnyType>(output) ||
+          (mlir::isa<StrType>(output) &&
+           mlir::isa<RawStrType, SmallStrType, CStrType>(input)) ||
           (mlir::isa<UnionType>(output) &&
            mlir::cast<UnionType>(output).contains(
                mlir::cast<TVMFFICABIType>(input))));

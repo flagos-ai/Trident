@@ -12,8 +12,8 @@
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/MaterializeOwnershipMark.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
@@ -39,12 +39,11 @@ class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
   void runOnOperation() final {
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
-    // Erase semantic containers before reference classification, while keeping
-    // lexical cleanup before inlining can merge its block scopes.
+    // Materialize lexical cleanup before inlining can merge its block scopes.
     pm.addPass(createConvertTVMFFIToGPU());
     pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
     pm.addPass(tvm_ffi::createDecomposeTVMFFI());
-    pm.addPass(tvm_ffi::createMaterializeTVMFFICleanup());
+    pm.addPass(tvm_ffi::createLowerTVMFFIDefer());
     pm.addPass(mlir::createInlinerPass());
     pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
@@ -52,13 +51,15 @@ class TridentLoweringPipelinePass final
     pm.addPass(createConvertTVMFFIToFunc());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
+    // GPU conversion simplifies regions before applying LLVM patterns. Run it
+    // before packed calls and reference checks expand into large LLVM CFGs.
+    pm.addPass(
+        mlir::createGpuToLLVMConversionPass()); // NOLINT(misc-include-cleaner)
     pm.addPass(createConvertTVMFFIToLLVM());
     pm.addPass(createConvertDLPackToLLVM());
     pm.addPass(mlir::createUBToLLVMConversionPass());
     pm.addPass(mlir::createArithToLLVMConversionPass());
     pm.addPass(mlir::createConvertControlFlowToLLVMPass());
-    pm.addPass(
-        mlir::createGpuToLLVMConversionPass()); // NOLINT(misc-include-cleaner)
     pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(mlir::createConvertFuncToLLVMPass());
     pm.addPass(mlir::createCanonicalizerPass());

@@ -76,7 +76,12 @@ public:
     for (auto [specialization, source] : llvm::zip(
              specializations.getAsRange<tvm_ffi::SpecializationAttrInterface>(),
              op.getKernelOperands())) {
-      mlir::Value const operand = materializeOperand(specialization, source);
+      // Constant checks compare ABI values directly, including semantic
+      // strings.
+      mlir::Value const operand =
+          mlir::isa<tvm_ffi::ConstantSpecializationAttr>(specialization)
+              ? source
+              : materializeOperand(specialization, source);
       if (!operand) {
         return op.emitOpError("failed to materialize a native kernel operand");
       }
@@ -191,7 +196,8 @@ public:
         return {};
       }
       mlir::Value input = inputs.front();
-      if (mlir::isa<tvm_ffi::TensorType>(input.getType())) {
+      if (mlir::isa<tvm_ffi::TensorType, tvm_ffi::CTensorType>(
+              input.getType())) {
         if (!mlir::isa<mlir::LLVM::LLVMPointerType>(resultType)) {
           return {};
         }
