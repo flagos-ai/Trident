@@ -8,28 +8,31 @@ import operator
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import reduce
+from functools import partial, reduce
 from itertools import pairwise
 from typing import Any, ClassVar
 
 import torch
 
 from trident.core import ir
-from trident.core.dialects import arith
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
 from trident.ir import (
+    BindScope,
+    ScopeStack,
     binary,
-    bind,
     checked_call,
     constant,
     constant_type,
     equal,
+    logical_not,
     make_result_types,
-    native,
-    native_constant,
-    native_type,
+    negate,
     pure,
+    select,
+    tensor_dim,
+    tensor_size,
+    tensor_stride,
 )
 
 from .local import Local
@@ -208,7 +211,7 @@ class GuardExpressionVisitor:
         elif self._direct_fallback(node):
             source, _, _ = ASTVisitor.metadata(node)
             analysis = _ExpressionAnalysis(
-                ir.IntegerType.get_signless(1), fallback=source is not None
+                tvm_ffi_d.BoolType.get(), fallback=source is not None
             )
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             analysis = _ExpressionAnalysis(constant_type(getattr(torch, node.attr)))
@@ -243,32 +246,34 @@ class GuardExpressionVisitor:
                 or isinstance(node, ast.Compare)
                 or (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not))
             ):
-                type_ = ir.IntegerType.get_signless(1)
+                type_ = tvm_ffi_d.BoolType.get()
             elif isinstance(node, ast.Attribute):
                 [type_] = types
             elif isinstance(node, (ast.BoolOp, ast.UnaryOp)):
                 first_type, *_ = types
-                type_ = native_type(first_type)
+                type_ = (
+                    tvm_ffi_d.IntType.get()
+                    if isinstance(node, ast.UnaryOp)
+                    and isinstance(node.op, ast.USub)
+                    and isinstance(first_type, tvm_ffi_d.BoolType)
+                    else first_type
+                )
             elif isinstance(node, ast.IfExp):
                 _, body_type, _ = types
-                type_ = native_type(body_type)
+                type_ = body_type
             elif length:
-                type_ = ir.IntegerType.get_signless(64)
+                type_ = tvm_ffi_d.IntType.get()
             elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-                type_ = ir.F64Type.get()
+                type_ = tvm_ffi_d.FloatType.get()
             else:
-                types = [native_type(type_) for type_ in types]
                 type_ = (
-                    ir.IntegerType.get_signless(1)
+                    tvm_ffi_d.BoolType.get()
                     if isinstance(node, ast.BinOp)
                     and isinstance(node.op, ast.BitOr)
-                    and all(
-                        isinstance(type_, ir.IntegerType) and type_.width == 1
-                        for type_ in types
-                    )
-                    else ir.F64Type.get()
-                    if any(isinstance(type_, ir.F64Type) for type_ in types)
-                    else ir.IntegerType.get_signless(64)
+                    and all(isinstance(type_, tvm_ffi_d.BoolType) for type_ in types)
+                    else tvm_ffi_d.FloatType.get()
+                    if any(isinstance(type_, tvm_ffi_d.FloatType) for type_ in types)
+                    else tvm_ffi_d.IntType.get()
                 )
             analysis = _ExpressionAnalysis(
                 type_, tuple(operands), pure, fallback, array_size
@@ -276,50 +281,42 @@ class GuardExpressionVisitor:
         self._analysis[node] = analysis
         return analysis
 
-    def _build_comparison(self, node: ast.Compare, index: int = 0) -> list[ir.Value]:
+    def _build_comparison(self, node: ast.Compare) -> list[ir.Value]:
         analysis = self._analyze(node)
         types = make_result_types([analysis.type])
-        if index == len(node.ops):
-            return pure([native_constant(True)], result_types=types)
-        operands = analysis.operands[2 * index : 2 * index + 2]
-        with bind(self._build_operands(operands), result_types=types) as operation:
-            if any(self._analyze(operand).fallback is not None for operand in operands):
-                *_, fallback = operation.arguments
-                results = pure([fallback], result_types=types)
+        with ScopeStack() as stack:
+            comparisons: list[ir.Value] = []
+            for index, operation in enumerate(node.ops):
+                operands = analysis.operands[2 * index : 2 * index + 2]
+                values = stack.bind(types, self._build_operands(operands))
+                if any(
+                    self._analyze(operand).fallback is not None for operand in operands
+                ):
+                    # A whole-expression fallback replaces preceding comparisons.
+                    value = values[-1]
+                    break
+                comparisons.append(self._compare(operation, *values))
             else:
-                comparison = self._compare(node.ops[index], *operation.arguments)
-                with bind(
-                    self._build_comparison(node, index + 1), result_types=types
-                ) as remaining:
-                    # A later whole-expression fallback replaces preceding comparisons.
-                    [value] = remaining.arguments
-                    if analysis.fallback is None:
-                        value = arith.andi(comparison, native(value))
-                    tvm_ffi_d.monad_yield(pure([value], result_types=types))
-
-                results = [*remaining.outputs]
-            tvm_ffi_d.monad_yield(results)
-        return [*operation.outputs]
+                value = reduce(
+                    partial(binary, operator.and_), comparisons, constant(True)
+                )
+            results = pure([value], result_types=types)
+            return stack.yield_(results)
 
     def _build_operands(self, operands: Sequence[ast.expr]) -> list[ir.Value]:
         """Build analyzed operands, already truncated at the first fallback."""
         types = make_result_types(self._analyze(value).type for value in operands)
 
-        def build(start: int, values: list[ir.Value]) -> list[ir.Value]:
-            for index in range(start, len(operands)):
-                operand = operands[index]
+        with ScopeStack() as stack:
+            values: list[ir.Value] = []
+            for operand in operands:
                 if self._analyze(operand).pure:
                     values.append(self.value(operand))
-                    continue
-                with bind(self.build(operand), result_types=types) as operation:
-                    tvm_ffi_d.monad_yield(
-                        build(index + 1, [*values, *operation.arguments])
-                    )
-
-                return [*operation.outputs]
-            return pure(values, result_types=types)
-
-        return build(0, [])
+                else:
+                    scope = stack.push(BindScope(types, self.build(operand)))
+                    values.extend(scope.arguments)
+            results = pure(values, result_types=types)
+            return stack.yield_(results)
 
     def _compare(self, operation: ast.cmpop, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
         if isinstance(operation, ast.Is) and all(
@@ -330,7 +327,7 @@ class GuardExpressionVisitor:
                 RuntimeWarning,
                 stacklevel=2,
             )
-            return native_constant(True)
+            return constant(True)
         else:
             return (
                 equal(lhs, rhs)
@@ -365,46 +362,38 @@ class GuardExpressionVisitor:
             return binary(ASTVisitor.scalar_ops[type(node.op)], *values)
         elif isinstance(node, ast.BoolOp):
             return reduce(
-                arith.andi if isinstance(node.op, ast.And) else arith.ori,
-                (native(value) for value in values),
+                partial(
+                    binary,
+                    operator.and_ if isinstance(node.op, ast.And) else operator.or_,
+                ),
+                values,
             )
         elif isinstance(node, ast.IfExp):
-            return arith.select(*(native(value) for value in values))
+            return select(*values)
         elif isinstance(node, ast.UnaryOp):
             [value] = values
-            value = native(value)
             if isinstance(node.op, ast.Not):
-                return (
-                    binary(operator.eq, value, native_constant(0))
-                    if Local.from_expression(node.operand) is not None
-                    else arith.xori(value, native_constant(True))
-                )
+                return logical_not(value)
             elif isinstance(node.op, ast.USub):
-                return (
-                    arith.negf(value)
-                    if isinstance(value.type, ir.F64Type)
-                    else arith.subi(native_constant(0), value)
-                )
+                return negate(value)
             else:
                 return value
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id == "len":
                 [value] = values
-                return tvm_ffi_d.tensor_dim(value)
+                return tensor_dim(value)
             else:
                 return binary(ASTVisitor.scalar_ops[node.func.id], *values)
         else:
             _, method, index = ASTVisitor.metadata(node)
             [value] = values
             if method == "ndimension":
-                return tvm_ffi_d.tensor_dim(value)
+                return tensor_dim(value)
             else:
                 assert index is not None
-                return (
-                    tvm_ffi_d.tensor_size
-                    if method == "size"
-                    else tvm_ffi_d.tensor_stride
-                )(value, native_constant(index))
+                return (tensor_size if method == "size" else tensor_stride)(
+                    value, constant(index)
+                )
 
     def _operands(self, node: ast.expr) -> Sequence[ast.expr]:
         """Select operands in evaluation order, retaining comparison diagnostics."""
@@ -476,27 +465,18 @@ class GuardExpressionVisitor:
         elif isinstance(node, ast.Compare):
             return self._build_comparison(node)
         else:
-            with bind(
-                self._build_operands(analysis.operands), result_types=types
-            ) as operation:
+            with BindScope(types, self._build_operands(analysis.operands)) as scope:
+                payloads = scope.arguments
                 if analysis.fallback is not None:
-                    *_, fallback = operation.arguments
+                    *_, fallback = payloads
                     results = pure([fallback], result_types=types)
                 elif analysis.array_size:
-                    with bind(
-                        self._container_size(operation.arguments[0]),
-                        result_types=types,
-                    ) as length:
-                        [value] = length.arguments
-                        tvm_ffi_d.monad_yield(pure([native(value)], result_types=types))
-
-                    results = [*length.outputs]
+                    results = self._container_size(payloads[0])
                 else:
-                    results = pure(
-                        [self._evaluate(node, operation.arguments)], result_types=types
-                    )
-                tvm_ffi_d.monad_yield(results)
-            return [*operation.outputs]
+                    results = pure([self._evaluate(node, payloads)], result_types=types)
+                scope.yield_(results)
+                bound_results = scope.results
+            return [*bound_results]
 
     def value(self, node: ast.expr) -> ir.Value:
         """Evaluate a pure expression through ordinary values and shared operations."""
@@ -524,7 +504,7 @@ class GuardExpressionVisitor:
                     RuntimeWarning,
                     stacklevel=2,
                 )
-            return native_constant(fallback)
+            return constant(fallback)
         values = []
         comparisons: list[ir.Value] = []
         for index, operand in enumerate(analysis.operands):
@@ -535,7 +515,7 @@ class GuardExpressionVisitor:
             if isinstance(node, ast.Compare) and index % 2:
                 comparisons.append(self._compare(node.ops[index // 2], *values[-2:]))
         if isinstance(node, ast.Compare):
-            return reduce(arith.andi, comparisons, native_constant(True))
+            return reduce(partial(binary, operator.and_), comparisons, constant(True))
         else:
             return self._evaluate(node, values)
 

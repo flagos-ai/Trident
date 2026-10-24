@@ -130,45 +130,65 @@ class GuardExpressionTest(unittest.TestCase):
 
     def test_supported_expressions(self) -> None:
         cases = (
-            ("bitwise_or", "(1 | 2) == 3", ir.IntegerType, 1, ("arith.ori",)),
-            ("boolean_logic", "True and not False", ir.IntegerType, 1, ("arith.xori",)),
-            ("chained_comparison", "1 == 1 <= 3", ir.IntegerType, 1, ("arith.cmpi",)),
+            ("bitwise_or", "(1 | 2) == 3", tvm_ffi_d.BoolType, ("arith.ori",)),
+            (
+                "boolean_logic",
+                "True and not False",
+                tvm_ffi_d.BoolType,
+                ("arith.cmpi",),
+            ),
+            ("boolean_or", "True | False", tvm_ffi_d.BoolType, ("arith.ori",)),
+            ("chained_comparison", "1 == 1 <= 3", tvm_ffi_d.BoolType, ("arith.cmpi",)),
             (
                 "dtype",
                 "torch.float32",
                 tvm_ffi_d.DTypeType,
-                None,
                 ("tvm_ffi.constant.dtype",),
             ),
             (
                 "float_comparison",
                 "1.0 + 2.0 <= 4.0",
-                ir.IntegerType,
-                1,
+                tvm_ffi_d.BoolType,
                 ("arith.addf", "arith.cmpf"),
             ),
-            ("integer_addition", "1 + 2", ir.IntegerType, 64, ("arith.addi",)),
-            ("negation", "-1", ir.IntegerType, 64, ("arith.subi",)),
-            ("true_division", "5 / 2", ir.F64Type, None, ("arith.divf",)),
+            ("float_negation", "-1.5", tvm_ffi_d.FloatType, ("arith.negf",)),
+            ("integer_addition", "1 + 2", tvm_ffi_d.IntType, ("arith.addi",)),
+            (
+                "mixed_boolean_float",
+                "True + 2.0",
+                tvm_ffi_d.FloatType,
+                ("arith.extui", "arith.sitofp", "arith.addf"),
+            ),
+            (
+                "mixed_boolean_integer",
+                "True | 2",
+                tvm_ffi_d.IntType,
+                ("arith.extui", "arith.ori"),
+            ),
+            ("negation", "-1", tvm_ffi_d.IntType, ("arith.subi",)),
+            ("select", "1 if True else 2", tvm_ffi_d.IntType, ("scf.if",)),
+            (
+                "string_equality",
+                "'name' == 'name'",
+                tvm_ffi_d.BoolType,
+                ("tvm_ffi.eq", "tvm_ffi.to"),
+            ),
+            ("true_division", "5 / 2", tvm_ffi_d.FloatType, ("arith.divf",)),
         )
-        for name, text, type_class, width, operations in cases:
+        for name, text, type_class, operations in cases:
             with self.subTest(case=name):
                 actual_type, module = self._build_expression(text)
                 self.assertIsInstance(actual_type, type_class)
-                if width is not None:
-                    self.assertTrue(actual_type.is_signless)
-                    self.assertEqual(actual_type.width, width)
                 for operation in operations:
                     self.assertIn(operation, module)
+                self.assertNotIn("arith.constant", module)
                 self.assertNotIn("torch.aten.", module)
 
     def test_tensor_base_fallback(self) -> None:
         with self.assertWarnsRegex(RuntimeWarning, "Tensor\\._base guard"):
             result_type, module = self._build_expression("L['x']._base.size()[0] == 1")
-        self.assertIsInstance(result_type, ir.IntegerType)
-        self.assertTrue(result_type.is_signless)
-        self.assertEqual(result_type.width, 1)
-        self.assertIn("arith.constant false", module)
+        self.assertIsInstance(result_type, tvm_ffi_d.BoolType)
+        self.assertIn("tvm_ffi.constant.bool false", module)
 
 
 class GuardParsingTest(unittest.TestCase):

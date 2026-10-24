@@ -22,8 +22,10 @@ class ASTCode(GuardCode):
         self,
         text: str,
         expression: ast.expr,
+        *,
+        source: Local | None = None,
     ) -> None:
-        super().__init__(text, None)
+        super().__init__(text, source)
         self.expression: Final[ast.expr] = expression
         self.supported: Final[bool] = ASTVisitor.supports(expression)
 

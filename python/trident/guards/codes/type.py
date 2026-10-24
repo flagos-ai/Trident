@@ -7,8 +7,8 @@ import re
 from typing import Self
 
 from trident.core import ir
-from trident.core.dialects import arith
 from trident.input import InputTable
+from trident.ir import constant
 
 from ..local import Local
 from .base import GuardCode
@@ -19,8 +19,7 @@ class TypeIdCode(GuardCode):
 
     def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         """The ABI type tag and Torch signature cover this guard."""
-        i1 = ir.IntegerType.get_signless(1, context)
-        return arith.constant(i1, ir.IntegerAttr.get(i1, 1))
+        return constant(True)
 
     @classmethod
     def parse(

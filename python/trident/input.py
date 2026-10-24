@@ -21,15 +21,15 @@ from torch.export.graph_signature import (
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.ir import (
+    BindScope,
+    ScopeStack,
     array_type,
-    bind,
     container_get,
     make_result_types,
     pure,
     tuple_type,
     value_type,
 )
-from trident.ownership import is_value_in_scope
 
 pytree.register_pytree_node(
     torch.device,
@@ -92,42 +92,25 @@ class InputTable:
         self._input_names: Final[list[str]] = [*input_names]
         assert all(name in self._nodes for name in self._input_names)
 
-    def clear_results(self) -> None:
-        def clear(node: _InputNode) -> None:
-            node.result = None
-            for child in node.children or ():
-                clear(child)
-
-        for node in self._nodes.values():
-            clear(node)
-
     def extract(self, path: Sequence[int | str]) -> list[ir.Value]:
-        """Extract one structural path, caching only complete Results."""
+        """Extract one structural path into fresh Results at the current insertion point."""
         node = self.node(path)
         assert node is not None, f"input cannot be resolved: {path}"
         if node.value is not None:
             return pure(
                 [node.value], result_types=[tvm_ffi_d.ResultType.get(node.type)]
             )
-        elif node.result is not None and all(
-            is_value_in_scope(value) for value in node.result
-        ):
-            # The cache borrows a reference until block exit; return an independent one.
-            with bind(
-                node.result, result_types=[value.type for value in node.result]
-            ) as cached:
-                tvm_ffi_d.monad_yield(pure(cached.arguments))
-            return [*cached.outputs]
         else:
             assert len(path) > 1, f"input cannot be resolved: {path}"
             types = [tvm_ffi_d.ResultType.get(node.type)]
             *parent_path, index = path
-            with bind(self.extract(parent_path), result_types=types) as operation:
-                [array] = operation.arguments
-                tvm_ffi_d.monad_yield(container_get(array, index, node.type))
+            with BindScope(types, self.extract(parent_path)) as scope:
+                payloads = scope.arguments
+                [array] = payloads
+                scope.yield_(container_get(array, index, node.type))
+                bound_results = scope.results
 
-            node.result = [*operation.outputs]
-            return node.result
+            return [*bound_results]
 
     def extract_many(
         self, paths: Sequence[Sequence[int | str]] | None = None
@@ -135,22 +118,17 @@ class InputTable:
         paths = self.input_paths() if paths is None else paths
         types = make_result_types(self.node(path).type for path in paths)
 
-        def build(start: int, values: list[ir.Value]) -> list[ir.Value]:
-            for index in range(start, len(paths)):
-                path = paths[index]
+        with ScopeStack() as stack:
+            values: list[ir.Value] = []
+            for path in paths:
                 value = self[path]
                 if value is not None:
                     values.append(value)
-                    continue
-                with bind(self.extract(path), result_types=types) as operation:
-                    tvm_ffi_d.monad_yield(
-                        build(index + 1, [*values, *operation.arguments])
-                    )
-
-                return [*operation.outputs]
-            return pure(values, result_types=types)
-
-        return build(0, [])
+                else:
+                    scope = stack.push(BindScope(types, self.extract(path)))
+                    values.extend(scope.arguments)
+            results = pure(values, result_types=types)
+            return stack.yield_(results)
 
     def input_paths(self) -> list[tuple[int | str, ...]]:
         """Return leaf paths in exported-input order without emitting IR."""
@@ -379,23 +357,11 @@ class InputTableBuilder:
 class _InputNode:
     """Static input structure and a payload valid only in its visitor scope."""
 
-    __slots__ = ("_value", "children", "result", "type")
+    __slots__ = ("children", "type", "value")
 
     def __init__(
         self, type: ir.Type, children: list[_InputNode] | None, value: ir.Value | None
     ) -> None:
         self.children: Final[list[_InputNode] | None] = children
         self.type: Final[ir.Type] = type
-        self._value = value
-        self.result: list[ir.Value] | None = None
-
-    @property
-    def value(self) -> ir.Value | None:
-        assert self._value is None or is_value_in_scope(self._value), (
-            "input payload is outside its defining block"
-        )
-        return self._value
-
-    @value.setter
-    def value(self, value: ir.Value | None) -> None:
-        self._value = value
+        self.value: ir.Value | None = value

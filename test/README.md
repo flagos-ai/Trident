@@ -32,7 +32,7 @@ CUDA execution tests require a usable GPU; selecting `unit` does not run them.
 | --- | --- |
 | `unit/test_guards.py` | Guard parsing, expression IR, metadata, nested input extraction and conservative fallbacks |
 | `unit/test_bindings.py` | Python type construction, registration, parameter access, operation properties and Python construction errors |
-| `unit/test_importer.py` | Semantic frontend types, argument/result construction, bind scopes, input-cache visibility and importer diagnostics |
+| `unit/test_importer.py` | Semantic frontend and scalar values, argument/result construction, bind scopes, uncached input extraction and importer diagnostics |
 | `e2e/test_operators.py` | Scalar/tensor overloads, schema arguments, reductions and multiple results |
 | `e2e/test_factories.py` | No-argument calls, factory metadata and independent allocations |
 | `e2e/test_storage.py` | Clone formats, view strides, aliases and mutation writeback |

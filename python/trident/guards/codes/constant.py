@@ -5,31 +5,23 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Hashable
-from typing import Final, Self, override
+from typing import Self
 
-from trident.core import ir
-from trident.input import InputTable
-
-from ..ast import ASTVisitor, GuardExpressionVisitor
+from ..ast import ASTVisitor
 from ..local import Local
-from .base import GuardCode
+from .ast import ASTCode
 
 
-class ConstantCode(GuardCode):
+class ConstantCode(ASTCode):
+    priority = 1
+
     def __init__(
         self,
         text: str,
         source: Local,
         expression: ast.expr,
     ) -> None:
-        super().__init__(text, source)
-        self.expression: Final[ast.expr] = expression
-        self.supported: Final[bool] = ASTVisitor.supports(expression)
-
-    @override
-    def build_result(self, tree: InputTable, context: ir.Context) -> list[ir.Value]:
-        assert self.supported, f"guard expression cannot be lowered: {self.text!r}"
-        return GuardExpressionVisitor(self.text, tree, context).build(self.expression)
+        super().__init__(text, expression, source=source)
 
     @property
     def key(self) -> Hashable:

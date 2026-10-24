@@ -31,7 +31,6 @@ from trident.core import (
     register_all_passes,
 )
 from trident.core.dialects import (
-    arith,
     scf,
     transform,
 )
@@ -44,7 +43,7 @@ from trident.ffi import Exception
 from .guards import parse_guards
 from .importer import TridentFxImporter
 from .input import InputTableBuilder
-from .ir import bind, native, pure
+from .ir import BindScope, binary, native, pure
 
 
 def _convert_input(value: Any) -> Any:
@@ -267,24 +266,26 @@ class TridentGraphModule:
             with ir.InsertionPoint(entry_block):
                 exception = tvm_ffi_d.exception("GuardMatch")
                 rejection = tvm_ffi_d.upcast(abi_result_type, exception)
-                with bind(
+                with BindScope(
+                    [ffi_result_type],
                     parse_guards(gs).build(
                         input_builder, entry_block.arguments, self.ctx
                     ),
-                    result_types=[ffi_result_type],
                 ) as guards:
-                    [predicate] = guards.arguments
+                    guards_arguments = guards.arguments
+                    [predicate] = guards_arguments
                     branch = scf.IfOp(
                         native(predicate), [ffi_result_type], has_else=True
                     )
 
                     with ir.InsertionPoint(branch.then_block):
-                        with bind(
+                        with BindScope(
+                            [ffi_result_type],
                             input_builder.build(entry_block.arguments).extract_many(),
-                            result_types=[ffi_result_type],
                         ) as inputs:
+                            inputs_arguments = inputs.arguments
                             input_specs = exported_program.graph_signature.input_specs
-                            input_values = inputs.arguments[: len(input_specs)]
+                            input_values = inputs_arguments[: len(input_specs)]
                             assert len(input_values) == len(input_specs), (
                                 "unexpected number of reconstructed exported inputs"
                             )
@@ -313,13 +314,15 @@ class TridentGraphModule:
                                 main_inputs,
                             )
                             yielded = [graph_call]
-                            tvm_ffi_d.monad_yield(yielded)
-                        scf.yield_(inputs.outputs)
+                            inputs.yield_(yielded)
+                            inputs_results = inputs.results
+                        scf.yield_(inputs_results)
                     with ir.InsertionPoint(branch.else_block):
                         yielded = pure([rejection], result_types=[ffi_result_type])
                         scf.yield_(yielded)
-                    tvm_ffi_d.monad_yield(branch.results)
-                success, payload = tvm_ffi_d.monad_unpack(guards.outputs[0])
+                    guards.yield_(branch.results)
+                    guards_results = guards.results
+                success, payload = tvm_ffi_d.monad_unpack(guards_results[0])
                 tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
         self._sub_modules.append(module)
         self.executor = self.stub_compile()
@@ -431,11 +434,13 @@ class TridentGraphModule:
                     arguments,
                     results=[bool_type, any_type],
                 )
-                rejected = tvm_ffi_d.isa(
-                    payload, ir.TypeAttr.get(tvm_ffi_d.ExceptionType.get())
+                rejected = tvm_ffi_d.to(
+                    tvm_ffi_d.isa(
+                        payload, ir.TypeAttr.get(tvm_ffi_d.ExceptionType.get())
+                    )
                 )
-                retry = arith.andi(native(success), rejected)
-                outcome = scf.IfOp(retry, [bool_type, any_type], has_else=True)
+                retry = binary(operator.and_, success, rejected)
+                outcome = scf.IfOp(native(retry), [bool_type, any_type], has_else=True)
                 with ir.InsertionPoint(outcome.then_block):
                     scf.yield_(attempt(index + 1))
                 with ir.InsertionPoint(outcome.else_block):

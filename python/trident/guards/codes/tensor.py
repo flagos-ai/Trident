@@ -4,18 +4,25 @@
 from __future__ import annotations
 
 import ast
+import operator
 import re
 from collections.abc import Hashable
-from functools import reduce
+from functools import partial, reduce
 from typing import Final, Self, override
 
 import torch
 import tvm_ffi
 
 from trident.core import ir
-from trident.core.dialects import arith
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
+from trident.ir import (
+    binary,
+    constant,
+    equal,
+    tensor_device_fields,
+    tensor_dim,
+    tensor_dtype_fields,
+)
 
 from ..local import Local
 from .base import GuardCode
@@ -34,8 +41,7 @@ class DynamoAttributeAbsentCode(GuardCode):
     @override
     def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         # Private Dynamo attributes are not represented by the TVM FFI ABI.
-        i1 = ir.IntegerType.get_signless(1, context)
-        return arith.constant(i1, ir.IntegerAttr.get(i1, 1))
+        return constant(True)
 
     @classmethod
     def parse(
@@ -69,8 +75,7 @@ class RequiresGradCode(GuardCode):
     @override
     def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         # The tensor ABI does not expose autograd state.
-        i1 = ir.IntegerType.get_signless(1, context)
-        return arith.constant(i1, ir.IntegerAttr.get(i1, 1))
+        return constant(True)
 
     @classmethod
     def parse(
@@ -111,24 +116,17 @@ class TensorDTypeCode(GuardCode):
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor = source.resolve(tree)
         assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-        metadata = tvm_ffi_d.tensor_dtype(tensor)
+        metadata = tensor_dtype_fields(tensor)
         dtype = tvm_ffi.convert(self.dtype)
-        i1 = ir.IntegerType.get_signless(1, context)
         return reduce(
-            arith.andi,
+            partial(binary, operator.and_),
             [
-                arith.cmpi(
-                    arith.CmpIPredicate.eq,
-                    actual,
-                    arith.constant(
-                        actual.type, ir.IntegerAttr.get(actual.type, expected_value)
-                    ),
-                )
+                equal(actual, constant(expected_value))
                 for actual, expected_value in zip(
-                    metadata, (dtype.type_code, dtype.bits, dtype.lanes)
+                    metadata, (dtype.type_code, dtype.bits, dtype.lanes), strict=True
                 )
             ],
-            arith.constant(i1, ir.IntegerAttr.get(i1, 1)),
+            constant(True),
         )
 
     @property
@@ -179,31 +177,17 @@ class TensorDeviceCode(GuardCode):
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor = source.resolve(tree)
         assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-        i32 = ir.IntegerType.get_signless(32, context)
-        metadata = tvm_ffi_d.tensor_device(tensor)
-        i1 = ir.IntegerType.get_signless(1, context)
-        [index, type_code] = metadata
-        device_type = tvm_ffi.device(self.device.type).dlpack_device_type()
-        return reduce(
-            arith.andi,
-            [
-                arith.cmpi(
-                    arith.CmpIPredicate.eq,
-                    index,
-                    arith.constant(i32, ir.IntegerAttr.get(i32, device_type)),
-                ),
-                arith.cmpi(
-                    arith.CmpIPredicate.eq,
-                    type_code,
-                    arith.constant(
-                        i32,
-                        ir.IntegerAttr.get(
-                            i32, 0 if self.device.index is None else self.device.index
-                        ),
-                    ),
-                ),
-            ],
-            arith.constant(i1, ir.IntegerAttr.get(i1, 1)),
+        device_type, device_index = tensor_device_fields(tensor)
+        return binary(
+            operator.and_,
+            equal(
+                device_type,
+                constant(tvm_ffi.device(self.device.type).dlpack_device_type()),
+            ),
+            equal(
+                device_index,
+                constant(0 if self.device.index is None else self.device.index),
+            ),
         )
 
     @property
@@ -246,15 +230,9 @@ class TensorRankCode(GuardCode):
     def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        i64 = ir.IntegerType.get_signless(64, context)
         tensor = source.resolve(tree)
         assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-        actual = tvm_ffi_d.tensor_dim(tensor)
-        return arith.cmpi(
-            arith.CmpIPredicate.eq,
-            actual,
-            arith.constant(i64, ir.IntegerAttr.get(i64, self.expected)),
-        )
+        return equal(tensor_dim(tensor), constant(self.expected))
 
     @property
     def key(self) -> Hashable:

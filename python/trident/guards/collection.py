@@ -13,7 +13,7 @@ from trident.core import ir
 from trident.core.dialects import scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTableBuilder
-from trident.ir import bind, native, native_constant, pure
+from trident.ir import BindScope, constant, native, pure
 
 from .codes import GuardCode
 from .kinds import Guard
@@ -46,21 +46,22 @@ class Guards:
         type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
         code = next(codes, None)
         if code is None:
-            return pure([native_constant(True)], result_types=[type_])
-        with bind(
-            code.build_result(builder.build(arguments), context),
-            result_types=[type_],
-        ) as operation:
-            [predicate] = operation.arguments
+            return pure([constant(True)], result_types=[type_])
+        with BindScope(
+            [type_], code.build_result(builder.build(arguments), context)
+        ) as scope:
+            payloads = scope.arguments
+            [predicate] = payloads
             branch = scf.IfOp(native(predicate), [type_], has_else=True)
             with ir.InsertionPoint(branch.then_block):
                 yielded = self._build_checks(codes, builder, arguments, context)
                 scf.yield_(yielded)
             with ir.InsertionPoint(branch.else_block):
-                yielded = pure([native_constant(False)], result_types=[type_])
+                yielded = pure([constant(False)], result_types=[type_])
                 scf.yield_(yielded)
-            tvm_ffi_d.monad_yield(branch.results)
-        return [*operation.outputs]
+            scope.yield_(branch.results)
+            bound_results = scope.results
+        return [*bound_results]
 
     def build(
         self,

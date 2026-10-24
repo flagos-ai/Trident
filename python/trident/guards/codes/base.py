@@ -10,7 +10,7 @@ from typing import ClassVar, Final, Self
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
-from trident.ir import bind, pure
+from trident.ir import BindScope, pure
 
 from ..local import Local
 
@@ -41,16 +41,14 @@ class GuardCode:
         types = [tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())]
         if self.source is None or not self.requires_input:
             return pure([self.build(tree, context)], result_types=types)
-        with bind(
-            tree.extract(self.source.subscripts), result_types=types
-        ) as operation:
-            [value] = operation.arguments
+        with BindScope(types, tree.extract(self.source.subscripts)) as scope:
+            payloads = scope.arguments
+            [value] = payloads
             scoped = tree.with_value(self.source.subscripts, value)
-            tvm_ffi_d.monad_yield(
-                pure([self.build(scoped, context)], result_types=types)
-            )
+            scope.yield_(pure([self.build(scoped, context)], result_types=types))
+            bound_results = scope.results
 
-        return [*operation.outputs]
+        return [*bound_results]
 
     @property
     def depth(self) -> int:
