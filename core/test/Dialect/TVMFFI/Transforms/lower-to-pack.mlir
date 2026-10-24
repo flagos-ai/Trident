@@ -92,11 +92,11 @@ tvm_ffi.func private @external(i64) -> !tvm_ffi.int
 // CHECK-LABEL: tvm_ffi.pack.func nested @external_nested(!tvm_ffi.pack.arguments) -> !tvm_ffi.c.any
 tvm_ffi.func nested @external_nested(!tvm_ffi.tensor) -> !tvm_ffi.none
 
-// CHECK-LABEL: tvm_ffi.pack.func @packed_unit(
+// CHECK-LABEL: tvm_ffi.pack.func private @packed_unit(
 // CHECK: scf.if
 // CHECK: tvm_ffi.downcast %[[VALUE:[a-zA-Z0-9_]+]] : !tvm_ffi.c.any -> !tvm_ffi.none
 // CHECK: tvm_ffi.return
-tvm_ffi.func @packed_unit() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func private @packed_unit() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
   %none = tvm_ffi.constant.none
   %any = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.c.any
   %ok = tvm_ffi.constant.bool true
@@ -140,9 +140,11 @@ tvm_ffi.func @forward_block_use() -> !tvm_ffi.none {
 // CHECK: ^[[UNPACK]]:
 // CHECK: %[[FIRST:[a-zA-Z0-9_]+]] = tvm_ffi.pack.get %[[PACK]][%[[ZERO:[a-zA-Z0-9_]+]]]
 // CHECK: %[[SECOND:[a-zA-Z0-9_]+]] = tvm_ffi.pack.get %[[PACK]][%[[ONE:[a-zA-Z0-9_]+]]]
+// CHECK: %[[TRUE:[a-zA-Z0-9_]+]] = arith.constant true
 // CHECK: %[[INT:[a-zA-Z0-9_]+]] = tvm_ffi.isa %[[FIRST]] is !tvm_ffi.int
+// CHECK: %[[PREFIX:[a-zA-Z0-9_]+]] = arith.andi %[[TRUE]], %[[INT]]
 // CHECK: %[[BOOL:[a-zA-Z0-9_]+]] = tvm_ffi.isa %[[SECOND]] is !tvm_ffi.bool
-// CHECK: %[[MATCHES:[a-zA-Z0-9_]+]] = arith.andi %[[PREFIX:[a-zA-Z0-9_]+]], %[[BOOL]]
+// CHECK: %[[MATCHES:[a-zA-Z0-9_]+]] = arith.andi %[[PREFIX]], %[[BOOL]]
 // CHECK: cf.cond_br %[[MATCHES]], ^[[ACCEPT:bb[0-9]+]], ^[[REJECT]]
 // CHECK: ^[[ACCEPT]]:
 // CHECK: %[[ARG0:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[FIRST]] : !tvm_ffi.c.any -> !tvm_ffi.int
@@ -171,16 +173,6 @@ tvm_ffi.func public @no_wrapper() -> !tvm_ffi.int {
 }
 // -----
 
-// CHECK-LABEL: tvm_ffi.pack.func private @private_entry(
-// CHECK: tvm_ffi.return
-tvm_ffi.func private @private_entry() -> !tvm_ffi.none {
-  %none = tvm_ffi.constant.none
-  %value = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.c.any
-  %ok = tvm_ffi.constant.bool true
-  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.c.any
-}
-// -----
-
 // CHECK-LABEL: tvm_ffi.pack.func @switch_argument(
 // CHECK: ^[[BODY:bb[0-9]+]](%[[TENSOR:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[DEFAULT:[a-zA-Z0-9_]+]]: !tvm_ffi.int, %[[CASE:[a-zA-Z0-9_]+]]: !tvm_ffi.int):
 // CHECK: %[[SELECTOR:[a-zA-Z0-9_]+]], %[[DEVICE:[a-zA-Z0-9_]+]] = tvm_ffi.tensor.device %[[TENSOR]]
@@ -202,15 +194,4 @@ tvm_ffi.func @switch_argument(
   %payload = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.c.any
   %ok = tvm_ffi.constant.bool true
   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.c.any
-}
-// -----
-
-// CHECK-LABEL: tvm_ffi.pack.func @typed(
-// CHECK: tvm_ffi.pack.get
-// CHECK: tvm_ffi.isa %[[ARG:[a-zA-Z0-9_]+]] is !tvm_ffi.int
-// CHECK: tvm_ffi.downcast %[[ARG]]
-tvm_ffi.func @typed(%arg: !tvm_ffi.int) -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
-  %value = tvm_ffi.upcast %arg : !tvm_ffi.int -> !tvm_ffi.c.any
-  %ok = tvm_ffi.constant.bool true
-  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.c.any
 }

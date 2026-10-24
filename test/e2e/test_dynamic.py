@@ -55,10 +55,11 @@ class DynamicTest(unittest.TestCase):
     def test_scalar_arithmetic(self) -> None:
         def arithmetic(x: torch.Tensor):
             size = x.shape[0]
-            return (
+            return x + 1, (
                 size + 2,
                 size - 2,
                 size * 3,
+                size**3,
                 size / 2,
                 (-size) // 3,
                 (-size) % 3,
@@ -89,28 +90,13 @@ class DynamicTest(unittest.TestCase):
                 expected = arithmetic(x)
                 for phase in ("first", "repeated"):
                     with self.subTest(size=size, phase=phase):
-                        actual = compiled(x)
-                        self.assertEqual(actual, expected)
+                        tensor, scalars = compiled(x)
+                        torch.testing.assert_close(tensor, expected[0])
+                        self.assertEqual(scalars, expected[1])
                         self.assertEqual(
-                            tuple(map(type, actual)), tuple(map(type, expected))
+                            tuple(map(type, scalars)), tuple(map(type, expected[1]))
                         )
             self.assertEqual(len(compiled._sub_modules), 1)
-
-        device = torch.device("cuda", torch.cuda.current_device())
-        assert_no_cuda_leak(self, check, device)
-
-    def test_symbolic_integer_power(self) -> None:
-        @trident.jit(dynamic=True)
-        def power(x: torch.Tensor) -> int:
-            return x.shape[0] ** 3
-
-        def check() -> None:
-            for size in (3, 5, 7):
-                x = torch.randn(size, device="cuda")
-                for phase in ("first", "repeated"):
-                    with self.subTest(size=size, phase=phase):
-                        self.assertEqual(power(x), size**3)
-            self.assertEqual(len(power._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

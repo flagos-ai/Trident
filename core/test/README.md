@@ -15,6 +15,13 @@ Directories mirror the implementation layer:
 | `Conversion/<Component>/` | Local conversion behavior |
 | `Conversion/Pipeline/` | Representative cross-pass integration |
 
+The organization follows [LLVM’s testing guide](https://llvm.org/docs/TestingGuide.html):
+IR transformations use small Lit regression inputs; Python unit tests cover
+bindings and construction helpers, and execution tests cover runtime behavior.
+A parser round trip, a pass-local rewrite and an executable case may share an
+operation while testing different contracts. Do not repeat the same lowering
+assertions at all three layers.
+
 ## Coverage ownership
 
 Keep one file per operation family or conversion concern. Related cases share
