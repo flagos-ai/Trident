@@ -3,6 +3,7 @@
 
 """Python frontend construction, diagnostics and uncached input extraction."""
 
+import operator
 import unittest
 
 import sympy
@@ -13,6 +14,7 @@ from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.importer import TridentFxImporter
 from trident.input import InputNodeBuilder, InputTableBuilder
 from trident.ir import (
+    BINARY_ARITHMETIC,
     BindScope,
     ScopeStack,
     checked_call,
@@ -20,6 +22,7 @@ from trident.ir import (
     container_get,
     make_result_types,
     native,
+    power,
     pure,
 )
 
@@ -633,10 +636,38 @@ class ImporterTest(unittest.TestCase):
     def test_unsupported_symbolic_power(self) -> None:
         importer = TridentFxImporter(context=new_context(), specialization_id=0)
         base, exponent = sympy.symbols("base exponent")
-        for power in (-1, sympy.Rational(1, 2), exponent):
-            with self.subTest(exponent=power):
-                expression = sympy.Pow(base, power, evaluate=False)
+        for invalid_exponent in (-1, sympy.Rational(1, 2), exponent):
+            with self.subTest(exponent=invalid_exponent):
+                expression = sympy.Pow(base, invalid_exponent, evaluate=False)
                 with self.assertRaisesRegex(
                     NotImplementedError, "unbound symbolic FX expression"
                 ):
                     importer.symbolic(expression)
+
+    def test_scalar_builders(self) -> None:
+        cases = (
+            (operator.add, True, True, tvm_ffi_d.IntType),
+            (operator.add, 2.0, 1, tvm_ffi_d.FloatType),
+            (operator.and_, True, False, tvm_ffi_d.BoolType),
+        )
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            with ir.InsertionPoint(module.body):
+                for operation, lhs, rhs, expected in cases:
+                    with self.subTest(operation=operation, lhs=lhs, rhs=rhs):
+                        result = BINARY_ARITHMETIC[operation](
+                            constant(lhs), constant(rhs)
+                        )
+                        self.assertIsInstance(result.type, expected)
+                with self.assertRaisesRegex(NotImplementedError, "scalar operation"):
+                    BINARY_ARITHMETIC[operator.and_](constant(1.0), constant(1))
+                for base, exponent, expected in (
+                    (True, 0, tvm_ffi_d.IntType),
+                    (1.5, 0, tvm_ffi_d.FloatType),
+                    (1.5, 3, tvm_ffi_d.FloatType),
+                ):
+                    with self.subTest(base=base, exponent=exponent):
+                        self.assertIsInstance(
+                            power(constant(base), exponent).type, expected
+                        )
+            self.assertTrue(module.operation.verify())

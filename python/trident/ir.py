@@ -3,8 +3,8 @@
 
 """Shared IR builders for graph import, input handling and Dynamo guards.
 
-Frontend values use TVM FFI types. Native scalars are temporary operands of
-local arithmetic or native dialect interfaces, never stored frontend values.
+Frontend values use TVM FFI types. Python builders unify scalar operand types,
+compute with temporary native values and immediately box the results.
 Checked calls validate lookup status, function handles and call status.
 """
 
@@ -25,11 +25,7 @@ from trident.core import ir
 from trident.core.dialects import arith, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
-
-def _is_numeric_scalar(type_: ir.Type) -> bool:
-    return isinstance(
-        type_, (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
-    )
+_NUMERIC_SCALAR_TYPES = (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
 
 
 def _is_signless_integer(type_: ir.Type, width: int) -> bool:
@@ -100,7 +96,7 @@ def array_type(types: Sequence[ir.Type]) -> tvm_ffi_d.ArrayType:
 
 
 def binary(operation: Any, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-    assert all(_is_numeric_scalar(value.type) for value in (lhs, rhs)), (
+    assert all(isinstance(value.type, _NUMERIC_SCALAR_TYPES) for value in (lhs, rhs)), (
         "scalar operands must use TVM FFI types"
     )
     values = (native(lhs), native(rhs))
@@ -116,12 +112,21 @@ def binary(operation: Any, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
     )
     operands: list[ir.Value] = []
     for value in values:
-        if not keep_bool and _is_signless_integer(value.type, 1):
-            value = arith.extui(ir.IntegerType.get_signless(64), value)
         if use_float and not isinstance(value.type, ir.F64Type):
-            value = arith.sitofp(ir.F64Type.get(), value)
+            value = (
+                arith.uitofp(ir.F64Type.get(), value)
+                if _is_signless_integer(value.type, 1)
+                else arith.sitofp(ir.F64Type.get(), value)
+            )
+        elif not keep_bool and _is_signless_integer(value.type, 1):
+            value = arith.extui(ir.IntegerType.get_signless(64), value)
         operands.append(value)
     return tvm_ffi_d.to(builder(*operands))
+
+
+BINARY_ARITHMETIC: dict[
+    Callable[..., Any], Callable[[ir.Value, ir.Value], ir.Value]
+] = {operation: partial(binary, operation) for operation in _BINARY_ARITHMETIC}
 
 
 class Scope(ABC):
@@ -270,11 +275,6 @@ def constant(value: Any) -> ir.Value:
         raise NotImplementedError(f"unsupported FX constant: {value!r}")
 
 
-def constant_type(value: Any) -> ir.Type:
-    """TVM FFI type produced by a leaf constant."""
-    return value_type(value)
-
-
 def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Value]:
     elements = [*values]
     types = (
@@ -322,25 +322,45 @@ def container_get(
 
 
 def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-    if _is_numeric_scalar(lhs.type) and _is_numeric_scalar(rhs.type):
+    if isinstance(lhs.type, _NUMERIC_SCALAR_TYPES) and isinstance(
+        rhs.type, _NUMERIC_SCALAR_TYPES
+    ):
         return binary(operator.eq, lhs, rhs)
     else:
         return tvm_ffi_d.to(tvm_ffi_d.eq(lhs, rhs))
 
 
-def ffi_type(name: str) -> ir.Type:
-    """Parse a TVM FFI type description, e.g. ``int`` or ``monad.result<!tvm_ffi.int>``."""
-    return ir.Type.parse(f"!tvm_ffi.{name}")
-
-
-def is_binary_operation(operation: Any) -> bool:
-    """Whether a callable has a native binary scalar implementation."""
-    return operation in _BINARY_ARITHMETIC
-
-
 def logical_not(value: ir.Value) -> ir.Value:
-    """Negate a numeric truth value, retaining a semantic Bool result."""
+    """Compare against zero, preserving NaN truthiness and signed-zero behavior."""
     return equal(value, constant(0))
+
+
+def negate(value: ir.Value) -> ir.Value:
+    return (
+        tvm_ffi_d.to(arith.negf(native(value)))
+        if isinstance(value.type, tvm_ffi_d.FloatType)
+        else binary(operator.sub, constant(0), value)
+    )
+
+
+def power(base: ir.Value, exponent: int) -> ir.Value:
+    """Build a nonnegative constant power using the runtime's scalar widths."""
+    assert isinstance(exponent, int) and exponent >= 0
+    floating = isinstance(base.type, tvm_ffi_d.FloatType)
+    result = constant(1.0 if floating else 1)
+    if floating:
+        # Preserve sequential floating-point multiplication and rounding.
+        for _ in range(exponent):
+            result = binary(operator.mul, result, base)
+    else:
+        # Squaring keeps the number of generated integer operations logarithmic.
+        while exponent:
+            if exponent & 1:
+                result = binary(operator.mul, result, base)
+            exponent >>= 1
+            if exponent:
+                base = binary(operator.mul, base, base)
+    return result
 
 
 def make_result_types(payload_types: Iterable[ir.Type]) -> list[ir.Type]:
@@ -352,14 +372,10 @@ def make_result_types(payload_types: Iterable[ir.Type]) -> list[ir.Type]:
 
 def native(value: ir.Value) -> ir.Value:
     """Extract a temporary native scalar for arithmetic or a dialect interface."""
-    assert _is_numeric_scalar(value.type), "scalar must use a TVM FFI type"
+    assert isinstance(value.type, _NUMERIC_SCALAR_TYPES), (
+        "scalar must use a TVM FFI type"
+    )
     return tvm_ffi_d.get(value)
-
-
-def negate(value: ir.Value) -> ir.Value:
-    if isinstance(value.type, tvm_ffi_d.FloatType):
-        return tvm_ffi_d.to(arith.negf(native(value)))
-    return binary(operator.sub, constant(0), value)
 
 
 def pure(
@@ -411,34 +427,6 @@ def tensor_device_fields(tensor: ir.Value) -> list[ir.Value]:
     ]
 
 
-def tensor_dim(tensor: ir.Value) -> ir.Value:
-    return tvm_ffi_d.to(tvm_ffi_d.tensor_dim(tensor))
-
-
-def tensor_dtype_fields(tensor: ir.Value) -> list[ir.Value]:
-    """Read unsigned DLPack dtype fields as semantic integer values."""
-    return [
-        tvm_ffi_d.to(arith.extui(ir.IntegerType.get_signless(64), field))
-        for field in tvm_ffi_d.tensor_dtype(tensor)
-    ]
-
-
-def tensor_size(tensor: ir.Value, index: ir.Value) -> ir.Value:
-    return tvm_ffi_d.to(tvm_ffi_d.tensor_size(tensor, native(index)))
-
-
-def tensor_storage_offset(tensor: ir.Value) -> ir.Value:
-    return tvm_ffi_d.to(tvm_ffi_d.tensor_storage_offset(tensor))
-
-
-def tensor_stride(tensor: ir.Value, index: ir.Value) -> ir.Value:
-    return tvm_ffi_d.to(tvm_ffi_d.tensor_stride(tensor, native(index)))
-
-
-def tuple_type(types: Sequence[ir.Type]) -> tvm_ffi_d.TupleType:
-    return tvm_ffi_d.TupleType.get(types)
-
-
 def value_type(value: Any) -> ir.Type:
     if isinstance(value, torch.Tensor):
         return tvm_ffi_d.TensorType.get()
@@ -457,7 +445,7 @@ def value_type(value: Any) -> ir.Type:
     elif isinstance(value, list):
         return array_type([value_type(item) for item in value])
     elif isinstance(value, tuple):
-        return tuple_type([value_type(item) for item in value])
+        return tvm_ffi_d.TupleType.get([value_type(item) for item in value])
     elif isinstance(value, dict):
         return tvm_ffi_d.ArrayType.get(tvm_ffi_d.AnyType.get())
     elif value is None:

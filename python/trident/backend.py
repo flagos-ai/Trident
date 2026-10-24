@@ -43,7 +43,7 @@ from trident.ffi import Exception
 from .guards import parse_guards
 from .importer import TridentFxImporter
 from .input import InputTableBuilder
-from .ir import BindScope, binary, native, pure
+from .ir import BINARY_ARITHMETIC, BindScope, native, pure
 
 
 def _convert_input(value: Any) -> Any:
@@ -439,7 +439,7 @@ class TridentGraphModule:
                         payload, ir.TypeAttr.get(tvm_ffi_d.ExceptionType.get())
                     )
                 )
-                retry = binary(operator.and_, success, rejected)
+                retry = BINARY_ARITHMETIC[operator.and_](success, rejected)
                 outcome = scf.IfOp(native(retry), [bool_type, any_type], has_else=True)
                 with ir.InsertionPoint(outcome.then_block):
                     scf.yield_(attempt(index + 1))

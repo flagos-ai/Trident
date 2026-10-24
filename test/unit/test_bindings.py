@@ -8,7 +8,7 @@ import unittest
 from trident.core import ir
 from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import constant, ffi_type, pure, value_type
+from trident.ir import constant, pure, value_type
 
 from test.support.ir import new_context
 
@@ -42,14 +42,16 @@ class BindingsTest(unittest.TestCase):
                 with self.subTest(name=name):
                     type_ = type_class.get()
                     self.assertEqual(f"{type_}", f"!tvm_ffi.{name}")
-                    parsed = ffi_type(name)
+                    parsed = ir.Type.parse(f"!tvm_ffi.{name}")
                     self.assertIsInstance(parsed, type_class)
                     self.assertEqual(parsed, type_)
             self.assertNotEqual(tvm_ffi_d.AnyType.get(), tvm_ffi_d.CAnyType.get())
-            self.assertNotIsInstance(ffi_type("c.any"), tvm_ffi_d.AnyType)
+            self.assertNotIsInstance(ir.Type.parse("!tvm_ffi.c.any"), tvm_ffi_d.AnyType)
             exception = tvm_ffi_d.ExceptionType.get()
             self.assertEqual(f"{exception}", "!tvm_ffi.exception")
-            self.assertIsInstance(ffi_type("exception"), tvm_ffi_d.ExceptionType)
+            self.assertIsInstance(
+                ir.Type.parse("!tvm_ffi.exception"), tvm_ffi_d.ExceptionType
+            )
             union = tvm_ffi_d.UnionType.get([tvm_ffi_d.IntType.get(), exception])
             self.assertEqual(
                 f"{union}", "!tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.exception>"
