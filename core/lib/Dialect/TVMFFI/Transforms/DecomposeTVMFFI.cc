@@ -82,48 +82,6 @@ static void createObjectIncRefs(mlir::ConversionPatternRewriter &rewriter,
   }
 }
 
-class DecomposeTVMFFITypeConverter final : public mlir::TypeConverter {
-public:
-  explicit DecomposeTVMFFITypeConverter(mlir::MLIRContext *context) {
-    // Register the identity fallback first: specific conversions take priority.
-    addConversion([](mlir::Type type) -> mlir::Type { return type; });
-    addConversion([this](mlir::FunctionType type) -> std::optional<mlir::Type> {
-      llvm::SmallVector<mlir::Type> inputs;
-      llvm::SmallVector<mlir::Type> outputs;
-      if (mlir::failed(convertTypes(type.getInputs(), inputs)) ||
-          mlir::failed(convertTypes(type.getResults(), outputs))) {
-        return std::nullopt;
-      }
-      return mlir::FunctionType::get(type.getContext(), inputs, outputs);
-    });
-    addConversion([this, context](ResultType type) -> mlir::Type {
-      return ResultType::get(context, mlir::cast<TVMFFICABIType>(
-                                          convertType(type.getPayloadType())));
-    });
-    addConversion(
-        [context](AnyType) -> mlir::Type { return CAnyType::get(context); });
-    addConversion([context](ArrayType) -> mlir::Type {
-      return CArrayType::get(context);
-    });
-    addConversion([context](ExceptionType) -> mlir::Type {
-      return CExceptionType::get(context);
-    });
-    addConversion([context](FunctionType) -> mlir::Type {
-      return CFunctionType::get(context);
-    });
-    addConversion(
-        [context](StrType) -> mlir::Type { return CAnyType::get(context); });
-    addConversion([context](TensorType) -> mlir::Type {
-      return CTensorType::get(context);
-    });
-    addConversion([context](TupleType) -> mlir::Type {
-      return CArrayType::get(context);
-    });
-    addConversion(
-        [context](UnionType) -> mlir::Type { return CAnyType::get(context); });
-  }
-};
-
 // Arrays and tuples share the runtime representation and construction protocol.
 template <typename Op>
 class ConvertArrayConstructionOp final : public mlir::OpConversionPattern<Op> {
@@ -242,9 +200,7 @@ public:
 template <typename Op>
 class ConvertExportOp final : public mlir::OpConversionPattern<Op> {
 public:
-  ConvertExportOp(const mlir::TypeConverter &converter,
-                  mlir::MLIRContext *context)
-      : mlir::OpConversionPattern<Op>(converter, context, 2) {}
+  using mlir::OpConversionPattern<Op>::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
@@ -295,9 +251,7 @@ public:
 template <typename Op, bool OwnsResults = false>
 class ConvertGenericOp final : public mlir::OpConversionPattern<Op> {
 public:
-  ConvertGenericOp(const mlir::TypeConverter &converter,
-                   mlir::MLIRContext *context)
-      : mlir::OpConversionPattern<Op>(converter, context, 2) {}
+  using mlir::OpConversionPattern<Op>::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
@@ -444,69 +398,15 @@ class DecomposeTVMFFIPass final
   void runOnOperation() override {
     mlir::Operation *op = getOperation();
     mlir::MLIRContext *context = op->getContext();
-    DecomposeTVMFFITypeConverter const converter(context);
+    mlir::TypeConverter converter;
     // TODO: Preserve finite Union/Str alternatives across type erasure for
     // packed ABI argument validation and success-only return checks.
     mlir::RewritePatternSet conversions(context);
     mlir::ConversionTarget target(*context);
-    // Materialize ownership before conversion-time folding.
-    conversions.add<
-        ConvertArrayConstructionOp<ArrayCreateOp>,
-        ConvertArrayConstructionOp<TupleConstructOp>, ConvertArrayGetOp,
-        ConvertArraySizeOp, ConvertConstantStrOp, ConvertDowncastOp,
-        ConvertExportOp<ReturnOp>, ConvertExportOp<mlir::func::ReturnOp>,
-        ConvertGenericOp<CallOp, true>, ConvertGenericOp<EqOp>,
-        ConvertGenericOp<ExceptionOp, true>,
-        ConvertGenericOp<FunctionCallOp, true>,
-        ConvertGenericOp<FunctionGetGlobalOp, true>, ConvertGenericOp<GetOp>,
-        ConvertGenericOp<IsaOp>, ConvertGenericOp<MonadFailOp>,
-        ConvertGenericOp<MonadPureOp>, ConvertGenericOp<MonadUnpackOp>,
-        ConvertGenericOp<ObjectDecRefOp>, ConvertGenericOp<ObjectIncRefOp>,
-        ConvertGenericOp<PackCallOp, true>, ConvertGenericOp<PackGetOp>,
-        ConvertGenericOp<TensorCloneOp, true>, ConvertGenericOp<TensorCopyOp>,
-        ConvertGenericOp<TensorDTypeOp>, ConvertGenericOp<TensorDeviceOp>,
-        ConvertGenericOp<TensorDimOp>, ConvertGenericOp<TensorLiteralOp, true>,
-        ConvertGenericOp<TensorSizeOp>, ConvertGenericOp<TensorStorageOffsetOp>,
-        ConvertGenericOp<TensorStrideOp>, ConvertGenericOp<UpcastOp>,
-        ConvertGenericOp<mlir::func::CallOp, true>, ConvertTupleUnconstructOp>(
-        converter, context);
-    conversions.add<ConvertConditionOp, ConvertForOp, ConvertIfOp,
-                    ConvertWhileOp, ConvertYieldOp>(converter, context);
-    mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(conversions,
-                                                                   converter);
-    mlir::populateFunctionOpInterfaceTypeConversionPattern<PackFuncOp>(
-        conversions, converter);
-    mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(
-        conversions, converter);
-    mlir::cf::populateCFStructuralTypeConversionsAndLegality(
-        converter, conversions, target);
-    target.addIllegalOp<ArrayCreateOp, ArrayGetOp, ArraySizeOp, ConstantStrOp,
-                        TupleConstructOp, TupleUnconstructOp>();
-    target.markUnknownOpDynamicallyLegal(
-        [&](mlir::Operation *operation) -> bool {
-          return converter.isLegal(operation) &&
-                 llvm::all_of(operation->getRegions(),
-                              [&](mlir::Region &region) -> bool {
-                                return converter.isLegal(&region);
-                              });
-        });
-    target.addDynamicallyLegalOp<FuncOp, PackFuncOp, mlir::func::FuncOp>(
-        [&](mlir::Operation *operation) -> bool {
-          mlir::FunctionOpInterface function =
-              mlir::cast<mlir::FunctionOpInterface>(operation);
-          mlir::Region &body = function.getFunctionBody();
-          return converter.isLegal(function.getFunctionType()) &&
-                 (body.empty() ||
-                  converter.isLegal(body.front().getArgumentTypes()));
-        });
+    populateDecomposeTVMFFIConversionPatterns(target, converter, conversions);
 
-    // Materialize ownership before folding can erase a producer or branch.
-    // Rollback mode preserves original operand types until commit.
-    mlir::ConversionConfig config;
-    config.allowPatternRollback = true;
-    config.foldingMode = mlir::DialectConversionFoldingMode::AfterPatterns;
-    if (mlir::failed(mlir::applyPartialConversion(
-            op, target, std::move(conversions), config))) {
+    if (mlir::failed(
+            mlir::applyPartialConversion(op, target, std::move(conversions)))) {
       signalPassFailure();
       return;
     }
@@ -522,4 +422,96 @@ class DecomposeTVMFFIPass final
 };
 
 } // namespace
+
+void populateDecomposeTVMFFIConversionPatterns(
+    mlir::ConversionTarget &target, mlir::TypeConverter &converter,
+    mlir::RewritePatternSet &patterns) {
+  mlir::MLIRContext *context = patterns.getContext();
+  // Register the identity fallback first: specific conversions take priority.
+  converter.addConversion([](mlir::Type type) -> mlir::Type { return type; });
+  converter.addConversion(
+      [&converter](mlir::FunctionType type) -> std::optional<mlir::Type> {
+        llvm::SmallVector<mlir::Type> inputs;
+        llvm::SmallVector<mlir::Type> outputs;
+        if (mlir::failed(converter.convertTypes(type.getInputs(), inputs)) ||
+            mlir::failed(converter.convertTypes(type.getResults(), outputs))) {
+          return std::nullopt;
+        }
+        return mlir::FunctionType::get(type.getContext(), inputs, outputs);
+      });
+  converter.addConversion([&converter, context](ResultType type) -> mlir::Type {
+    return ResultType::get(context,
+                           mlir::cast<TVMFFICABIType>(
+                               converter.convertType(type.getPayloadType())));
+  });
+  converter.addConversion(
+      [context](AnyType) -> mlir::Type { return CAnyType::get(context); });
+  converter.addConversion(
+      [context](ArrayType) -> mlir::Type { return CArrayType::get(context); });
+  converter.addConversion([context](ExceptionType) -> mlir::Type {
+    return CExceptionType::get(context);
+  });
+  converter.addConversion([context](FunctionType) -> mlir::Type {
+    return CFunctionType::get(context);
+  });
+  converter.addConversion(
+      [context](StrType) -> mlir::Type { return CAnyType::get(context); });
+  converter.addConversion([context](TensorType) -> mlir::Type {
+    return CTensorType::get(context);
+  });
+  converter.addConversion(
+      [context](TupleType) -> mlir::Type { return CArrayType::get(context); });
+  converter.addConversion(
+      [context](UnionType) -> mlir::Type { return CAnyType::get(context); });
+
+  patterns.add<
+      ConvertArrayConstructionOp<ArrayCreateOp>,
+      ConvertArrayConstructionOp<TupleConstructOp>, ConvertArrayGetOp,
+      ConvertArraySizeOp, ConvertConstantStrOp, ConvertDowncastOp,
+      ConvertExportOp<ReturnOp>, ConvertExportOp<mlir::func::ReturnOp>,
+      ConvertGenericOp<CallOp, true>, ConvertGenericOp<EqOp>,
+      ConvertGenericOp<ExceptionOp, true>,
+      ConvertGenericOp<FunctionCallOp, true>,
+      ConvertGenericOp<FunctionGetGlobalOp, true>, ConvertGenericOp<GetOp>,
+      ConvertGenericOp<IsaOp>, ConvertGenericOp<MonadFailOp>,
+      ConvertGenericOp<MonadPureOp>, ConvertGenericOp<MonadUnpackOp>,
+      ConvertGenericOp<ObjectDecRefOp>, ConvertGenericOp<ObjectIncRefOp>,
+      ConvertGenericOp<PackCallOp, true>, ConvertGenericOp<PackGetOp>,
+      ConvertGenericOp<TensorCloneOp, true>, ConvertGenericOp<TensorCopyOp>,
+      ConvertGenericOp<TensorDTypeOp>, ConvertGenericOp<TensorDeviceOp>,
+      ConvertGenericOp<TensorDimOp>, ConvertGenericOp<TensorLiteralOp, true>,
+      ConvertGenericOp<TensorSizeOp>, ConvertGenericOp<TensorStorageOffsetOp>,
+      ConvertGenericOp<TensorStrideOp>, ConvertGenericOp<UpcastOp>,
+      ConvertGenericOp<mlir::func::CallOp, true>, ConvertTupleUnconstructOp>(
+      converter, context);
+  patterns.add<ConvertConditionOp, ConvertForOp, ConvertIfOp, ConvertWhileOp,
+               ConvertYieldOp>(converter, context);
+  mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(patterns,
+                                                                 converter);
+  mlir::populateFunctionOpInterfaceTypeConversionPattern<PackFuncOp>(patterns,
+                                                                     converter);
+  mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(
+      patterns, converter);
+  mlir::cf::populateCFStructuralTypeConversionsAndLegality(converter, patterns,
+                                                           target);
+  target.addIllegalOp<ArrayCreateOp, ArrayGetOp, ArraySizeOp, ConstantStrOp,
+                      TupleConstructOp, TupleUnconstructOp>();
+  target.markUnknownOpDynamicallyLegal([&](mlir::Operation *operation) -> bool {
+    return converter.isLegal(operation) &&
+           llvm::all_of(operation->getRegions(),
+                        [&](mlir::Region &region) -> bool {
+                          return converter.isLegal(&region);
+                        });
+  });
+  target.addDynamicallyLegalOp<FuncOp, PackFuncOp, mlir::func::FuncOp>(
+      [&](mlir::Operation *operation) -> bool {
+        mlir::FunctionOpInterface function =
+            mlir::cast<mlir::FunctionOpInterface>(operation);
+        mlir::Region &body = function.getFunctionBody();
+        return converter.isLegal(function.getFunctionType()) &&
+               (body.empty() ||
+                converter.isLegal(body.front().getArgumentTypes()));
+      });
+}
+
 } // namespace trident::tvm_ffi

@@ -10,6 +10,7 @@
 
 #include <mlir/Pass/Pass.h>
 #include <mlir/Pass/PassRegistry.h>
+#include <mlir/Transforms/DialectConversion.h>
 
 namespace trident::conversion {
 
@@ -18,6 +19,10 @@ namespace trident::conversion {
 
 #define GEN_PASS_REGISTRATION_CONVERTTVMFFITOFUNC
 #include "trident/core/Conversion/Passes.h.inc"
+
+/// Register conversion patterns and legality for the packed function boundary.
+void populateTVMFFIToFuncConversionPatterns(mlir::ConversionTarget &target,
+                                            mlir::RewritePatternSet &patterns);
 
 } // namespace trident::conversion
 

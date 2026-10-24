@@ -223,65 +223,14 @@ public:
   }
 };
 
-class MonadTypeConverter final : public mlir::TypeConverter {
-public:
-  explicit MonadTypeConverter(mlir::MLIRContext *context) {
-    addConversion([](mlir::Type type) -> mlir::Type { return type; });
-    addConversion([context](ResultType) -> mlir::Type {
-      return resultTupleType(context);
-    });
-    addConversion([this, context](mlir::FunctionType type) -> mlir::Type {
-      llvm::SmallVector<mlir::Type> inputs, outputs;
-      if (mlir::failed(convertTypes(type.getInputs(), inputs)) ||
-          mlir::failed(convertTypes(type.getResults(), outputs))) {
-        return {};
-      }
-      return mlir::FunctionType::get(context, inputs, outputs);
-    });
-  }
-};
-
 class LowerTVMFFIMonadPass final
     : public impl::LowerTVMFFIMonadBase<LowerTVMFFIMonadPass> {
   void runOnOperation() final {
     mlir::Operation *op = getOperation();
-    MonadTypeConverter converter(&getContext());
+    mlir::TypeConverter converter;
     mlir::ConversionTarget target(getContext());
-    target.addIllegalOp<MonadCallOp, MonadBindOp, MonadFailOp, MonadPureOp,
-                        MonadUnpackOp, MonadYieldOp>();
-    target.markUnknownOpDynamicallyLegal(
-        [&](mlir::Operation *operation) -> bool {
-          return converter.isLegal(operation) &&
-                 llvm::all_of(operation->getRegions(),
-                              [&](mlir::Region &region) -> bool {
-                                return converter.isLegal(&region);
-                              });
-        });
-    target.addDynamicallyLegalOp<FuncOp, mlir::func::FuncOp>(
-        [&](mlir::Operation *operation) -> bool {
-          mlir::FunctionOpInterface function =
-              mlir::cast<mlir::FunctionOpInterface>(operation);
-          mlir::Region &body = function.getFunctionBody();
-          return converter.isLegal(function.getFunctionType()) &&
-                 (body.empty() ||
-                  converter.isLegal(body.front().getArgumentTypes()));
-        });
     mlir::RewritePatternSet patterns(&getContext());
-    patterns
-        .add<LowerBindOp, LowerCallOp, LowerFailOp, LowerPureOp, LowerUnpackOp,
-             LowerYieldOp, GenericOpPattern<mlir::func::ReturnOp>>(
-            converter, &getContext());
-    patterns.add<GenericOpPattern<mlir::func::CallOp>,
-                 GenericOpPattern<mlir::scf::YieldOp>>(converter, &getContext(),
-                                                       mlir::PatternBenefit(2));
-    mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(patterns,
-                                                                   converter);
-    mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(
-        patterns, converter);
-    mlir::scf::populateSCFStructuralTypeConversionsAndLegality(
-        converter, patterns, target);
-    mlir::cf::populateCFStructuralTypeConversionsAndLegality(converter,
-                                                             patterns, target);
+    populateLowerTVMFFIMonadConversionPatterns(target, converter, patterns);
     if (mlir::failed(
             mlir::applyPartialConversion(op, target, std::move(patterns)))) {
       signalPassFailure();
@@ -296,4 +245,57 @@ class LowerTVMFFIMonadPass final
 };
 
 } // namespace
+
+void populateLowerTVMFFIMonadConversionPatterns(
+    mlir::ConversionTarget &target, mlir::TypeConverter &converter,
+    mlir::RewritePatternSet &patterns) {
+  mlir::MLIRContext *context = patterns.getContext();
+  converter.addConversion([](mlir::Type type) -> mlir::Type { return type; });
+  converter.addConversion(
+      [context](ResultType) -> mlir::Type { return resultTupleType(context); });
+  converter.addConversion(
+      [&converter, context](mlir::FunctionType type) -> mlir::Type {
+        llvm::SmallVector<mlir::Type> inputs, outputs;
+        if (mlir::failed(converter.convertTypes(type.getInputs(), inputs)) ||
+            mlir::failed(converter.convertTypes(type.getResults(), outputs))) {
+          return {};
+        }
+        return mlir::FunctionType::get(context, inputs, outputs);
+      });
+
+  target.addIllegalOp<MonadCallOp, MonadBindOp, MonadFailOp, MonadPureOp,
+                      MonadUnpackOp, MonadYieldOp>();
+  target.markUnknownOpDynamicallyLegal([&](mlir::Operation *operation) -> bool {
+    return converter.isLegal(operation) &&
+           llvm::all_of(operation->getRegions(),
+                        [&](mlir::Region &region) -> bool {
+                          return converter.isLegal(&region);
+                        });
+  });
+  target.addDynamicallyLegalOp<FuncOp, mlir::func::FuncOp>(
+      [&](mlir::Operation *operation) -> bool {
+        mlir::FunctionOpInterface function =
+            mlir::cast<mlir::FunctionOpInterface>(operation);
+        mlir::Region &body = function.getFunctionBody();
+        return converter.isLegal(function.getFunctionType()) &&
+               (body.empty() ||
+                converter.isLegal(body.front().getArgumentTypes()));
+      });
+  patterns
+      .add<LowerBindOp, LowerCallOp, LowerFailOp, LowerPureOp, LowerUnpackOp,
+           LowerYieldOp, GenericOpPattern<mlir::func::CallOp>,
+           GenericOpPattern<mlir::func::ReturnOp>>(converter, context);
+  // Preserve yield attributes instead of using the upstream structural rewrite.
+  patterns.add<GenericOpPattern<mlir::scf::YieldOp>>(converter, context,
+                                                     mlir::PatternBenefit(2));
+  mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(patterns,
+                                                                 converter);
+  mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(
+      patterns, converter);
+  mlir::scf::populateSCFStructuralTypeConversionsAndLegality(converter,
+                                                             patterns, target);
+  mlir::cf::populateCFStructuralTypeConversionsAndLegality(converter, patterns,
+                                                           target);
+}
+
 } // namespace trident::tvm_ffi

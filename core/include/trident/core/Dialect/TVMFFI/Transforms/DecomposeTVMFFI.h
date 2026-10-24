@@ -10,6 +10,7 @@
 
 #include <mlir/Pass/Pass.h>
 #include <mlir/Pass/PassRegistry.h>
+#include <mlir/Transforms/DialectConversion.h>
 
 namespace trident::tvm_ffi {
 
@@ -18,6 +19,14 @@ namespace trident::tvm_ffi {
 
 #define GEN_PASS_REGISTRATION_DECOMPOSETVMFFI
 #include "trident/core/Dialect/TVMFFI/Transforms/Passes.h.inc"
+
+/// Register default type conversions, patterns and target legality.
+/// Keep the converter at a stable address through pattern application. Add any
+/// overriding type rules after population. After successful conversion, replace
+/// nested type attributes as in the pass.
+void populateDecomposeTVMFFIConversionPatterns(
+    mlir::ConversionTarget &target, mlir::TypeConverter &converter,
+    mlir::RewritePatternSet &patterns);
 
 } // namespace trident::tvm_ffi
 

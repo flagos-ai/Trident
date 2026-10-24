@@ -51,10 +51,7 @@ namespace trident::conversion {
 class ConvertKernelLaunchOp final
     : public mlir::OpConversionPattern<tvm_ffi::KernelLaunchOp> {
 public:
-  ConvertKernelLaunchOp(mlir::TypeConverter &typeConverter,
-                        mlir::MLIRContext *context)
-      : mlir::OpConversionPattern<tvm_ffi::KernelLaunchOp>(typeConverter,
-                                                           context) {}
+  using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult
   matchAndRewrite(tvm_ffi::KernelLaunchOp op, OpAdaptor adaptor,
@@ -245,7 +242,7 @@ public:
                            mlir::scf::SCFDialect, tvm_ffi::TVMFFIDialect>();
 
     mlir::RewritePatternSet patterns(&getContext());
-    populateTVMFFIToGPUConversionPatterns(target, patterns, typeConverter);
+    populateTVMFFIToGPUConversionPatterns(patterns, typeConverter);
 
     if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
                                                   std::move(patterns)))) {
@@ -254,8 +251,7 @@ public:
   }
 };
 
-void populateTVMFFIToGPUConversionPatterns(mlir::ConversionTarget &,
-                                           mlir::RewritePatternSet &patterns,
+void populateTVMFFIToGPUConversionPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::TypeConverter &typeConverter) {
   patterns.add<ConvertKernelLaunchOp>(typeConverter, patterns.getContext());
 }
