@@ -25,7 +25,6 @@
 #include <mlir/Support/LLVM.h>
 #include <mlir/Support/WalkResult.h>
 #include <optional>
-#include <tuple>
 #include <utility>
 
 namespace trident::tvm_ffi {
@@ -33,6 +32,12 @@ namespace trident::tvm_ffi {
 #include "trident/core/Dialect/TVMFFI/Transforms/Passes.h.inc"
 
 namespace {
+
+struct CleanupSite final {
+  mlir::Operation *terminator;
+  std::optional<uint32_t> successorIndex;
+  llvm::SmallVector<DeferOp> cleanups;
+};
 
 class LowerTVMFFIDeferPass final
     : public impl::LowerTVMFFIDeferBase<LowerTVMFFIDeferPass> {
@@ -56,9 +61,7 @@ class LowerTVMFFIDeferPass final
     }
     // Plan every site before changing any CFG: both diagnostics and dominance
     // queries must see the original IR.
-    llvm::SmallVector<std::tuple<mlir::Operation *, std::optional<uint32_t>,
-                                 llvm::SmallVector<DeferOp>>>
-        sites;
+    llvm::SmallVector<CleanupSite> sites;
     for (auto &[region, cleanups] : registrations) {
       for (mlir::Block &block : llvm::make_filter_range(
                *region, [&dominance](mlir::Block &block) -> bool {
@@ -90,26 +93,18 @@ class LowerTVMFFIDeferPass final
         if (successorCount == 0) {
           sites.push_back({terminator, std::nullopt, std::move(active)});
         } else {
-          llvm::append_range(
-              sites,
-              llvm::map_range(
-                  llvm::seq(successorCount),
-                  [&](uint32_t index)
-                      -> std::tuple<mlir::Operation *, std::optional<uint32_t>,
-                                    llvm::SmallVector<DeferOp>> {
-                    mlir::Block *destination = terminator->getSuccessor(index);
-                    llvm::SmallVector<DeferOp> exiting = llvm::filter_to_vector(
-                        active,
-                        [&dominance, destination](DeferOp cleanup) -> bool {
-                          mlir::Block *registration = cleanup->getBlock();
-                          // Re-entry ends the previous registration before the
-                          // next iteration.
-                          return destination == registration ||
-                                 !dominance.dominates(registration,
-                                                      destination);
-                        });
-                    return {terminator, index, std::move(exiting)};
-                  }));
+          for (uint32_t index : llvm::seq(successorCount)) {
+            mlir::Block *destination = terminator->getSuccessor(index);
+            llvm::SmallVector<DeferOp> exiting = llvm::filter_to_vector(
+                active, [&dominance, destination](DeferOp cleanup) -> bool {
+                  mlir::Block *registration = cleanup->getBlock();
+                  // Re-entry ends the previous registration before the next
+                  // iteration.
+                  return destination == registration ||
+                         !dominance.dominates(registration, destination);
+                });
+            sites.push_back({terminator, index, std::move(exiting)});
+          }
         }
       }
     }

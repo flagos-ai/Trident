@@ -246,10 +246,28 @@ class ImporterTest(unittest.TestCase):
                     pure([created]), result_types=[tvm_ffi_d.ResultType.get(array_type)]
                 ) as bound:
                     [array] = bound.arguments
-                    for target in (integer.type, ir.IntegerType.get_signless(64)):
+                    union = tvm_ffi_d.UnionType.get(
+                        [integer.type, tvm_ffi_d.BoolType.get()]
+                    )
+                    for target, expected in (
+                        (integer.type, integer.type),
+                        (ir.IntegerType.get_signless(64), integer.type),
+                        (tvm_ffi_d.AnyType.get(), tvm_ffi_d.AnyType.get()),
+                        (union, union),
+                    ):
                         with self.subTest(target=target):
                             [result] = container_get(array, 0, target)
-                            self.assertEqual(result.type.payload_type, integer.type)
+                            self.assertEqual(result.type.payload_type, expected)
+                            with bind([result], result_types=[result.type]) as widened:
+                                [value] = widened.arguments
+                                narrowed = tvm_ffi_d.array_create(
+                                    tvm_ffi_d.ArrayType.get(expected), [value]
+                                )
+                                [element] = container_get(narrowed, 0, integer.type)
+                                self.assertEqual(
+                                    element.type.payload_type, integer.type
+                                )
+                                tvm_ffi_d.monad_yield(pure([value]))
                     tvm_ffi_d.monad_yield(pure([array]))
             self.assertTrue(importer.module.operation.verify())
 

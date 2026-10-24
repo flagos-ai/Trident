@@ -314,21 +314,13 @@ def container_get(
         return checked_call(
             "ffi.ArrayGetItem", [container, native_constant(index)], target
         )
-    [result] = pure([value])
     target = boxed_type(target)
-    if payload == target:
-        return [result]
-    result_types = make_result_types([target])
-    with bind([result], result_types=result_types) as extracted:
-        [value] = extracted.arguments
-        if isinstance(
-            target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
-        ) and not isinstance(value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)):
-            value = tvm_ffi_d.upcast(target, value)
-        else:
-            value = tvm_ffi_d.downcast(target, value)
-        tvm_ffi_d.monad_yield(pure([value], result_types=result_types))
-    return [*extracted.outputs]
+    widening = isinstance(
+        target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+    ) and not isinstance(payload, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType))
+    if payload != target and not widening:
+        value = tvm_ffi_d.downcast(target, value)
+    return pure([value], result_types=make_result_types([target]))
 
 
 def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
