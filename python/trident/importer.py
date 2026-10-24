@@ -80,8 +80,9 @@ class TridentFxImporter:
         else:
             raise ValueError(f"missing argument {parameter.name} for {node.target}")
         if isinstance(argument, (torch.layout, torch.memory_format)):
-            argument = self._convert_torch_enum(argument)
-        return argument
+            return self._convert_torch_enum(argument)
+        else:
+            return argument
 
     def _bind(self, node: torch.fx.Node, value: ImportedValue) -> None:
         self.values[node] = value
@@ -170,13 +171,12 @@ class TridentFxImporter:
                 with bind(call, result_types=result_types) as invocation:
                     [array] = invocation.arguments
                     tvm_ffi_d.monad_yield(self._build_results(array, payload_types))
-
                 tvm_ffi_d.monad_yield(invocation.outputs)
-        results = tuple(operation.outputs)
         if len(schema.returns) <= 1:
-            [result] = results
+            [result] = operation.outputs
             return result
-        return results
+        else:
+            return tuple(operation.outputs)
 
     def _build_aten_special(self, node: torch.fx.Node, name: str) -> ImportedValue:
         arguments = node.args[:1] if name == "_assert_scalar" else node.args

@@ -11,13 +11,15 @@
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <cstdint>
 #include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/Sequence.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/SmallVectorExtras.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
-#include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/BuiltinOps.h> // NOLINT(misc-include-cleaner)
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/Location.h>
 #include <mlir/IR/PatternMatch.h>
