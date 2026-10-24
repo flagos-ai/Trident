@@ -26,6 +26,21 @@ cmake --build build/core --target check-trident-core
 
 CUDA execution tests require a usable GPU; selecting `unit` does not run them.
 
+## Test selection
+
+Follow [LLVM’s testing guide](https://llvm.org/docs/TestingGuide.html): keep
+small regression inputs at the implementation layer and reserve execution tests
+for observable integration behavior. Compression means removing equivalent
+paths, not combining unrelated regressions into one large program. Preserve
+separate cases when they select different branches or have different failure
+contracts.
+
+For example, one transposed-view mutation case checks layout, input writeback
+and bidirectional aliasing; one nested output pytree includes empty containers
+and None leaves. A wholly empty output remains separate because it takes the
+no-result execution path. Copy writeback remains separate because its source
+and destination can be reversed independently of view aliasing.
+
 ## Coverage ownership
 
 | Suite | Contract |
@@ -36,8 +51,8 @@ CUDA execution tests require a usable GPU; selecting `unit` does not run them.
 | `e2e/test_operators.py` | Scalar/tensor overloads, schema arguments, reductions and multiple results |
 | `e2e/test_factories.py` | No-argument calls, factory metadata and independent allocations |
 | `e2e/test_storage.py` | Clone formats, view strides, aliases and mutation writeback |
-| `e2e/test_dynamic.py` | Runtime shapes, symbolic arithmetic, conditional branches and specialization reuse |
-| `e2e/test_containers.py` | Input unpacking, output pytrees, None/scalars and independent output references |
+| `e2e/test_dynamic.py` | Runtime shapes, symbolic arithmetic and typed scalar outputs, conditional branches and specialization reuse |
+| `e2e/test_containers.py` | Input unpacking, output pytrees, None and independent output references |
 | `e2e/test_specialization.py` | Device, dtype and string specialization, including string storage boundaries and Unicode |
 | `e2e/test_kernel_launch.py` | Triton execution, specialization rejection and cleanup |
 | `e2e/test_regions.py` | Packed region execution, zero/multiple iterations, replacement/identity payloads and loop allocation cleanup |
