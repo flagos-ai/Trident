@@ -14,12 +14,13 @@ FFI. The LLVM revision remains pinned in the top-level CMake file.
 without running functionalization or decompositions, executes a warmup to populate
 Triton's compilation cache, and calls `TridentFxImporter.import_program`.
 Warmup is the first execution, including its mutations; cached calls execute the
-compiled program. A private `func.func` holds the graph, and a public
+compiled program. A private `tvm_ffi.func` holds the graph, and a public
 `tvm_ffi.func` checks guards and exposes the packed ABI. The Python executor
 converts runtime tensors through DLPack and reconstructs the output pytree.
-The LLVM dispatcher tries packed specializations in order, reads their ABI
-result tags, releases guard exceptions before retrying, and propagates runtime
-call failures. ABI field reads and calls share local builders.
+The semantic `tvm_ffi.pack.func` dispatcher tries packed specializations in order with
+`tvm_ffi.pack.call`, tests successful payloads with `tvm_ffi.isa`, and propagates
+runtime call failures. Automatic ownership releases rejected Exception payloads.
+The combined module, including the dispatcher, is lowered in one pipeline.
 
 `importer.py` maps FX nodes to SSA values. Tensors use `!tvm_ffi.tensor` and
 retain reference semantics. Graph traversal binds call results through one path;
@@ -27,8 +28,10 @@ call dispatch handles scalar operations, ATen and higher-order operators.
 The current-node dispatcher delegates ATen, cond, kernel and scalar construction
 to dedicated methods; ATen construction owns schema selection and argument
 conversion. Checked-call helpers return complete Results; callers bind them
-explicitly. Private graph functions return Results; the public wrapper binds them and
-uses `tvm_ffi.return` at its packed boundary.
+explicitly. Private graph functions use Results internally and pack successful
+outputs at
+their `tvm_ffi.return` boundary. Graph rejection returns a successful GuardMatch
+payload; the guard wrapper calls the graph through its packed ABI.
 An in-place ATen call operates on the original object, and views keep their
 storage aliases. ATen calls use the schema to
 order positional and keyword arguments, fill defaults, select a scalar overload
@@ -232,9 +235,20 @@ The lowering pipeline is:
    local releases in defer regions. Run `lower-tvm-ffi-defer` immediately
    afterward to clone their bodies
    at dominance-scope exits before inlining and SCF-to-CFG conversion.
-4. Finalize metadata operations and convert TVM FFI functions and returns to
-   checked functions with output slots and an i32 status, generating packed ABI
-   wrappers. Output slots are read and written only on success.
+4. Run `lower-tensor-metadata` to expand tensor metadata operations
+   through borrowed object/DLTensor views into DLPack operations. Then run
+   `lower-to-pack` followed by
+   `convert-tvm-ffi-to-func`. The first pass replaces every typed `tvm_ffi.func`
+   body with a `tvm_ffi.pack.func` entry of the same name and visibility, including
+   functions without `emit_tvm_ffi_abi`. It checks argument count before reading
+   slots and checks tags before entering the original CFG. Rejection returns a
+   successful GuardMatch. Original successful returns retain their declared
+   payload checks, while the packed signature returns CAny to admit GuardMatch.
+   The second pass converts packed entries to `__tvm_ffi_<name>` functions with
+   output slots and an i32 status, preserving the original visibility. External
+   declarations must specify visibility accepted by `func.func`, which rejects
+   public declarations. Output slots are written only on success;
+   there is no separate typed implementation or wrapper call.
 5. Run GPU-to-LLVM before expanding packed calls and reference checks, avoiding
    region simplification over the expanded LLVM CFG. The GPU conversion also
    applies registered dialect LLVM patterns. Expand remaining local packed calls
@@ -256,14 +270,16 @@ call is distinct from registry
 `tvm_ffi.FunctionCall`.
 
 `decompose-tvm-ffi` preserves the call's two results while converting container
-operands and explicitly constructed tuples to CArray. `TVMFFIToFunc` converts
-function definitions and returns, preserving the implementation's
-`emit_tvm_ffi_abi` marker for local call verification; it does not expand calls.
+operands and explicitly constructed tuples to CArray. `LowerToPack` converts
+typed function bodies to packed entries. `TVMFFIToFunc` lowers packed definitions and
+returns to the native ABI. Neither pass expands local calls. The original typed
+callee's `emit_tvm_ffi_abi` marker remains required for frontend typed calls;
+it no longer controls which functions receive packed entries.
 
 `TVMFFIToLLVM` requires decomposed container operands and expands the call through
 `__tvm_ffi_<callee>` using packed argument and output slots. It emits a direct
-`func.call` to the wrapper supplied by `TVMFFIToFunc`; it does not look up,
-validate or create wrapper declarations. Zero status produces separate
+`func.call` to the packed entry supplied by `TVMFFIToFunc`; it does not look up,
+validate or create entry declarations. Zero status produces separate
 `(true, payload)` results; nonzero status produces `(false, None)` without reading
 the output slot or clearing the runtime error. The payload owns the packed
 return reference. Existing payload retains and releases follow SSA replacement;
@@ -278,8 +294,8 @@ are independent and may be zero. Zero inputs execute unconditionally; zero
 outputs perform only conditional effects. A failed bind yields failed Results
 when outputs exist. Independent effects after a call remain inside its
 continuation, so failure suppresses them without requiring a payload dependency.
-The existing `func.call` path for private graph helpers remains separate from
-local packed calls. Function payloads are boxed into Any during monad lowering.
+Private graph functions and guard wrappers use local packed calls. Function
+payloads are boxed into Any during monad lowering.
 
 `TridentFxImporter.visit` consumes a shared iterator over the original FX nodes.
 Pure nodes stay in a loop. Node handlers construct only their current node and
@@ -362,12 +378,12 @@ whole-expression `_base` and storage-offset behavior without a continuation
 protocol. Previously constructed calls still run and enforce their assertions;
 fallback suppresses later operands. Guard collections return a short-circuiting
 boxed boolean Result. The backend explicitly binds this result, constructs the
-guarded branch, binds flattened inputs and the graph call, then packs the output into
-the public result. Each `tvm_ffi.func` declares exactly one C ABI payload type;
-`tvm_ffi.return` carries a boxed success boolean and Any payload. No-data
-functions declare `!tvm_ffi.none`. Private graph helpers use `func.return` with
-Result values, which monad lowering converts to tuples before cleanup and
-inlining. Packed output slots are read and written only on success. Multiple
+guarded branch, binds flattened inputs and forwards the packed graph result. Each `tvm_ffi.func` declares exactly one C ABI payload type;
+`tvm_ffi.return` carries a boxed success boolean and Any payload. Generic no-data
+functions can declare `!tvm_ffi.none`; generated graph and wrapper functions
+declare Any so they can also return GuardMatch. Private graph helpers bind
+internal Results, pack successful payloads and use `tvm_ffi.return`. Packed
+output slots are read and written only on success. Multiple
 values are packed into a semantic tuple payload before returning. Guard
 rejection and Triton specialization failure remain successful `GuardMatch`
 values, requesting another specialization; runtime FFI failures return nonzero
@@ -497,7 +513,7 @@ when no defers remain. There is no early-release optimization or complete borrow
 checker; callers must preserve reference validity.
 
 Generated private graph Results use failure for specialization rejection. At the
-Python-built graph-call boundary, the wrapper checks all Result success bits,
+graph function exit, the importer checks all Result success bits,
 reads/packs payloads only on success, and maps rejection to a successful GuardMatch
 payload. All independently successful outputs are cleaned up even if another
 output failed. Ordinary asserting FFI-call failures remain assertions, and generic
@@ -521,6 +537,16 @@ the result is unused.
 a native scalar. Metadata operations lower through DLPack. Tensor literals use
 the existing runtime staging path. Global function handles are cached at module
 initialization; call sites retain and release the cached reference.
+
+`tvm_ffi.isa` tests Any/CAny against one concrete runtime type index without
+trapping or retaining the value. Semantic Array/Tuple, Exception, Function and
+Tensor targets decompose to their indexed Base types. Container element types
+are not checked; Any, CAny, Str and Union targets are rejected. Ordinary local
+`tvm_ffi.call` operands must match the typed callee parameters. Dynamic
+`tvm_ffi.pack.call` forwards the complete argument view; the converted packed
+entry checks count before loading slots and then checks tags, returning a
+successful GuardMatch on mismatch.
+
 
 `tvm_ffi.monad.unpack` exposes one Result as a success `i1` followed by its
 payload. Payload types compatible with `tvm_ffi.upcast` to Any produce
@@ -552,3 +578,30 @@ CUDA is required by GPU execution tests.
 The core and FFI external projects always run their incremental build during a
 top-level build or editable install. This keeps installed native extensions in
 sync with source changes even when ExternalProject configure stamps are current.
+
+## Dynamic packed entries
+
+`!tvm_ffi.pack.arguments` borrows the packed ABI argument pointer and i32 count.
+It is outside the tagged C ABI and cannot be a Result/container payload or a
+function return. C and Python bindings expose construction, type checks and
+TypeID registration. `pack.func` requires exactly this one input and one CABI
+payload result; it always exports `__tvm_ffi_<name>` without an ABI marker.
+The converted native `func.func` also needs no `emit_tvm_ffi_abi` marker;
+packed calls resolve the generated ABI symbol directly.
+`pack.size` sign-extends the count to native i64. `pack.get` takes native i64,
+asserts `0 <= index < size` before loading, and returns borrowed Any.
+
+`pack.call` forwards the original pointer and count to a local typed or packed
+entry without allocating or expanding an argument array. Entries converted from
+typed functions reject wrong counts before reading slots and reject wrong tags
+with GuardMatch. Both conversion passes run after decomposition; typed parameters
+must be indexed Base types or CAny. Native parameters cannot be packed.
+Calls return Bool/Any; failure preserves the runtime error and returns None
+without reading the output slot. Successful call payloads own an independent
+reference. Pack views and reads own no references; existing semantic consumers
+and exports retain borrowed values when needed. Ordinary `tvm_ffi.call` still
+requires matching typed operands and has no Any-to-arbitrary-type exception.
+
+Dynamic arity is supported at the MLIR packed entry. Python `*args`/`**kwargs`
+normalization and guard input mapping require separate verification; the ABI
+alone does not establish support for those frontend signatures.

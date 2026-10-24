@@ -32,7 +32,8 @@
 
 // A None payload must still gate a payload-independent mutation.
 // CHECK-LABEL: tvm_ffi.func @none_continuation(
-// CHECK-SAME: %[[READY:[a-zA-Z0-9_]+]]: i1, %[[SOURCE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[DEST:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor)
+// CHECK-SAME: %[[BOXED:[a-zA-Z0-9_]+]]: !tvm_ffi.bool, %[[SOURCE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor, %[[DEST:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor)
+// CHECK: %[[READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[BOXED]]
 // CHECK: %[[INPUT:[a-zA-Z0-9_]+]] = scf.if %[[READY]]
 // CHECK: %[[PARTS:[a-zA-Z0-9_]+]]:2 = tvm_ffi.tuple.unconstruct %[[INPUT]]
 // CHECK: %[[OK:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[PARTS]]#0
@@ -46,17 +47,14 @@
 // CHECK: %[[FLAG:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[SUCCESS]]
 // CHECK: tvm_ffi.return %[[FLAG]], %[[OUTPUT]]#1
 
-// LLVM-LABEL: llvm.func @checked_continuation(
+// LLVM-LABEL: llvm.func @__tvm_ffi_checked_continuation(
 // LLVM: %[[FIRST:[a-zA-Z0-9_]+]] = llvm.call @checked_call(%[[CALLEE:[a-zA-Z0-9_]+]], %[[TENSOR:[a-zA-Z0-9_]+]])
 // LLVM: %[[FIRST_OK:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[FIRST]][1]
 // LLVM-NEXT: llvm.cond_br %[[FIRST_OK]]
 // LLVM: %[[SECOND:[a-zA-Z0-9_]+]] = llvm.call @checked_call(%[[CALLEE]], %[[TENSOR]])
 // LLVM: %[[SECOND_OK:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[SECOND]][1]
 // LLVM-NEXT: llvm.cond_br %[[SECOND_OK]]
-// LLVM: llvm.return
-// LLVM-LABEL: llvm.func @__tvm_ffi_checked_continuation(
-// LLVM: llvm.return
-// LLVM-LABEL: llvm.func @none_continuation(
+// LLVM-LABEL: llvm.func @__tvm_ffi_none_continuation(
 // LLVM: %[[STATUS:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall
 // LLVM: llvm.return
 
@@ -100,8 +98,9 @@ tvm_ffi.func @checked_continuation(%tensor: !tvm_ffi.c.tensor) -> !tvm_ffi.c.ten
 }
 
 // A None payload preserves the status dependency for independent side effects.
-tvm_ffi.func @none_continuation(%ready: i1, %source: !tvm_ffi.c.tensor, %destination: !tvm_ffi.c.tensor) -> !tvm_ffi.none {
+tvm_ffi.func @none_continuation(%boxed_ready: !tvm_ffi.bool, %source: !tvm_ffi.c.tensor, %destination: !tvm_ffi.c.tensor) -> !tvm_ffi.none {
   %none = tvm_ffi.constant.none
+  %ready = tvm_ffi.get %boxed_ready : !tvm_ffi.bool -> i1
   %input = scf.if %ready -> (!tvm_ffi.monad.result<!tvm_ffi.none>) {
     %pure = tvm_ffi.monad.pure %none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     scf.yield %pure : !tvm_ffi.monad.result<!tvm_ffi.none>

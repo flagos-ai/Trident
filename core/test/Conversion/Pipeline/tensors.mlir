@@ -3,7 +3,7 @@
 
 // RUN: trident-core-opt %s --split-input-file --trident-lowering-pipeline --verify-each | FileCheck %s --implicit-check-not='!tvm_ffi.' --implicit-check-not='dlpack.' --implicit-check-not='unrealized_conversion_cast'
 
-// The local FinalizeTVMFFI and DLPackToLLVM fixtures own the metadata field
+// The local LowerTensorMetadata and DLPackToLLVM fixtures own the metadata field
 // matrix. This integration follows one dynamic index from a semantic tensor
 // through object extraction, the DLTensor layout and the native return value.
 // CHECK-LABEL: llvm.func @tensor_size(
@@ -26,16 +26,14 @@ func.func @tensor_size(%tensor: !tvm_ffi.tensor, %index: i64) -> i64 {
 // Tensor literals use one stable CPU-staging path for both splat and
 // non-splat attributes before copying the tensor to the current CUDA device.
 
-// CHECK-LABEL: llvm.func @tensor_literal_nonsplat(
+// CHECK-LABEL: llvm.func @__tvm_ffi_tensor_literal_nonsplat(
 // CHECK: llvm.call @aoti_torch_create_tensor_from_blob(%[[NONSPLAT_DATA:[a-zA-Z0-9_]+]], %[[NONSPLAT_RANK:[a-zA-Z0-9_]+]], %[[NONSPLAT_SHAPE:[a-zA-Z0-9_]+]], %[[NONSPLAT_STRIDES:[a-zA-Z0-9_]+]], %[[NONSPLAT_OFFSET:[a-zA-Z0-9_]+]], %[[NONSPLAT_DTYPE:[a-zA-Z0-9_]+]], %[[NONSPLAT_CPU_DEVICE:[a-zA-Z0-9_]+]], %[[NONSPLAT_CPU_INDEX:[a-zA-Z0-9_]+]], %[[NONSPLAT_SLOT:[a-zA-Z0-9_]+]])
 // CHECK: %[[NONSPLAT_CPU_TENSOR:[a-zA-Z0-9_]+]] = llvm.load %[[NONSPLAT_SLOT]] : !llvm.ptr -> !llvm.ptr
 // CHECK: llvm.call @aoti_torch_copy_(%[[NONSPLAT_CUDA_TENSOR:[a-zA-Z0-9_]+]], %[[NONSPLAT_CPU_TENSOR]], %[[NONSPLAT_NON_BLOCKING:[a-zA-Z0-9_]+]])
 // CHECK: llvm.call @aoti_torch_delete_tensor_object(%[[NONSPLAT_CPU_TENSOR]])
-// CHECK-LABEL: llvm.func @__tvm_ffi_tensor_literal_nonsplat(
-// CHECK: llvm.call @tensor_literal_nonsplat(%[[SLOT:[a-zA-Z0-9_]+]]) : (!llvm.ptr) -> i32
 
-// CHECK-LABEL: llvm.func @tensor_literal_splat(
-// CHECK-SAME: %[[OUTPUT_SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr)
+// CHECK-LABEL: llvm.func @__tvm_ffi_tensor_literal_splat(
+// CHECK-SAME: %[[CTX:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[COUNT:[a-zA-Z0-9_]+]]: i32, %[[OUTPUT_SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr)
 // CHECK: %[[HANDLE_ADDR:[a-zA-Z0-9_]+]] = llvm.mlir.addressof @__trident_tvm_ffi_handle_trident.runtime.tensor_to_tvm_ffi_object : !llvm.ptr
 // CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = llvm.mlir.constant(1.250000e+00 : f32)
 // CHECK: %[[ELEMENTS:[a-zA-Z0-9_]+]] = llvm.mlir.constant(6 : i64)
@@ -53,13 +51,14 @@ func.func @tensor_size(%tensor: !tvm_ffi.tensor, %index: i64) -> i64 {
 // CHECK: %[[TENSOR_BITS:[a-zA-Z0-9_]+]] = llvm.ptrtoint %[[CUDA_TENSOR]] : !llvm.ptr to i64
 // CHECK: llvm.store %[[TENSOR_BITS]], %[[TENSOR_PAYLOAD:[a-zA-Z0-9_]+]] : i64, !llvm.ptr
 // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[HANDLE_ADDR]] : !llvm.ptr -> !llvm.ptr
-// CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[ARGS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RESULT_SLOT:[a-zA-Z0-9_]+]])
+// CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[CALL_ARGS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RESULT_SLOT:[a-zA-Z0-9_]+]])
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.store %[[RESULT]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
-// CHECK-LABEL: llvm.func @__tvm_ffi_tensor_literal_splat(
-// CHECK: llvm.call @tensor_literal_splat(%[[SLOT:[a-zA-Z0-9_]+]]) : (!llvm.ptr) -> i32
-// The wrapper passes through the lowered TVMFFIAny result from the inner
-// function and stores it into the return slot expected by tvm_ffi.func.
+// CHECK: llvm.br ^[[CHECKED:bb[0-9]+]](%[[RESULT]] : !llvm.struct<(i32, i32, i64)>)
+// CHECK: ^[[CHECKED]](%[[PAYLOAD:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>):
+// CHECK: llvm.cond_br %[[SUCCESS:[a-zA-Z0-9_]+]], ^[[STORE:bb[0-9]+]](%[[PAYLOAD]], %[[CODE:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, i32)
+// CHECK: ^[[STORE]](%[[OUTPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[STORE_CODE:[a-zA-Z0-9_]+]]: i32):
+// CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUTPUT_SLOT]]
+// The packed entry stores the checked payload directly into its output slot.
 tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
   %0 = tvm_ffi.tensor.literal dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32> : !tvm_ffi.c.tensor
 
@@ -69,8 +68,7 @@ tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.c.tensor attributes {emit_tv
   tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
 }
 
-// The wrapper passes through the lowered TVMFFIAny result from the inner
-// function and stores it into the return slot expected by tvm_ffi.func.
+// The packed entry stores the checked payload directly into its output slot.
 tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
   %0 = tvm_ffi.tensor.literal dense<1.250000e+00> : tensor<2x3xf32> : !tvm_ffi.c.tensor
 

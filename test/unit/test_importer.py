@@ -40,6 +40,41 @@ class ImporterTest(unittest.TestCase):
         module.operation.walk(collect)
         return len(extractions)
 
+    def test_import_program_packed_boundary(self) -> None:
+        class Outputs(torch.nn.Module):
+            def __init__(self, count: int) -> None:
+                super().__init__()
+                self.count = count
+
+            def forward(self, value: torch.Tensor):
+                return tuple(value + index for index in range(self.count))
+
+        for count in (0, 1, 2):
+            with self.subTest(outputs=count), new_context() as context:
+                program = torch.export.export(Outputs(count), (torch.ones(2),))
+                importer = TridentFxImporter(context=context, specialization_id=0)
+                function = importer.import_program(program, func_name="graph")
+                self.assertIsInstance(function, tvm_ffi_d.FuncOp)
+                self.assertEqual(function.sym_visibility.value, "private")
+                self.assertEqual(
+                    list(function.function_type.value.results),
+                    [tvm_ffi_d.AnyType.get()],
+                )
+                self.assertIn("emit_tvm_ffi_abi", function.attributes)
+                self.assertTrue(importer.module.operation.verify())
+                operations: list[str] = []
+
+                def collect(operation: ir.Operation) -> ir.WalkResult:
+                    operations.append(operation.name)
+                    return ir.WalkResult.ADVANCE
+
+                function.operation.walk(collect)
+                self.assertIn("tvm_ffi.return", operations)
+                self.assertIn("tvm_ffi.exception", operations)
+                self.assertNotIn("func.return", operations)
+                if count > 1:
+                    self.assertIn("tvm_ffi.tuple.construct", operations)
+
     def test_bind_arities(self) -> None:
         for input_count, output_count in [(0, 0), (0, 2), (2, 0), (2, 3)]:
             with (
@@ -63,11 +98,11 @@ class ImporterTest(unittest.TestCase):
                         values = (
                             pure([constant(7)] * output_count) if output_count else []
                         )
-                        tvm_ffi_d.MonadYieldOp(values)
+                        tvm_ffi_d.monad_yield(values)
 
                     self.assertEqual(ir.InsertionPoint.current.block, block)
                     self.assertEqual(len(operation.outputs), output_count)
-                    func.ReturnOp(operation.outputs)
+                    func.return_(operation.outputs)
 
                 self.assertTrue(module.operation.verify())
 
@@ -82,11 +117,11 @@ class ImporterTest(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "stop"),
                     bind([], result_types=[]),
                 ):
-                    tvm_ffi_d.MonadYieldOp([])
+                    tvm_ffi_d.monad_yield([])
 
                     raise RuntimeError("stop")
                 self.assertEqual(ir.InsertionPoint.current.block, block)
-                func.ReturnOp([])
+                func.return_([])
 
             self.assertTrue(module.operation.verify())
 
@@ -117,7 +152,7 @@ class ImporterTest(unittest.TestCase):
                         [first.type, second.type, last.type], [unit.payload_type] * 3
                     )
                     self.assertEqual(argument.type, integer)
-                    tvm_ffi_d.MonadYieldOp(pure([argument], result_types=[payload]))
+                    tvm_ffi_d.monad_yield(pure([argument], result_types=[payload]))
             self.assertTrue(module.operation.verify())
             parsed = ir.Module.parse(f"{module}")
             parsed_bind = next(
@@ -149,17 +184,17 @@ class ImporterTest(unittest.TestCase):
                 with bind(first, result_types=[unit]):
                     cached = table.extract(("values", 0))
                     with bind(cached, result_types=[unit]) as reused:
-                        tvm_ffi_d.MonadYieldOp(pure([]))
+                        tvm_ffi_d.monad_yield(pure([]))
 
-                    tvm_ffi_d.MonadYieldOp(reused.outputs)
+                    tvm_ffi_d.monad_yield(reused.outputs)
 
                 # Ending the Python context does not end the IR block lifetime.
                 self.assertTrue(is_value_in_scope(first[0]))
                 cached = table.extract(("values", 0))
                 with bind(cached, result_types=[unit]):
-                    tvm_ffi_d.MonadYieldOp(pure([]))
+                    tvm_ffi_d.monad_yield(pure([]))
 
-                func.ReturnOp([])
+                func.return_([])
 
             self.assertEqual(self._extraction_count(module), 1)
             self.assertTrue(module.operation.verify())
@@ -185,11 +220,11 @@ class ImporterTest(unittest.TestCase):
                     with ir.InsertionPoint(child):
                         values = table.extract(("values", 0))
                         with bind(values, result_types=[unit]):
-                            tvm_ffi_d.MonadYieldOp(pure([]))
+                            tvm_ffi_d.monad_yield(pure([]))
 
-                        scf.YieldOp([])
+                        scf.yield_([])
 
-                func.ReturnOp([])
+                func.return_([])
 
             self.assertEqual(self._extraction_count(module), 2)
             self.assertTrue(module.operation.verify())
@@ -201,11 +236,11 @@ class ImporterTest(unittest.TestCase):
             with ir.InsertionPoint(importer.module.body):
                 integer = box(constant(7))
                 array_type = tvm_ffi_d.ArrayType.get(integer.type)
-                created = tvm_ffi_d.ArrayCreateOp(array_type, [integer]).result
+                created = tvm_ffi_d.array_create(array_type, [integer])
                 self.assertEqual(created.type, array_type)
-                size = tvm_ffi_d.ArraySizeOp(created).result
+                size = tvm_ffi_d.array_size(created)
                 self.assertEqual(size.type, integer.type)
-                element = tvm_ffi_d.ArrayGetOp(created, constant(0)).result
+                element = tvm_ffi_d.array_get(created, constant(0))
                 self.assertEqual(element.type, integer.type)
                 with bind(
                     pure([created]), result_types=[tvm_ffi_d.ResultType.get(array_type)]
@@ -215,7 +250,7 @@ class ImporterTest(unittest.TestCase):
                         with self.subTest(target=target):
                             [result] = container_get(array, 0, target)
                             self.assertEqual(result.type.payload_type, integer.type)
-                    tvm_ffi_d.MonadYieldOp(pure([array]))
+                    tvm_ffi_d.monad_yield(pure([array]))
             self.assertTrue(importer.module.operation.verify())
 
     def test_container_inference(self) -> None:
@@ -251,7 +286,7 @@ class ImporterTest(unittest.TestCase):
             with ir.InsertionPoint(importer.module.body):
                 integer, boolean = box(constant(7)), box(constant(True))
                 type_ = tvm_ffi_d.TupleType.get([integer.type, boolean.type])
-                tuple_ = tvm_ffi_d.TupleConstructOp(type_, [integer, boolean]).result
+                tuple_ = tvm_ffi_d.tuple_construct(type_, [integer, boolean])
                 self.assertEqual(tuple_.type, type_)
                 elements = tvm_ffi_d.TupleUnconstructOp(type_.types, tuple_).elements
                 self.assertEqual(
@@ -275,7 +310,7 @@ class ImporterTest(unittest.TestCase):
                     ):
                         container_get(tuple_, index, integer.type)
                 empty_type = tvm_ffi_d.TupleType.get([])
-                empty = tvm_ffi_d.TupleConstructOp(empty_type, []).result
+                empty = tvm_ffi_d.tuple_construct(empty_type, [])
                 self.assertEqual(
                     len(tvm_ffi_d.TupleUnconstructOp([], empty).elements), 0
                 )
@@ -313,7 +348,7 @@ class ImporterTest(unittest.TestCase):
                             self.assertIsInstance(
                                 bound.arguments[-1].type, tvm_ffi_d.NoneType
                             )
-                            tvm_ffi_d.MonadYieldOp(
+                            tvm_ffi_d.monad_yield(
                                 pure([constant(None)], result_types=[none_result])
                             )
                     self.assertTrue(importer.module.operation.verify())
@@ -381,11 +416,11 @@ class ImporterTest(unittest.TestCase):
                 function = func.FuncOp("semantic", ([tensor, string], []))
                 with ir.InsertionPoint(function.add_entry_block()):
                     checked_call("test.identity", [function.arguments[0]], tensor)
-                    pure([tvm_ffi_d.ExceptionOp("GuardMatch").result])
+                    pure([tvm_ffi_d.exception("GuardMatch")])
                     importer.build_arguments(
                         [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
                     )
-                    func.ReturnOp([])
+                    func.return_([])
             self.assertTrue(importer.module.operation.verify())
             self.assertNotIn("tvm_ffi.cleanup", f"{importer.module}")
             self.assertNotIn("tvm_ffi.retain", f"{importer.module}")
@@ -433,7 +468,7 @@ class ImporterTest(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "construction failed"),
                     bind(inferred, result_types=make_result_types([integer])) as bound,
                 ):
-                    tvm_ffi_d.MonadYieldOp(pure(bound.arguments))
+                    tvm_ffi_d.monad_yield(pure(bound.arguments))
                     raise RuntimeError("construction failed")
                 self.assertEqual(ir.InsertionPoint.current.block, module.body)
                 with self.assertRaisesRegex(

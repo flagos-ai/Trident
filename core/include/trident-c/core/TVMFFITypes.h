@@ -135,6 +135,13 @@ MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFIObjectTypeGetName(void);
 MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIObjectTypeGetTypeID(void);
 MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIObjectType(MlirType type);
 
+// PackArgumentsType
+
+MLIR_CAPI_EXPORTED MlirType mlirTVMFFIPackArgumentsTypeGet(MlirContext context);
+MLIR_CAPI_EXPORTED MlirStringRef mlirTVMFFIPackArgumentsTypeGetName(void);
+MLIR_CAPI_EXPORTED MlirTypeID mlirTVMFFIPackArgumentsTypeGetTypeID(void);
+MLIR_CAPI_EXPORTED bool mlirTypeIsATVMFFIPackArgumentsType(MlirType type);
+
 // RawStrType
 
 MLIR_CAPI_EXPORTED MlirType mlirTVMFFIRawStrTypeGet(MlirContext context);

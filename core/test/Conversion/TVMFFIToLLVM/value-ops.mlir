@@ -159,3 +159,14 @@ func.func @to_native_scalars(%bool: i1, %int: i64, %float: f64)
   return %bool_value, %int_value, %float_value
      : !tvm_ffi.bool, !tvm_ffi.int, !tvm_ffi.float
 }
+
+// CHECK-LABEL: func.func @is_integer(
+// CHECK-SAME: %[[ANY:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[TAG:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[ANY]][0]
+// CHECK: %[[INDEX:[a-zA-Z0-9_]+]] = llvm.mlir.constant(1 : i32)
+// CHECK: %[[MATCH:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[TAG]], %[[INDEX]]
+// CHECK: return %[[MATCH]]
+func.func @is_integer(%input: !tvm_ffi.c.any) -> i1 {
+  %match = tvm_ffi.isa %input is !tvm_ffi.int : !tvm_ffi.c.any
+  return %match : i1
+}

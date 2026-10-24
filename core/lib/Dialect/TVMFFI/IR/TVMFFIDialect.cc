@@ -141,6 +141,47 @@ void FuncOp::print(mlir::OpAsmPrinter &p) {
       getArgAttrsAttrName(), getResAttrsAttrName());
 }
 
+void PackFuncOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                       llvm::StringRef name, mlir::FunctionType type,
+                       llvm::ArrayRef<mlir::NamedAttribute> attrs) {
+  buildWithEntryBlock(builder, state, name, type, attrs, type.getInputs());
+}
+
+llvm::ArrayRef<mlir::Type> PackFuncOp::getArgumentTypes() {
+  return getFunctionType().getInputs();
+}
+
+// PackFuncOp custom assembly format.
+
+mlir::Region *PackFuncOp::getCallableRegion() {
+  mlir::Region &body = getBody();
+  return body.empty() ? nullptr : &body;
+}
+
+llvm::ArrayRef<mlir::Type> PackFuncOp::getResultTypes() {
+  return getFunctionType().getResults();
+}
+
+mlir::ParseResult PackFuncOp::parse(mlir::OpAsmParser &parser,
+                                    mlir::OperationState &result) {
+  return mlir::function_interface_impl::parseFunctionOp(
+      parser, result, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(result.name),
+      [](mlir::Builder &builder, llvm::ArrayRef<mlir::Type> argTypes,
+         llvm::ArrayRef<mlir::Type> results,
+         mlir::function_interface_impl::VariadicFlag,
+         std::string &) -> mlir::FunctionType {
+        return builder.getFunctionType(argTypes, results);
+      },
+      getArgAttrsAttrName(result.name), getResAttrsAttrName(result.name));
+}
+
+void PackFuncOp::print(mlir::OpAsmPrinter &p) {
+  mlir::function_interface_impl::printFunctionOp(
+      p, *this, /*isVariadic=*/false, getFunctionTypeAttrName(),
+      getArgAttrsAttrName(), getResAttrsAttrName());
+}
+
 void TVMFFIDialect::initialize() {
   addInterfaces<TVMFFIInlinerInterface>();
   addAttributes<

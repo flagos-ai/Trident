@@ -295,10 +295,10 @@ class GuardExpressionVisitor:
                     [value] = remaining.arguments
                     if analysis.fallback is None:
                         value = arith.andi(comparison, native(value))
-                    tvm_ffi_d.MonadYieldOp(pure([value], result_types=types))
+                    tvm_ffi_d.monad_yield(pure([value], result_types=types))
 
                 results = [*remaining.outputs]
-            tvm_ffi_d.MonadYieldOp(results)
+            tvm_ffi_d.monad_yield(results)
         return [*operation.outputs]
 
     def _build_operands(self, operands: Sequence[ast.expr]) -> list[ir.Value]:
@@ -312,7 +312,7 @@ class GuardExpressionVisitor:
                     values.append(self.value(operand))
                     continue
                 with bind(self.build(operand), result_types=types) as operation:
-                    tvm_ffi_d.MonadYieldOp(
+                    tvm_ffi_d.monad_yield(
                         build(index + 1, [*values, *operation.arguments])
                     )
 
@@ -343,7 +343,7 @@ class GuardExpressionVisitor:
             # Entry guards validate untrusted tuple arity before the static
             # schema may be used; static type arity cannot validate the input.
             return checked_call("ffi.ArraySize", [value], tvm_ffi_d.IntType.get())
-        return pure([tvm_ffi_d.ArraySizeOp(value).result])
+        return pure([tvm_ffi_d.array_size(value)])
 
     def _direct_fallback(self, node: ast.expr) -> bool:
         if isinstance(node, ast.Attribute):
@@ -488,16 +488,14 @@ class GuardExpressionVisitor:
                         result_types=types,
                     ) as length:
                         [value] = length.arguments
-                        tvm_ffi_d.MonadYieldOp(
-                            pure([native(value)], result_types=types)
-                        )
+                        tvm_ffi_d.monad_yield(pure([native(value)], result_types=types))
 
                     results = [*length.outputs]
                 else:
                     results = pure(
                         [self._evaluate(node, operation.arguments)], result_types=types
                     )
-                tvm_ffi_d.MonadYieldOp(results)
+                tvm_ffi_d.monad_yield(results)
             return [*operation.outputs]
 
     def value(self, node: ast.expr) -> ir.Value:

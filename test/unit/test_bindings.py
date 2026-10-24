@@ -33,6 +33,7 @@ class BindingsTest(unittest.TestCase):
                 ("int", tvm_ffi_d.IntType),
                 ("none", tvm_ffi_d.NoneType),
                 ("object", tvm_ffi_d.ObjectType),
+                ("pack.arguments", tvm_ffi_d.PackArgumentsType),
                 ("raw_str", tvm_ffi_d.RawStrType),
                 ("small_str", tvm_ffi_d.SmallStrType),
                 ("str", tvm_ffi_d.StrType),
@@ -59,6 +60,7 @@ class BindingsTest(unittest.TestCase):
             for member in (
                 ir.IntegerType.get_signless(64),
                 tvm_ffi_d.ObjectType.get(),
+                tvm_ffi_d.PackArgumentsType.get(),
                 tvm_ffi_d.ResultType.get(tvm_ffi_d.IntType.get()),
             ):
                 with (
@@ -101,18 +103,18 @@ class BindingsTest(unittest.TestCase):
                 self.assertEqual(len(operation.body.blocks), 1)
                 self.assertEqual(ir.InsertionPoint.current.block, entry)
                 with ir.InsertionPoint(body):
-                    tvm_ffi_d.MonadYieldOp([])
+                    tvm_ffi_d.monad_yield([])
 
                 empty = tvm_ffi_d.MonadBindOp([], [])
                 self.assertIsNone(empty.get_entry_block())
                 with ir.InsertionPoint(empty.add_entry_block()):
                     self.assertEqual(len(empty.arguments), 0)
-                    tvm_ffi_d.MonadYieldOp([])
+                    tvm_ffi_d.monad_yield([])
 
                 self.assertEqual(empty.get_entry_block(), empty.body.blocks[0])
                 self.assertEqual(empty.add_entry_block(), empty.body.blocks[0])
                 self.assertEqual(len(empty.body.blocks), 1)
-                func.ReturnOp([])
+                func.return_([])
 
             self.assertTrue(module.operation.verify())
 
@@ -160,6 +162,7 @@ class BindingsTest(unittest.TestCase):
                 ir.IntegerType.get_signless(64),
                 ir.RankedTensorType.get([2], ir.IntegerType.get_signless(64)),
                 tvm_ffi_d.ObjectType.get(),
+                tvm_ffi_d.PackArgumentsType.get(),
                 tvm_ffi_d.ResultType.get(integer),
             ):
                 with self.assertRaisesRegex(
@@ -187,7 +190,7 @@ class BindingsTest(unittest.TestCase):
             success = tvm_ffi_d.BoolType.get()
             value = tvm_ffi_d.AnyType.get()
             with ir.InsertionPoint(module.body):
-                tvm_ffi_d.FuncOp(
+                tvm_ffi_d.func(
                     "callee",
                     ir.TypeAttr.get(ir.FunctionType.get([payload], [payload])),
                     emit_tvm_ffi_abi=True,
@@ -201,7 +204,7 @@ class BindingsTest(unittest.TestCase):
                     self.assertEqual(monad_call.result.type.payload_type, payload)
                     self.assertIsInstance(call.success.type, tvm_ffi_d.BoolType)
                     self.assertIsInstance(call.value.type, tvm_ffi_d.AnyType)
-                    func.ReturnOp([monad_call.result, call.success, call.value])
+                    func.return_([monad_call.result, call.success, call.value])
             self.assertTrue(module.operation.verify())
             parsed = ir.Module.parse(f"{module}")
             calls = list(parsed.body.operations[1].regions[0].blocks[0].operations)
@@ -220,6 +223,60 @@ class BindingsTest(unittest.TestCase):
                 self.assertEqual(unpacked.success.type, ir.IntegerType.get_signless(1))
                 self.assertEqual(unpacked.value.type, tvm_ffi_d.AnyType.get())
                 self.assertTrue(module.operation.verify())
+
+    def test_func_get_entry_block(self) -> None:
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            argument_type = tvm_ffi_d.IntType.get()
+            any_type = tvm_ffi_d.AnyType.get()
+            location = ir.Location.name("arguments")
+            with ir.InsertionPoint(module.body):
+                operation = tvm_ffi_d.FuncOp(
+                    "typed",
+                    ir.TypeAttr.get(ir.FunctionType.get([argument_type], [any_type])),
+                )
+                self.assertIsNone(operation.get_entry_block())
+                body = operation.add_entry_block(arg_locs=[location])
+                self.assertEqual(ir.InsertionPoint.current.block, module.body)
+                self.assertEqual(
+                    [value.type for value in body.arguments], [argument_type]
+                )
+                self.assertEqual(body.arguments[0].location, location)
+                self.assertEqual(operation.get_entry_block(), body)
+                self.assertEqual(operation.add_entry_block(), body)
+                self.assertEqual(len(operation.body.blocks), 1)
+            with ir.InsertionPoint(body):
+                success = tvm_ffi_d.constant_bool(True)
+                payload = tvm_ffi_d.upcast(any_type, tvm_ffi_d.constant_none())
+                tvm_ffi_d.return_(success, payload)
+            self.assertTrue(module.operation.verify())
+
+    def test_pack_func_get_entry_block(self) -> None:
+        with new_context(), ir.Location.unknown():
+            module = ir.Module.create()
+            argument_type = tvm_ffi_d.PackArgumentsType.get()
+            any_type = tvm_ffi_d.AnyType.get()
+            location = ir.Location.name("arguments")
+            with ir.InsertionPoint(module.body):
+                operation = tvm_ffi_d.PackFuncOp(
+                    "packed",
+                    ir.TypeAttr.get(ir.FunctionType.get([argument_type], [any_type])),
+                )
+                self.assertIsNone(operation.get_entry_block())
+                body = operation.add_entry_block(arg_locs=[location])
+                self.assertEqual(ir.InsertionPoint.current.block, module.body)
+                self.assertEqual(
+                    [value.type for value in body.arguments], [argument_type]
+                )
+                self.assertEqual(body.arguments[0].location, location)
+                self.assertEqual(operation.get_entry_block(), body)
+                self.assertEqual(operation.add_entry_block(), body)
+                self.assertEqual(len(operation.body.blocks), 1)
+            with ir.InsertionPoint(body):
+                success = tvm_ffi_d.constant_bool(True)
+                payload = tvm_ffi_d.upcast(any_type, tvm_ffi_d.constant_none())
+                tvm_ffi_d.return_(success, payload)
+            self.assertTrue(module.operation.verify())
 
     def test_result_payload_types(self) -> None:
         with self.assertRaises(TypeError):
@@ -245,6 +302,7 @@ class BindingsTest(unittest.TestCase):
             for payload in (
                 ir.IntegerType.get_signless(64),
                 tvm_ffi_d.ObjectType.get(),
+                tvm_ffi_d.PackArgumentsType.get(),
                 tvm_ffi_d.ResultType.get(integer),
             ):
                 with (

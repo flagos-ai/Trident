@@ -26,7 +26,7 @@ from torch.export.graph_signature import (
 from torch.utils import _pytree as pytree
 
 from trident.core import ir
-from trident.core.dialects import arith, cf, func, gpu, scf
+from trident.core.dialects import arith, cf, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.ownership import is_value_in_scope
 
@@ -165,13 +165,13 @@ class TridentFxImporter:
                 value_type(metadata),
             )
             if len(schema.returns) == 1:
-                tvm_ffi_d.MonadYieldOp(call)
+                tvm_ffi_d.monad_yield(call)
             else:
                 with bind(call, result_types=result_types) as invocation:
                     [array] = invocation.arguments
-                    tvm_ffi_d.MonadYieldOp(self._build_results(array, payload_types))
+                    tvm_ffi_d.monad_yield(self._build_results(array, payload_types))
 
-                tvm_ffi_d.MonadYieldOp(invocation.outputs)
+                tvm_ffi_d.monad_yield(invocation.outputs)
         results = tuple(operation.outputs)
         if len(schema.returns) <= 1:
             [result] = results
@@ -203,7 +203,7 @@ class TridentFxImporter:
         [condition] = values
         _, *messages = node.args
         message, *_ = messages or ["FX assertion failed"]
-        cf.AssertOp(native(condition), message)
+        cf.assert_(native(condition), message)
         return constant(None)
 
     def _build_cond(self, node: torch.fx.Node) -> ImportedValue:
@@ -245,8 +245,8 @@ class TridentFxImporter:
                         outputs,
                         result_types=branch_types,
                     )
-                    scf.YieldOp(yielded)
-            tvm_ffi_d.MonadYieldOp(conditional.results)
+                    scf.yield_(yielded)
+            tvm_ffi_d.monad_yield(conditional.results)
         if node.meta["val"]:
             return tuple(operation.outputs)
         else:
@@ -351,7 +351,7 @@ class TridentFxImporter:
             yielded = self._build_launch(
                 kernel, node, loc, operands, output_names, grid
             )
-            tvm_ffi_d.MonadYieldOp(yielded)
+            tvm_ffi_d.monad_yield(yielded)
         if output_names:
             return dict(zip(output_names, operation.outputs, strict=True))
         else:
@@ -385,10 +385,10 @@ class TridentFxImporter:
                 yielded = self._build_launch(
                     kernel, node, loc, cloned, names, grid, index + 1
                 )
-                tvm_ffi_d.MonadYieldOp(yielded)
+                tvm_ffi_d.monad_yield(yielded)
             return [*operation.outputs]
         with bind(self.build_arguments(grid), result_types=result_types) as operation:
-            launched = tvm_ffi_d.KernelLaunchOp(
+            launched = tvm_ffi_d.kernel_launch(
                 tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get()),
                 self._import_kernel_binary(kernel, node, loc),
                 *(native(value) for value in operation.arguments),
@@ -397,16 +397,16 @@ class TridentFxImporter:
                 native_constant(1),
                 [value for _, value in operands.values()],
                 ir.ArrayAttr.get([attribute for attribute, _ in operands.values()]),
-                dynamicSharedMemorySize=arith.constant(
+                dynamic_shared_memory_size=arith.constant(
                     ir.IntegerType.get_signless(32), kernel.metadata.shared, loc=loc
                 ),
                 loc=loc,
-            ).result
+            )
             outputs = [operands[name][1] for name in names]
             with bind([launched], result_types=result_types) as launch:
-                tvm_ffi_d.MonadYieldOp(pure(outputs, result_types=result_types))
+                tvm_ffi_d.monad_yield(pure(outputs, result_types=result_types))
 
-            tvm_ffi_d.MonadYieldOp(launch.outputs)
+            tvm_ffi_d.monad_yield(launch.outputs)
         return [*operation.outputs]
 
     def _build_results(
@@ -422,7 +422,7 @@ class TridentFxImporter:
                 container_get(array, index, types[index]),
                 result_types=result_types,
             ) as operation:
-                tvm_ffi_d.MonadYieldOp(build([*values, *operation.arguments]))
+                tvm_ffi_d.monad_yield(build([*values, *operation.arguments]))
 
             return [*operation.outputs]
 
@@ -459,7 +459,7 @@ class TridentFxImporter:
                 [self._scalar(node, operation.arguments)],
                 result_types=result_types,
             )
-            tvm_ffi_d.MonadYieldOp(yielded)
+            tvm_ffi_d.monad_yield(yielded)
         [result] = operation.outputs
         return result
 
@@ -722,14 +722,14 @@ class TridentFxImporter:
                         yielded = container_create(
                             elements.arguments[: len(argument)], type_
                         )
-                        tvm_ffi_d.MonadYieldOp(yielded)
+                        tvm_ffi_d.monad_yield(yielded)
                     current = elements.outputs
                 else:
                     value = self.argument(argument)
                     values.append(value)
                     continue
                 with bind(current, result_types=result_types) as operation:
-                    tvm_ffi_d.MonadYieldOp(
+                    tvm_ffi_d.monad_yield(
                         build(index + 1, [*values, *operation.arguments])
                     )
 
@@ -740,7 +740,7 @@ class TridentFxImporter:
 
     def import_program(
         self, program: torch.export.ExportedProgram, *, func_name: str
-    ) -> func.FuncOp:
+    ) -> tvm_ffi_d.FuncOp:
         producers = {node.name: node for node in program.graph.nodes}
         inputs = [
             spec
@@ -769,16 +769,15 @@ class TridentFxImporter:
                 )
                 for spec in outputs
             ]
-            function = func.FuncOp(
+            any_type = tvm_ffi_d.AnyType.get()
+            function = tvm_ffi_d.FuncOp(
                 func_name,
-                ir.FunctionType.get(
-                    input_types,
-                    make_result_types(payload_types),
-                ),
-                visibility="private",
+                ir.TypeAttr.get(ir.FunctionType.get(input_types, [any_type])),
+                sym_visibility=ir.StringAttr.get("private"),
+                emit_tvm_ffi_abi=ir.UnitAttr.get(),
             )
             block = function.add_entry_block()
-            result_types = function.type.results
+            result_types = make_result_types(payload_types)
             with ir.InsertionPoint(block):
                 output_values = [
                     spec.arg.value
@@ -822,11 +821,33 @@ class TridentFxImporter:
                         output_values,
                         result_types=result_types,
                     )
-                    tvm_ffi_d.MonadYieldOp(yielded)
-                results = [*initialization.outputs]
-                yielded = results
-                func.ReturnOp(yielded)
+                    tvm_ffi_d.monad_yield(yielded)
+                self._return_graph_results(initialization.outputs)
         return function
+
+    @staticmethod
+    def _return_graph_results(results: Sequence[ir.Value]) -> None:
+        """Pack graph outputs and translate specialization rejection at the exit."""
+        any_type = tvm_ffi_d.AnyType.get()
+        result_type = tvm_ffi_d.ResultType.get(any_type)
+        with bind(results, result_types=[result_type]) as outputs:
+            values = outputs.arguments
+            payload = (
+                values[0]
+                if len(values) == 1
+                else tvm_ffi_d.tuple_construct(
+                    tuple_type([value.type for value in values]), values
+                )
+            )
+            tvm_ffi_d.monad_yield(pure([payload], result_types=[result_type]))
+        success, payload = tvm_ffi_d.monad_unpack(outputs.outputs[0])
+        outcome = scf.IfOp(success, [any_type], has_else=True)
+        with ir.InsertionPoint(outcome.then_block):
+            scf.yield_([payload])
+        with ir.InsertionPoint(outcome.else_block):
+            rejection = tvm_ffi_d.exception("GuardMatch")
+            scf.yield_([tvm_ffi_d.upcast(any_type, rejection)])
+        tvm_ffi_d.return_(tvm_ffi_d.constant_bool(True), outcome.results[0])
 
     def symbolic(self, expression: Any) -> ir.Value:
         operations = {
@@ -911,11 +932,11 @@ class TridentFxImporter:
                 yielded = self.visit(
                     nodes, graph_module, outputs, result_types=result_types
                 )
-                tvm_ffi_d.MonadYieldOp(yielded)
+                tvm_ffi_d.monad_yield(yielded)
             return [*operation.outputs]
         with bind(
             self.build_arguments(outputs), result_types=result_types
         ) as operation:
-            tvm_ffi_d.MonadYieldOp(pure(operation.arguments, result_types=result_types))
+            tvm_ffi_d.monad_yield(pure(operation.arguments, result_types=result_types))
 
         return [*operation.outputs]

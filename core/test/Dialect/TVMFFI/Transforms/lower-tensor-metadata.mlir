@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -finalize-tvm-ffi | FileCheck %s
+// RUN: trident-core-opt %s --lower-tensor-metadata --verify-each | FileCheck %s
 
 // CHECK-LABEL: func.func @tensor_dtype_and_device(
 // CHECK-SAME: %[[TENSOR1:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor)

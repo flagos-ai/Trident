@@ -7,7 +7,6 @@
 
 #include "trident/core/Utils/Registration.h"
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
-#include "trident/core/Conversion/FinalizeTVMFFI/FinalizeTVMFFI.h"
 #include "trident/core/Conversion/Pipeline/Pipeline.h"
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
@@ -17,6 +16,8 @@
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerToPack.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
 #include <mlir/Conversion/GPUCommon/GPUToLLVM.h>
@@ -45,9 +46,10 @@ void trident::conversion::registerAllPasses() {
   trident::conversion::registerConvertTVMFFIToFuncPass();
   trident::conversion::registerConvertTVMFFIToGPUPass();
   trident::conversion::registerConvertTVMFFIToLLVMPass();
-  trident::conversion::registerFinalizeTVMFFIPass();
   trident::conversion::registerTridentLoweringPipelinePass();
   trident::tvm_ffi::registerDecomposeTVMFFIPass();
   trident::tvm_ffi::registerLowerTVMFFIDeferPass();
   trident::tvm_ffi::registerLowerTVMFFIMonadPass();
+  trident::tvm_ffi::registerLowerTensorMetadataPass();
+  trident::tvm_ffi::registerLowerToPackPass();
 }

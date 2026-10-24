@@ -3,10 +3,13 @@ add_mlir_library(
   DecomposeTVMFFI.cc
   LowerTVMFFIDefer.cc
   LowerTVMFFIMonad.cc
+  LowerTensorMetadata.cc
+  LowerToPack.cc
   DEPENDS
   MLIRTVMFFITransformsPassIncGen
   LINK_LIBS
   PUBLIC
+  DLPackDialect
   MLIRArithDialect
   MLIRControlFlowDialect
   MLIRControlFlowInterfaces
@@ -17,5 +20,6 @@ add_mlir_library(
   MLIRPass
   MLIRSCFDialect
   MLIRSCFTransforms
+  MLIRTransformUtils
   MLIRTransforms
   TVMFFIDialect)

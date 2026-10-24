@@ -7,13 +7,14 @@
 
 #include "trident/core/Conversion/Pipeline/Pipeline.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
-#include "trident/core/Conversion/FinalizeTVMFFI/FinalizeTVMFFI.h"
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerToPack.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
@@ -47,7 +48,9 @@ class TridentLoweringPipelinePass final
     pm.addPass(mlir::createInlinerPass());
     pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
-    pm.addPass(createFinalizeTVMFFI());
+    pm.addPass(tvm_ffi::createLowerTensorMetadata());
+    // Form packed entry bodies before lowering their native ABI.
+    pm.addPass(tvm_ffi::createLowerToPack());
     pm.addPass(createConvertTVMFFIToFunc());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());

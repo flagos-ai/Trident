@@ -196,3 +196,14 @@ func.func @string_elements(%array: !tvm_ffi.array<!tvm_ffi.str>, %tuple: !tvm_ff
 func.func @union_collapse(%value: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.c.tensor>) -> !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.c.tensor> {
   return %value : !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.c.tensor>
 }
+
+// -----
+
+// CHECK-LABEL: func.func @test_exception_tag(
+// CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi.c.any
+// CHECK: %[[MATCH:[a-zA-Z0-9_]+]] = tvm_ffi.isa %[[VALUE]] is !tvm_ffi.c.exception
+// CHECK-NEXT: return %[[MATCH]]
+func.func @test_exception_tag(%value: !tvm_ffi.any) -> i1 {
+  %match = tvm_ffi.isa %value is !tvm_ffi.exception : !tvm_ffi.any
+  return %match : i1
+}

@@ -229,9 +229,9 @@ def checked_result(value: ir.Value, success: ir.Value) -> ir.Value:
     branch = scf.IfOp(success, [type_], has_else=True)
 
     with ir.InsertionPoint(branch.then_block):
-        scf.YieldOp(pure([value]))
+        scf.yield_(pure([value]))
     with ir.InsertionPoint(branch.else_block):
-        scf.YieldOp(tvm_ffi_d.MonadFailOp([type_]).outputs)
+        scf.yield_([tvm_ffi_d.monad_fail([type_])])
     (result,) = branch.results
     return result
 
@@ -264,7 +264,7 @@ def constant(value: Any) -> ir.Value:
             )
         else:
             elements = ir.DenseElementsAttr.get(cpu.numpy())
-        return tvm_ffi_d.TensorLiteralOp(elements).result
+        return tvm_ffi_d.tensor_literal(elements)
     else:
         raise NotImplementedError(f"unsupported FX constant: {value!r}")
 
@@ -290,9 +290,9 @@ def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Valu
         for value, target in zip(elements, types, strict=True)
     ]
     if isinstance(type_, tvm_ffi_d.TupleType):
-        value = tvm_ffi_d.TupleConstructOp(type_, elements).result
+        value = tvm_ffi_d.tuple_construct(type_, elements)
     else:
-        value = tvm_ffi_d.ArrayCreateOp(type_, elements).result
+        value = tvm_ffi_d.array_create(type_, elements)
     return pure([value])
 
 
@@ -307,9 +307,9 @@ def container_get(
         value = tvm_ffi_d.TupleUnconstructOp(type_.types, container).elements[index]
     elif isinstance(type_, tvm_ffi_d.ArrayType):
         payload = type_.element_type
-        value = tvm_ffi_d.ArrayGetOp(
+        value = tvm_ffi_d.array_get(
             container, native_constant(index) if isinstance(index, int) else index
-        ).result
+        )
     else:
         return checked_call(
             "ffi.ArrayGetItem", [container, native_constant(index)], target
@@ -327,7 +327,7 @@ def container_get(
             value = tvm_ffi_d.upcast(target, value)
         else:
             value = tvm_ffi_d.downcast(target, value)
-        tvm_ffi_d.MonadYieldOp(pure([value], result_types=result_types))
+        tvm_ffi_d.monad_yield(pure([value], result_types=result_types))
     return [*extracted.outputs]
 
 

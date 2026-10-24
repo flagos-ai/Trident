@@ -42,8 +42,13 @@ func.func @container_roundtrip(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi
 // -----
 
 // Tuple construction packs multiple values before crossing the ABI.
-// CHECK-LABEL: llvm.func @tuple_return(
-// CHECK-SAME: %[[X:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[Y:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[Z:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr
+// CHECK-LABEL: llvm.func @__tvm_ffi_tuple_return(
+// CHECK-SAME: %[[CTX:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[INPUTS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[NARGS:[a-zA-Z0-9_]+]]: i32, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr
+// CHECK: %[[X:[a-zA-Z0-9_]+]] = llvm.load %[[INPUTS]]
+// CHECK: %[[INPUT_Y:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[INPUTS]][1]
+// CHECK: %[[Y:[a-zA-Z0-9_]+]] = llvm.load %[[INPUT_Y]]
+// CHECK: %[[INPUT_Z:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[INPUTS]][2]
+// CHECK: %[[Z:[a-zA-Z0-9_]+]] = llvm.load %[[INPUT_Z]]
 // CHECK: llvm.store %[[X]], %[[CALL_ARGS:[a-zA-Z0-9_]+]]
 // CHECK: %[[Y_SLOT:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[CALL_ARGS]][1]
 // CHECK: llvm.store %[[Y]], %[[Y_SLOT]]
@@ -59,12 +64,11 @@ func.func @container_roundtrip(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi
 // CHECK: llvm.store %[[COPY_Z]], %[[PACKED_Z]]
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE:[a-zA-Z0-9_]+]], %[[PACKED_ARGS]], %[[COUNT:[a-zA-Z0-9_]+]], %[[ARRAY_SLOT:[a-zA-Z0-9_]+]])
 // CHECK: %[[ARRAY:[a-zA-Z0-9_]+]] = llvm.load %[[ARRAY_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.store %[[ARRAY]], %[[OUT]]
-// CHECK-LABEL: llvm.func @__tvm_ffi_tuple_return(
-// CHECK-SAME: %[[CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[NARGS:[a-zA-Z0-9_]+]]: i32, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr
-// CHECK: llvm.call @tuple_return(%[[X:[a-zA-Z0-9_]+]], %[[Y:[a-zA-Z0-9_]+]], %[[Z:[a-zA-Z0-9_]+]], %[[SLOT:[a-zA-Z0-9_]+]])
-// CHECK: %[[PACKED:[a-zA-Z0-9_]+]] = llvm.load %[[SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.store %[[PACKED]], %[[OUT]]
+// CHECK: llvm.br ^[[CHECKED:bb[0-9]+]](%[[ARRAY]] : !llvm.struct<(i32, i32, i64)>)
+// CHECK: ^[[CHECKED]](%[[PAYLOAD:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>):
+// CHECK: llvm.cond_br %[[SUCCESS:[a-zA-Z0-9_]+]], ^[[STORE:bb[0-9]+]](%[[PAYLOAD]], %[[CODE:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, i32)
+// CHECK: ^[[STORE]](%[[OUTPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[STORE_CODE:[a-zA-Z0-9_]+]]: i32):
+// CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUT]]
 tvm_ffi.func @tuple_return(%x: !tvm_ffi.c.tensor,
     %y: !tvm_ffi.c.tensor, %z: !tvm_ffi.c.tensor) -> !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor>
     attributes {emit_tvm_ffi_abi} {

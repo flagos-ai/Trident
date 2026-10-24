@@ -55,11 +55,11 @@ class Guards:
             branch = scf.IfOp(native(predicate), [type_], has_else=True)
             with ir.InsertionPoint(branch.then_block):
                 yielded = self._build_checks(codes, builder, arguments, context)
-                scf.YieldOp(yielded)
+                scf.yield_(yielded)
             with ir.InsertionPoint(branch.else_block):
                 yielded = pure([native_constant(False)], result_types=[type_])
-                scf.YieldOp(yielded)
-            tvm_ffi_d.MonadYieldOp(branch.results)
+                scf.yield_(yielded)
+            tvm_ffi_d.monad_yield(branch.results)
         return [*operation.outputs]
 
     def build(

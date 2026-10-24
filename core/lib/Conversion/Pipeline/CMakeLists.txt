@@ -6,7 +6,6 @@ add_mlir_conversion_library(
   LINK_LIBS
   PUBLIC
   DLPackToLLVM
-  FinalizeTVMFFI
   MLIRArithToLLVM
   MLIRControlFlowToLLVM
   MLIRFuncToLLVM
