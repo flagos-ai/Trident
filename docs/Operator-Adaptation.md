@@ -27,8 +27,15 @@ frontend does not functionalize the graph.
 Check membership in `torch._C._dispatch_get_all_op_names()` before emitting a
 registry call. A JIT schema alone does not establish dispatch support. Scalar
 shape arithmetic uses the shared semantic builders, including comparisons,
-floor division, remainder and boolean operations. Their temporary native SSA
-must be wrapped back into TVM FFI values before returning to the frontend. Metadata reads use `tvm_ffi.tensor.size`,
+floor division, remainder and boolean operations. Python builders in
+`python/trident/ir.py` own type unification, native extraction, conversion,
+computation and result boxing. Extend their shared operation mappings rather
+than adding C++ scalar operations or lowering patterns. Temporary native SSA
+must be wrapped back into TVM FFI values before returning to the frontend.
+Bool-to-Float conversion must be unsigned. The Python `logical_not` builder
+compares against zero using ordered floating equality, so NaN remains truthy
+and both floating zeros are falsy.
+Metadata reads use `tvm_ffi.tensor.size`,
 `stride`, `dim`, `device`, `dtype` or `storage_offset`. Dtype values must be
 converted to ATen's integer enum when the schema expects it.
 
@@ -94,7 +101,9 @@ handle and call status before using its result.
 
 Stateless scalar arithmetic, boxing and leaf constants live in
 `python/trident/ir.py` and return ordinary values, as do schema and metadata
-helpers. Independent fallible construction helpers return complete Results.
+helpers. The Python `power` builder handles nonnegative constant exponents;
+source-level reductions compose the same scalar builders. Independent fallible
+construction helpers return complete Results.
 Callers consuming Results use `with BindScope(result_types, inputs) as scope`
 and `scope.arguments` to expose one successful payload per input in input order,
 including None payloads. Finish construction with `scope.yield_(results)`, which
@@ -114,10 +123,10 @@ CABI types directly; native scalar payloads and container elements are rejected.
 Use `constant` for all scalar constants and the shared arithmetic and metadata
 builders for frontend computations. Every ordinary builder returns TVM FFI
 values, and symbol/value tables store those values without native extraction.
-`native`/`tvm_ffi.get` is limited to temporary local arithmetic and native
-SCF/CF/GPU interfaces; local arithmetic results are immediately wrapped with
-`tvm_ffi.to`. Bind arguments remain CABI values. `BindScope` borrows its
-inputs; scope contexts restore insertion points on normal and exceptional exits.
+`native`/`tvm_ffi.get` is limited to temporary local arithmetic, metadata
+adaptation and native SCF/CF/GPU interfaces; local arithmetic results are
+immediately wrapped with `tvm_ffi.to`. Bind arguments remain CABI values.
+`BindScope` borrows its inputs; scope contexts restore insertion points on normal and exceptional exits.
 
 Use `ScopeStack` for FX traversal and other loops that accumulate a dynamic
 chain of binds: `stack.bind(result_types, inputs)` exposes payloads, and

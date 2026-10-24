@@ -7,21 +7,21 @@ import ast
 import operator
 import re
 from collections.abc import Hashable
-from functools import partial, reduce
+from functools import reduce
 from typing import Final, Self, override
 
 import torch
 import tvm_ffi
 
 from trident.core import ir
+from trident.core.dialects import arith
+from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
 from trident.ir import (
-    binary,
+    BINARY_ARITHMETIC,
     constant,
     equal,
     tensor_device_fields,
-    tensor_dim,
-    tensor_dtype_fields,
 )
 
 from ..local import Local
@@ -116,10 +116,13 @@ class TensorDTypeCode(GuardCode):
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor = source.resolve(tree)
         assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-        metadata = tensor_dtype_fields(tensor)
+        metadata = [
+            tvm_ffi_d.to(arith.extui(ir.IntegerType.get_signless(64), field))
+            for field in tvm_ffi_d.tensor_dtype(tensor)
+        ]
         dtype = tvm_ffi.convert(self.dtype)
         return reduce(
-            partial(binary, operator.and_),
+            BINARY_ARITHMETIC[operator.and_],
             [
                 equal(actual, constant(expected_value))
                 for actual, expected_value in zip(
@@ -178,8 +181,7 @@ class TensorDeviceCode(GuardCode):
         tensor = source.resolve(tree)
         assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
         device_type, device_index = tensor_device_fields(tensor)
-        return binary(
-            operator.and_,
+        return BINARY_ARITHMETIC[operator.and_](
             equal(
                 device_type,
                 constant(tvm_ffi.device(self.device.type).dlpack_device_type()),
@@ -232,7 +234,9 @@ class TensorRankCode(GuardCode):
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor = source.resolve(tree)
         assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-        return equal(tensor_dim(tensor), constant(self.expected))
+        return equal(
+            tvm_ffi_d.to(tvm_ffi_d.tensor_dim(tensor)), constant(self.expected)
+        )
 
     @property
     def key(self) -> Hashable:

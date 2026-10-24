@@ -135,10 +135,15 @@ class GuardExpressionTest(unittest.TestCase):
                 "boolean_logic",
                 "True and not False",
                 tvm_ffi_d.BoolType,
-                ("arith.cmpi",),
+                ("arith.cmpi eq",),
             ),
             ("boolean_or", "True | False", tvm_ffi_d.BoolType, ("arith.ori",)),
-            ("chained_comparison", "1 == 1 <= 3", tvm_ffi_d.BoolType, ("arith.cmpi",)),
+            (
+                "chained_comparison",
+                "1 == 1 <= 3",
+                tvm_ffi_d.BoolType,
+                ("arith.cmpi eq", "arith.cmpi sle"),
+            ),
             (
                 "dtype",
                 "torch.float32",
@@ -152,18 +157,28 @@ class GuardExpressionTest(unittest.TestCase):
                 ("arith.addf", "arith.cmpf"),
             ),
             ("float_negation", "-1.5", tvm_ffi_d.FloatType, ("arith.negf",)),
+            (
+                "float_not_negative_zero",
+                "not -0.0",
+                tvm_ffi_d.BoolType,
+                ("arith.cmpf oeq",),
+            ),
             ("integer_addition", "1 + 2", tvm_ffi_d.IntType, ("arith.addi",)),
+            ("integer_not", "not 0", tvm_ffi_d.BoolType, ("arith.cmpi eq",)),
             (
                 "mixed_boolean_float",
                 "True + 2.0",
                 tvm_ffi_d.FloatType,
-                ("arith.extui", "arith.sitofp", "arith.addf"),
+                ("arith.uitofp", "arith.addf"),
             ),
             (
                 "mixed_boolean_integer",
                 "True | 2",
                 tvm_ffi_d.IntType,
-                ("arith.extui", "arith.ori"),
+                (
+                    "arith.extui",
+                    "arith.ori",
+                ),
             ),
             ("negation", "-1", tvm_ffi_d.IntType, ("arith.subi",)),
             ("select", "1 if True else 2", tvm_ffi_d.IntType, ("scf.if",)),
@@ -173,7 +188,12 @@ class GuardExpressionTest(unittest.TestCase):
                 tvm_ffi_d.BoolType,
                 ("tvm_ffi.eq", "tvm_ffi.to"),
             ),
-            ("true_division", "5 / 2", tvm_ffi_d.FloatType, ("arith.divf",)),
+            (
+                "true_division",
+                "5 / 2",
+                tvm_ffi_d.FloatType,
+                ("arith.divf",),
+            ),
         )
         for name, text, type_class, operations in cases:
             with self.subTest(case=name):

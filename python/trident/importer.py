@@ -30,26 +30,20 @@ from trident.core.dialects import arith, cf, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
 from .ir import (
+    BINARY_ARITHMETIC,
     BindScope,
     ScopeStack,
     array_type,
-    binary,
     checked_call,
     constant,
-    constant_type,
     container_create,
     container_get,
-    is_binary_operation,
     logical_not,
     make_result_types,
     native,
     negate,
+    power,
     pure,
-    tensor_dim,
-    tensor_size,
-    tensor_storage_offset,
-    tensor_stride,
-    tuple_type,
     value_type,
 )
 
@@ -104,7 +98,9 @@ class TridentFxImporter:
                     and size.node.expr.is_Symbol
                     and size.node.expr not in self.symbols
                 ):
-                    self.symbols[size.node.expr] = tensor_size(value, constant(index))
+                    self.symbols[size.node.expr] = tvm_ffi_d.to(
+                        tvm_ffi_d.tensor_size(value, native(constant(index)))
+                    )
 
     def _build_aten(self, node: torch.fx.Node) -> ImportedValue:
         name = node.target._schema.name.removeprefix("aten::")
@@ -185,19 +181,21 @@ class TridentFxImporter:
         arguments = node.args[:1] if name == "_assert_scalar" else node.args
         values = [self.argument(value) for value in arguments]
         operations = {
-            "dim": tensor_dim,
-            "sym_size": tensor_size,
-            "sym_storage_offset": tensor_storage_offset,
-            "sym_stride": tensor_stride,
+            "dim": tvm_ffi_d.tensor_dim,
+            "sym_size": tvm_ffi_d.tensor_size,
+            "sym_storage_offset": tvm_ffi_d.tensor_storage_offset,
+            "sym_stride": tvm_ffi_d.tensor_stride,
         }
         if operation := operations.get(name):
-            return operation(*values)
+            return tvm_ffi_d.to(
+                operation(values[0], *[native(value) for value in values[1:]])
+            )
         if name == "sym_numel":
             [tensor], [argument] = values, arguments
             return reduce(
-                lambda lhs, rhs: binary(operator.mul, lhs, rhs),
+                BINARY_ARITHMETIC[operator.mul],
                 (
-                    tensor_size(tensor, constant(index))
+                    tvm_ffi_d.to(tvm_ffi_d.tensor_size(tensor, native(constant(index))))
                     for index in range(argument.meta["val"].dim())
                 ),
                 constant(1),
@@ -434,8 +432,6 @@ class TridentFxImporter:
                 raise NotImplementedError(
                     "symbolic integer power requires a nonnegative constant exponent"
                 )
-            elif exponent == 0:
-                return constant(1)
             arguments = (base,)
         if not any(
             isinstance(
@@ -545,13 +541,6 @@ class TridentFxImporter:
         return ir.Attribute.parse(f"@{binary_name}::@{kernel.metadata.name}")
 
     @staticmethod
-    def _integer_power(base: ir.Value, exponent: int) -> ir.Value:
-        result = constant(1)
-        for _ in range(exponent):
-            result = binary(operator.mul, result, base)
-        return result
-
-    @staticmethod
     def _kernel_specialization(
         name: str, triton_type: str, descriptor: Any
     ) -> ir.Attribute:
@@ -629,16 +618,14 @@ class TridentFxImporter:
 
     def _scalar(self, node: torch.fx.Node, values: Sequence[ir.Value]) -> ir.Value:
         target = {torch.sym_max: max, torch.sym_min: min}.get(node.target, node.target)
-        if is_binary_operation(target):
-            return binary(target, *values)
+        if target in BINARY_ARITHMETIC:
+            return BINARY_ARITHMETIC[target](*values)
         elif target is torch.sym_sum:
-            return reduce(
-                lambda lhs, rhs: binary(operator.add, lhs, rhs), values, constant(0)
-            )
+            return reduce(BINARY_ARITHMETIC[operator.add], values, constant(0))
         elif target is operator.pow:
             [base] = values
             _, exponent = node.args
-            return self._integer_power(base, exponent)
+            return power(base, exponent)
         elif target in (operator.neg, operator.not_, torch.sym_not):
             (value,) = values
             return negate(value) if target is operator.neg else logical_not(value)
@@ -665,10 +652,14 @@ class TridentFxImporter:
             value = self.values[value]
         if isinstance(value, (list, tuple)):
             types = [self.argument_type(item) for item in value]
-            return tuple_type(types) if isinstance(value, tuple) else array_type(types)
+            return (
+                tvm_ffi_d.TupleType.get(types)
+                if isinstance(value, tuple)
+                else array_type(types)
+            )
         if isinstance(value, torch.dtype):
             return tvm_ffi_d.IntType.get()
-        return value.type if isinstance(value, ir.Value) else constant_type(value)
+        return value.type if isinstance(value, ir.Value) else value_type(value)
 
     def build_arguments(self, arguments: Sequence[Any]) -> list[ir.Value]:
         """Construct arguments only; successful payloads never leave their bind."""
@@ -809,7 +800,7 @@ class TridentFxImporter:
                 values[0]
                 if len(values) == 1
                 else tvm_ffi_d.tuple_construct(
-                    tuple_type([value.type for value in values]), values
+                    tvm_ffi_d.TupleType.get([value.type for value in values]), values
                 )
             )
             outputs.yield_(pure([payload], result_types=[result_type]))
@@ -839,7 +830,9 @@ class TridentFxImporter:
             return constant(float(expression))
         elif expression.func in operations:
             return reduce(
-                lambda lhs, rhs: binary(operations[expression.func], lhs, rhs),
+                lambda lhs, rhs: BINARY_ARITHMETIC[operations[expression.func]](
+                    lhs, rhs
+                ),
                 (self.symbolic(argument) for argument in expression.args),
             )
         elif expression.func.__name__ in ("FloorDiv", "Mod", "PythonMod"):
@@ -849,13 +842,11 @@ class TridentFxImporter:
                 if expression.func.__name__ == "FloorDiv"
                 else operator.mod
             )
-            return binary(operation, lhs, rhs)
+            return BINARY_ARITHMETIC[operation](lhs, rhs)
         elif expression.func is sympy.Pow:
             base, exponent = expression.args
             if exponent.is_Integer and exponent >= 0:
-                return self._integer_power(
-                    self.symbolic(base), operator.index(exponent)
-                )
+                return power(self.symbolic(base), operator.index(exponent))
         raise NotImplementedError(
             f"unbound symbolic FX expression: {expression}; refusing to use a concrete hint"
         )

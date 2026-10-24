@@ -52,6 +52,53 @@ class DynamicTest(unittest.TestCase):
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
 
+    def test_scalar_arithmetic(self) -> None:
+        def arithmetic(x: torch.Tensor):
+            size = x.shape[0]
+            return (
+                size + 2,
+                size - 2,
+                size * 3,
+                size / 2,
+                (-size) // 3,
+                (-size) % 3,
+                size // -3,
+                size % -3,
+                size << 1,
+                size >> 1,
+                -(size / 2),
+                True + size / 2,
+                torch.sym_min(size, 4),
+                torch.sym_max(size, 4),
+                size == 5,
+                size != 5,
+                size < 5,
+                size <= 5,
+                size > 5,
+                size >= 5,
+                torch.sym_not(size == 5),
+                size / 2 + True,
+                (size == 5) | True,
+            )
+
+        compiled = trident.jit(arithmetic, dynamic=True)
+
+        def check() -> None:
+            for size in (3, 5, 7):
+                x = torch.randn(size, device="cuda")
+                expected = arithmetic(x)
+                for phase in ("first", "repeated"):
+                    with self.subTest(size=size, phase=phase):
+                        actual = compiled(x)
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(
+                            tuple(map(type, actual)), tuple(map(type, expected))
+                        )
+            self.assertEqual(len(compiled._sub_modules), 1)
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        assert_no_cuda_leak(self, check, device)
+
     def test_symbolic_integer_power(self) -> None:
         @trident.jit(dynamic=True)
         def power(x: torch.Tensor) -> int:

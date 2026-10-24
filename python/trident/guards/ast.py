@@ -8,7 +8,7 @@ import operator
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import partial, reduce
+from functools import reduce
 from itertools import pairwise
 from typing import Any, ClassVar
 
@@ -18,21 +18,19 @@ from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
 from trident.ir import (
+    BINARY_ARITHMETIC,
     BindScope,
     ScopeStack,
-    binary,
     checked_call,
     constant,
-    constant_type,
     equal,
     logical_not,
     make_result_types,
+    native,
     negate,
     pure,
     select,
-    tensor_dim,
-    tensor_size,
-    tensor_stride,
+    value_type,
 )
 
 from .local import Local
@@ -207,14 +205,14 @@ class GuardExpressionVisitor:
             assert entry is not None, f"guard source cannot be resolved: {self.text!r}"
             analysis = _ExpressionAnalysis(entry.type, pure=entry.value is not None)
         elif isinstance(node, ast.Constant):
-            analysis = _ExpressionAnalysis(constant_type(node.value))
+            analysis = _ExpressionAnalysis(value_type(node.value))
         elif self._direct_fallback(node):
             source, _, _ = ASTVisitor.metadata(node)
             analysis = _ExpressionAnalysis(
                 tvm_ffi_d.BoolType.get(), fallback=source is not None
             )
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            analysis = _ExpressionAnalysis(constant_type(getattr(torch, node.attr)))
+            analysis = _ExpressionAnalysis(value_type(getattr(torch, node.attr)))
         elif isinstance(node, ast.Call) and ASTVisitor.device(node) is not None:
             analysis = _ExpressionAnalysis(tvm_ffi_d.DeviceType.get())
         else:
@@ -298,7 +296,7 @@ class GuardExpressionVisitor:
                 comparisons.append(self._compare(operation, *values))
             else:
                 value = reduce(
-                    partial(binary, operator.and_), comparisons, constant(True)
+                    BINARY_ARITHMETIC[operator.and_], comparisons, constant(True)
                 )
             results = pure([value], result_types=types)
             return stack.yield_(results)
@@ -332,7 +330,7 @@ class GuardExpressionVisitor:
             return (
                 equal(lhs, rhs)
                 if isinstance(operation, (ast.Eq, ast.Is))
-                else binary(ASTVisitor.scalar_ops[type(operation)], lhs, rhs)
+                else BINARY_ARITHMETIC[ASTVisitor.scalar_ops[type(operation)]](lhs, rhs)
             )
 
     def _container_size(self, value: ir.Value) -> list[ir.Value]:
@@ -359,13 +357,12 @@ class GuardExpressionVisitor:
             [value] = values
             return value
         elif isinstance(node, ast.BinOp):
-            return binary(ASTVisitor.scalar_ops[type(node.op)], *values)
+            return BINARY_ARITHMETIC[ASTVisitor.scalar_ops[type(node.op)]](*values)
         elif isinstance(node, ast.BoolOp):
             return reduce(
-                partial(
-                    binary,
-                    operator.and_ if isinstance(node.op, ast.And) else operator.or_,
-                ),
+                BINARY_ARITHMETIC[
+                    operator.and_ if isinstance(node.op, ast.And) else operator.or_
+                ],
                 values,
             )
         elif isinstance(node, ast.IfExp):
@@ -381,19 +378,22 @@ class GuardExpressionVisitor:
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id == "len":
                 [value] = values
-                return tensor_dim(value)
+                return tvm_ffi_d.to(tvm_ffi_d.tensor_dim(value))
             else:
-                return binary(ASTVisitor.scalar_ops[node.func.id], *values)
+                return BINARY_ARITHMETIC[ASTVisitor.scalar_ops[node.func.id]](*values)
         else:
             _, method, index = ASTVisitor.metadata(node)
             [value] = values
             if method == "ndimension":
-                return tensor_dim(value)
+                return tvm_ffi_d.to(tvm_ffi_d.tensor_dim(value))
             else:
                 assert index is not None
-                return (tensor_size if method == "size" else tensor_stride)(
-                    value, constant(index)
+                operation = (
+                    tvm_ffi_d.tensor_size
+                    if method == "size"
+                    else tvm_ffi_d.tensor_stride
                 )
+                return tvm_ffi_d.to(operation(value, native(constant(index))))
 
     def _operands(self, node: ast.expr) -> Sequence[ast.expr]:
         """Select operands in evaluation order, retaining comparison diagnostics."""
@@ -431,6 +431,10 @@ class GuardExpressionVisitor:
             if (
                 isinstance(node.op, ast.Not)
                 and Local.from_expression(node.operand) is not None
+                and isinstance(
+                    self._analyze(node.operand).type,
+                    (tvm_ffi_d.ArrayType, tvm_ffi_d.TupleType),
+                )
             ):
                 return [ast.Call(ast.Name("len", ast.Load()), [node.operand], [])]
             else:
@@ -515,7 +519,7 @@ class GuardExpressionVisitor:
             if isinstance(node, ast.Compare) and index % 2:
                 comparisons.append(self._compare(node.ops[index // 2], *values[-2:]))
         if isinstance(node, ast.Compare):
-            return reduce(partial(binary, operator.and_), comparisons, constant(True))
+            return reduce(BINARY_ARITHMETIC[operator.and_], comparisons, constant(True))
         else:
             return self._evaluate(node, values)
 

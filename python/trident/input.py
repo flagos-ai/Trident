@@ -27,7 +27,6 @@ from trident.ir import (
     container_get,
     make_result_types,
     pure,
-    tuple_type,
     value_type,
 )
 
@@ -316,7 +315,9 @@ class InputTableBuilder:
                 children = [build_node(child, name) for child in node.children()]
                 types = [child.type for child in children]
                 return InputNodeBuilder(
-                    tuple_type(types) if node.type is tuple else array_type(types),
+                    tvm_ffi_d.TupleType.get(types)
+                    if node.type is tuple
+                    else array_type(types),
                     children=children,
                 )
 
@@ -332,7 +333,7 @@ class InputTableBuilder:
                 children = [build_value(child) for child in value]
                 types = [child.type for child in children]
                 return InputNodeBuilder(
-                    tuple_type(types)
+                    tvm_ffi_d.TupleType.get(types)
                     if isinstance(value, tuple)
                     else array_type(types),
                     children=children,

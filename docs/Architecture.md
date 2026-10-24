@@ -42,11 +42,14 @@ ATen's boxed schema. Multiple ATen results are retrieved from an FFI Array.
 
 SymInt, SymFloat and SymBool values use TVM FFI Int, Float and Bool throughout
 Python construction, including constants, symbol bindings and graph-node results.
-Shared arithmetic builders extract temporary native `i64`, `f64` and `i1` SSA
-with `tvm_ffi.get` and immediately wrap their results with `tvm_ffi.to`.
-Metadata builders likewise wrap native tensor metadata before returning it;
-dtype and device fields are exposed as TVM FFI integer values. Native scalars
-are confined to local computation and explicit SCF, CF and GPU interfaces.
+Shared Python arithmetic builders in `ir.py` own type unification and emit native
+`arith` operations. They extract temporary native `i64`, `f64` and `i1` SSA values
+with `tvm_ffi.get`, widen operands and immediately wrap results with `tvm_ffi.to`.
+Bool-to-Int uses zero extension, Bool-to-Float uses unsigned conversion and
+Int-to-Float uses signed conversion. Metadata builders likewise wrap
+native tensor metadata before returning it; dtype and device fields are exposed
+as TVM FFI integer values. Native scalars are confined to local computation and
+explicit SCF, CF and GPU interfaces.
 Input tensor dimensions bind symbols to the semantic size builder; explicit
 scalar nodes bind their expressions to imported semantic SSA values. Composite
 shape expressions are evaluated from those bindings. Runtime expressions never
@@ -54,7 +57,7 @@ use example hints; unbound symbols produce an explicit import error.
 `torch.cond` imports its branches into `scf.if`, extracting only its predicate
 and retaining monadic Result values.
 
-`ir.py` shares semantic scalar arithmetic, constants, metadata and Result
+`ir.py` shares scalar arithmetic builders, constants, metadata and Result
 construction with the guard frontend. Numeric constants use
 `tvm_ffi.constant.bool/int/float` directly. `make_result_types` wraps CABI
 payload types and supplies the None default for empty sequences. `pure` infers
@@ -64,8 +67,8 @@ container construction implicitly accepts native scalar types or values.
 Bind arguments retain their CABI types; consumers extract native scalars only
 within a local builder or at an interface requiring them. Empty successful sequences produce one explicit None payload. Shared `checked_call` and
 `container_get` builders construct registry calls and typed container extraction
-without depending on the graph importer. The shared binary operation mappings
-also define the supported FX scalar operations; the importer only normalizes symbolic min/max
+without depending on the graph importer. The shared `BINARY_ARITHMETIC` operation
+mappings also define the supported FX scalar operations; the importer only normalizes symbolic min/max
 aliases.
 Each asserting FFI call checks lookup success, a non-null handle and call success;
 a failed assertion terminates execution. Generic failed Results still propagate
@@ -73,13 +76,31 @@ a nonzero packed ABI status unless handled explicitly at a graph-call boundary. 
 on the calling thread; resolved globals retain their cached fast path. Integer
 division uses floor semantics; integer remainder follows
 `a - floor(a / b) * b`. Supported arithmetic follows the runtime's 64-bit scalar
-ABI. Unsupported scalar expressions or higher-order operators fail explicitly.
+ABI. Scalar add, subtract, multiply, min/max, comparisons, bitwise operations,
+shifts, true/floor division, remainder, negation, logical not and nonnegative
+constant integer powers are built in Python using native arithmetic and boxed
+results. `sum` composes scalar additions. Bool promotes to Int
+for arithmetic, and either Float operand promotes numeric arithmetic/comparisons
+to Float; true division always returns Float. Bitwise Bool/Bool retains Bool;
+other bitwise operands, shifts, floor division and remainder require integral
+inputs. Comparisons return Bool. The Python `logical_not` builder accepts Bool,
+Int and Float and returns Bool with Python truth semantics: zero, including negative floating
+zero, is false; nonzero values, infinities and NaN are true. Container `not`
+extracts a length before applying the same Python builder.
+Powers return Float for Float bases and Int otherwise, including exponent zero. Python builds integer powers by
+squaring; floating powers retain sequential multiplication order. Floating
+comparisons use ordered predicates except unordered not-equal; floating min/max
+retain `arith.minimumf/maximumf` NaN behavior. Integer arithmetic remains fixed
+width, with native overflow/division/shift constraints; this change does not
+introduce arbitrary-precision integers or recoverable arithmetic exceptions.
+Arithmetic failures are not specialization rejection Results. Unsupported scalar
+expressions or higher-order operators fail explicitly.
 
 TVM FFI types have concrete Python bindings exported by
 `trident.core.dialects.tvm_ffi`, with TypeID registration for parsed types and
 operation value types. Inspect them through `isinstance`, parameter accessors,
 MLIR Type equality, and native integer width/signedness rather than text.
-`ffi_type(name)` remains a textual compatibility constructor.
+Textual parsing uses `ir.Type.parse` directly.
 
 The Python frontend constructs only object-free Base types and Opaque types.
 Monad `ResultType` remains an independent wrapper whose payload is CABI.
@@ -170,7 +191,7 @@ Guards are parsed into `GuardCode`, `Guard` and collection objects under
 list/tuple paths to semantic values. Lists use `!tvm_ffi.array<T>` with a common
 semantic element type, or `!tvm_ffi.any` for empty or heterogeneous lists. Tuples
 retain one type per element. `array_type` infers a common semantic element type;
-`tuple_type` preserves each semantic element type independently. Nested
+`TupleType.get` preserves each semantic element type independently. Nested
 containers preserve this structure. Strings use semantic Str throughout the frontend, including Result payloads
 and nested container elements. Decomposition admits RawStr, SmallStr and CStr
 representations after runtime container normalization.
