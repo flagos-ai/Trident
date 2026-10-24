@@ -3,7 +3,7 @@
 
 """Import FX graphs and compiled Triton kernels into semantic MLIR.
 
-Scalars stay native while computing and are boxed at FFI boundaries.
+All stored frontend values use TVM FFI types, including symbolic scalars.
 ATen call order, tensor aliases, and mutations are preserved.
 """
 
@@ -28,23 +28,27 @@ from torch.utils import _pytree as pytree
 from trident.core import ir
 from trident.core.dialects import arith, cf, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ownership import is_value_in_scope
 
 from .ir import (
+    BindScope,
+    ScopeStack,
     array_type,
     binary,
-    bind,
-    box,
     checked_call,
     constant,
     constant_type,
     container_create,
     container_get,
     is_binary_operation,
+    logical_not,
     make_result_types,
     native,
-    native_constant,
+    negate,
     pure,
+    tensor_dim,
+    tensor_size,
+    tensor_storage_offset,
+    tensor_stride,
     tuple_type,
     value_type,
 )
@@ -90,7 +94,7 @@ class TridentFxImporter:
         if isinstance(
             metadata, (torch.SymInt, torch.SymFloat, torch.SymBool)
         ) and isinstance(value, ir.Value):
-            self.symbols[metadata.node.expr] = native(value)
+            self.symbols[metadata.node.expr] = value
         if isinstance(metadata, torch.Tensor) and isinstance(value, ir.Value):
             # Bind bare input shape symbols to runtime metadata. Composite
             # expressions are evaluated from their symbols, never from hints.
@@ -100,9 +104,7 @@ class TridentFxImporter:
                     and size.node.expr.is_Symbol
                     and size.node.expr not in self.symbols
                 ):
-                    self.symbols[size.node.expr] = tvm_ffi_d.tensor_size(
-                        value, native_constant(index)
-                    )
+                    self.symbols[size.node.expr] = tensor_size(value, constant(index))
 
     def _build_aten(self, node: torch.fx.Node) -> ImportedValue:
         name = node.target._schema.name.removeprefix("aten::")
@@ -153,51 +155,52 @@ class TridentFxImporter:
             for value in ((metadata,) if len(schema.returns) == 1 else metadata or ())
         ]
         result_types = make_result_types(payload_types)
-        with bind(
-            self.build_arguments(arguments), result_types=result_types
-        ) as operation:
+        with BindScope(result_types, self.build_arguments(arguments)) as scope:
+            payloads = scope.arguments
             name = schema.name.removeprefix("aten::")
             registry_name = f"trident.aten.{name}" + (
                 f".{schema.overload_name}" if schema.overload_name else ""
             )
             call = checked_call(
                 registry_name,
-                operation.arguments[: len(arguments)],
+                payloads[: len(arguments)],
                 value_type(metadata),
             )
             if len(schema.returns) == 1:
-                tvm_ffi_d.monad_yield(call)
+                scope.yield_(call)
+                bound_results = scope.results
             else:
-                with bind(call, result_types=result_types) as invocation:
-                    [array] = invocation.arguments
-                    tvm_ffi_d.monad_yield(self._build_results(array, payload_types))
-                tvm_ffi_d.monad_yield(invocation.outputs)
+                with BindScope(result_types, call) as extraction:
+                    [array] = extraction.arguments
+                    extraction.yield_(self._build_results(array, payload_types))
+                scope.yield_(extraction.results)
+                bound_results = scope.results
         if len(schema.returns) <= 1:
-            [result] = operation.outputs
+            [result] = bound_results
             return result
         else:
-            return tuple(operation.outputs)
+            return tuple(bound_results)
 
     def _build_aten_special(self, node: torch.fx.Node, name: str) -> ImportedValue:
         arguments = node.args[:1] if name == "_assert_scalar" else node.args
         values = [self.argument(value) for value in arguments]
         operations = {
-            "dim": tvm_ffi_d.tensor_dim,
-            "sym_size": tvm_ffi_d.tensor_size,
-            "sym_storage_offset": tvm_ffi_d.tensor_storage_offset,
-            "sym_stride": tvm_ffi_d.tensor_stride,
+            "dim": tensor_dim,
+            "sym_size": tensor_size,
+            "sym_storage_offset": tensor_storage_offset,
+            "sym_stride": tensor_stride,
         }
         if operation := operations.get(name):
-            return operation(*(native(value) for value in values))
+            return operation(*values)
         if name == "sym_numel":
             [tensor], [argument] = values, arguments
             return reduce(
-                arith.muli,
+                lambda lhs, rhs: binary(operator.mul, lhs, rhs),
                 (
-                    tvm_ffi_d.tensor_size(tensor, native_constant(index))
+                    tensor_size(tensor, constant(index))
                     for index in range(argument.meta["val"].dim())
                 ),
-                native_constant(1),
+                constant(1),
             )
         assert name == "_assert_scalar"
         [condition] = values
@@ -211,11 +214,11 @@ class TridentFxImporter:
         branch_types = make_result_types(
             value_type(element) for element in node.meta["val"]
         )
-        with bind(
-            self.build_arguments([*operands, predicate]),
-            result_types=branch_types,
-        ) as operation:
-            *operand_values, condition = operation.arguments
+        with BindScope(
+            branch_types, self.build_arguments([*operands, predicate])
+        ) as scope:
+            payloads = scope.arguments
+            *operand_values, condition = payloads
             conditional = scf.IfOp(native(condition), branch_types, has_else=True)
 
             for block, graph in (
@@ -246,11 +249,12 @@ class TridentFxImporter:
                         result_types=branch_types,
                     )
                     scf.yield_(yielded)
-            tvm_ffi_d.monad_yield(conditional.results)
+            scope.yield_(conditional.results)
+            bound_results = scope.results
         if node.meta["val"]:
-            return tuple(operation.outputs)
+            return tuple(bound_results)
         else:
-            [result] = operation.outputs
+            [result] = bound_results
             return result
 
     def _build_kernel(self, node: torch.fx.Node) -> ImportedValue:
@@ -336,26 +340,28 @@ class TridentFxImporter:
         result_types = make_result_types(
             tvm_ffi_d.TensorType.get() for _ in output_names
         )
-        with bind(
+        with BindScope(
+            result_types,
             self.build_arguments([value for _, value in specifications.values()]),
-            result_types=result_types,
-        ) as operation:
+        ) as scope:
+            payloads = scope.arguments
             operands = {
-                name: (attribute, box(value))
+                name: (attribute, value)
                 for (name, (attribute, _)), value in zip(
                     specifications.items(),
-                    operation.arguments[: len(specifications)],
+                    payloads[: len(specifications)],
                     strict=True,
                 )
             }
             yielded = self._build_launch(
                 kernel, node, loc, operands, output_names, grid
             )
-            tvm_ffi_d.monad_yield(yielded)
+            scope.yield_(yielded)
+            bound_results = scope.results
         if output_names:
-            return dict(zip(output_names, operation.outputs, strict=True))
+            return dict(zip(output_names, bound_results, strict=True))
         else:
-            [result] = operation.outputs
+            [result] = bound_results
             return result
 
     def _build_launch(
@@ -366,67 +372,55 @@ class TridentFxImporter:
         operands: dict[str, tuple[ir.Attribute, ir.Value]],
         names: Sequence[str],
         grid: Sequence[Any],
-        index: int = 0,
     ) -> list[ir.Value]:
         result_types = make_result_types(tvm_ffi_d.TensorType.get() for _ in names)
-        if index < len(names):
-            name = names[index]
-            attribute, value = operands[name]
-            with bind(
-                checked_call(
-                    "trident.aten.clone",
-                    [value, constant(None)],
-                    tvm_ffi_d.TensorType.get(),
-                ),
-                result_types=result_types,
-            ) as operation:
-                [tensor] = operation.arguments
-                cloned = {**operands, name: (attribute, tensor)}
-                yielded = self._build_launch(
-                    kernel, node, loc, cloned, names, grid, index + 1
+        operands = {**operands}
+        with ScopeStack() as stack:
+            for name in names:
+                attribute, value = operands[name]
+                [tensor] = stack.bind(
+                    result_types,
+                    checked_call(
+                        "trident.aten.clone",
+                        [value, constant(None)],
+                        tvm_ffi_d.TensorType.get(),
+                    ),
                 )
-                tvm_ffi_d.monad_yield(yielded)
-            return [*operation.outputs]
-        with bind(self.build_arguments(grid), result_types=result_types) as operation:
+                operands[name] = (attribute, tensor)
+            dimensions = stack.bind(result_types, self.build_arguments(grid))
             launched = tvm_ffi_d.kernel_launch(
                 tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get()),
                 self._import_kernel_binary(kernel, node, loc),
-                *(native(value) for value in operation.arguments),
-                native_constant(kernel.metadata.num_warps * kernel.metadata.warp_size),
-                native_constant(1),
-                native_constant(1),
+                *(native(value) for value in dimensions),
+                native(constant(kernel.metadata.num_warps * kernel.metadata.warp_size)),
+                native(constant(1)),
+                native(constant(1)),
                 [value for _, value in operands.values()],
                 ir.ArrayAttr.get([attribute for attribute, _ in operands.values()]),
-                dynamic_shared_memory_size=arith.constant(
-                    ir.IntegerType.get_signless(32), kernel.metadata.shared, loc=loc
+                dynamic_shared_memory_size=arith.trunci(
+                    ir.IntegerType.get_signless(32),
+                    native(constant(kernel.metadata.shared)),
+                    loc=loc,
                 ),
                 loc=loc,
             )
+            stack.bind(result_types, [launched])
             outputs = [operands[name][1] for name in names]
-            with bind([launched], result_types=result_types) as launch:
-                tvm_ffi_d.monad_yield(pure(outputs, result_types=result_types))
-
-            tvm_ffi_d.monad_yield(launch.outputs)
-        return [*operation.outputs]
+            return stack.yield_(pure(outputs, result_types=result_types))
 
     def _build_results(
         self, array: ir.Value, types: Sequence[ir.Type]
     ) -> list[ir.Value]:
         result_types = make_result_types(types)
 
-        def build(values: list[ir.Value]) -> list[ir.Value]:
-            index = len(values)
-            if index == len(types):
-                return pure(values, result_types=result_types)
-            with bind(
-                container_get(array, index, types[index]),
-                result_types=result_types,
-            ) as operation:
-                tvm_ffi_d.monad_yield(build([*values, *operation.arguments]))
-
-            return [*operation.outputs]
-
-        return build([])
+        with ScopeStack() as stack:
+            values: list[ir.Value] = []
+            for index, type_ in enumerate(types):
+                values.extend(
+                    stack.bind(result_types, container_get(array, index, type_))
+                )
+            results = pure(values, result_types=result_types)
+            return stack.yield_(results)
 
     def _build_scalar(self, node: torch.fx.Node) -> ImportedValue:
         arguments = node.args
@@ -441,7 +435,7 @@ class TridentFxImporter:
                     "symbolic integer power requires a nonnegative constant exponent"
                 )
             elif exponent == 0:
-                return native_constant(1)
+                return constant(1)
             arguments = (base,)
         if not any(
             isinstance(
@@ -452,15 +446,15 @@ class TridentFxImporter:
         ):
             return self._scalar(node, [self.argument(value) for value in arguments])
         result_types = [tvm_ffi_d.ResultType.get(value_type(node.meta["val"]))]
-        with bind(
-            self.build_arguments(arguments), result_types=result_types
-        ) as operation:
+        with BindScope(result_types, self.build_arguments(arguments)) as scope:
+            payloads = scope.arguments
             yielded = pure(
-                [self._scalar(node, operation.arguments)],
+                [self._scalar(node, payloads)],
                 result_types=result_types,
             )
-            tvm_ffi_d.monad_yield(yielded)
-        [result] = operation.outputs
+            scope.yield_(yielded)
+            bound_results = scope.results
+        [result] = bound_results
         return result
 
     def _call_function(self, node: torch.fx.Node) -> ImportedValue:
@@ -552,10 +546,9 @@ class TridentFxImporter:
 
     @staticmethod
     def _integer_power(base: ir.Value, exponent: int) -> ir.Value:
-        base = native(base)
-        result = native_constant(1)
+        result = constant(1)
         for _ in range(exponent):
-            result = arith.muli(result, base)
+            result = binary(operator.mul, result, base)
         return result
 
     @staticmethod
@@ -640,7 +633,7 @@ class TridentFxImporter:
             return binary(target, *values)
         elif target is torch.sym_sum:
             return reduce(
-                arith.addi, (native(value) for value in values), native_constant(0)
+                lambda lhs, rhs: binary(operator.add, lhs, rhs), values, constant(0)
             )
         elif target is operator.pow:
             [base] = values
@@ -648,12 +641,7 @@ class TridentFxImporter:
             return self._integer_power(base, exponent)
         elif target in (operator.neg, operator.not_, torch.sym_not):
             (value,) = values
-            value = native(value)
-            return (
-                arith.xori(value, native_constant(True))
-                if target is not operator.neg
-                else binary(operator.sub, native_constant(0), value)
-            )
+            return negate(value) if target is operator.neg else logical_not(value)
         else:
             raise NotImplementedError(f"unsupported FX call: {target}")
 
@@ -662,9 +650,6 @@ class TridentFxImporter:
         if isinstance(value, torch.fx.Node):
             value = self.values[value]
         if isinstance(value, ir.Value):
-            assert is_value_in_scope(value), (
-                "argument payload is outside its defining block"
-            )
             return value
         elif isinstance(value, (torch.fx.GraphModule, dict, tuple, list)):
             raise NotImplementedError(
@@ -679,16 +664,10 @@ class TridentFxImporter:
         if isinstance(value, torch.fx.Node):
             value = self.values[value]
         if isinstance(value, (list, tuple)):
-            types = [
-                tvm_ffi_d.IntType.get()
-                if isinstance(item, torch.dtype)
-                else self.argument_type(item)
-                for item in (
-                    self.values[item] if isinstance(item, torch.fx.Node) else item
-                    for item in value
-                )
-            ]
+            types = [self.argument_type(item) for item in value]
             return tuple_type(types) if isinstance(value, tuple) else array_type(types)
+        if isinstance(value, torch.dtype):
+            return tvm_ffi_d.IntType.get()
         return value.type if isinstance(value, ir.Value) else constant_type(value)
 
     def build_arguments(self, arguments: Sequence[Any]) -> list[ir.Value]:
@@ -698,15 +677,12 @@ class TridentFxImporter:
             for value in arguments
         ]
         result_types = make_result_types(
-            tvm_ffi_d.IntType.get()
-            if isinstance(value, torch.dtype)
-            else self.argument_type(value)
-            for value in arguments
+            self.argument_type(value) for value in arguments
         )
 
-        def build(start: int, values: list[ir.Value]) -> list[ir.Value]:
-            for index in range(start, len(arguments)):
-                argument = arguments[index]
+        with ScopeStack() as stack:
+            values: list[ir.Value] = []
+            for argument in arguments:
                 if isinstance(argument, torch.dtype):
                     current = checked_call(
                         "trident.runtime.tvm_ffi_to_torch_type",
@@ -716,27 +692,22 @@ class TridentFxImporter:
                 elif isinstance(argument, (tuple, list)):
                     type_ = self.argument_type(argument)
                     element_types = [tvm_ffi_d.ResultType.get(type_)]
-                    with bind(
-                        self.build_arguments(argument), result_types=element_types
+                    with BindScope(
+                        element_types, self.build_arguments(argument)
                     ) as elements:
+                        elements_arguments = elements.arguments
                         yielded = container_create(
-                            elements.arguments[: len(argument)], type_
+                            elements_arguments[: len(argument)], type_
                         )
-                        tvm_ffi_d.monad_yield(yielded)
-                    current = elements.outputs
+                        elements.yield_(yielded)
+                        elements_results = elements.results
+                    current = elements_results
                 else:
-                    value = self.argument(argument)
-                    values.append(value)
+                    values.append(self.argument(argument))
                     continue
-                with bind(current, result_types=result_types) as operation:
-                    tvm_ffi_d.monad_yield(
-                        build(index + 1, [*values, *operation.arguments])
-                    )
-
-                return [*operation.outputs]
-            return pure(values, result_types=result_types)
-
-        return build(0, [])
+                values.extend(stack.bind(result_types, current))
+            results = pure(values, result_types=result_types)
+            return stack.yield_(results)
 
     def import_program(
         self, program: torch.export.ExportedProgram, *, func_name: str
@@ -805,13 +776,13 @@ class TridentFxImporter:
                             if isinstance(spec.arg, ConstantArgument)
                             else state[spec.target]
                         )
-                with bind(
-                    self.build_arguments(initial_values),
-                    result_types=result_types,
+                with BindScope(
+                    result_types, self.build_arguments(initial_values)
                 ) as initialization:
+                    initialization_arguments = initialization.arguments
                     for spec, value in zip(
                         program.graph_signature.input_specs,
-                        initialization.arguments[: len(initial_values)],
+                        initialization_arguments[: len(initial_values)],
                         strict=True,
                     ):
                         self._bind(producers[spec.arg.name], value)
@@ -821,17 +792,19 @@ class TridentFxImporter:
                         output_values,
                         result_types=result_types,
                     )
-                    tvm_ffi_d.monad_yield(yielded)
-                self._return_graph_results(initialization.outputs)
+                    initialization.yield_(yielded)
+                    initialization_results = initialization.results
+                tvm_ffi_d.return_(*self._pack_graph_results(initialization_results))
         return function
 
     @staticmethod
-    def _return_graph_results(results: Sequence[ir.Value]) -> None:
+    def _pack_graph_results(results: Sequence[ir.Value]) -> list[ir.Value]:
         """Pack graph outputs and translate specialization rejection at the exit."""
         any_type = tvm_ffi_d.AnyType.get()
         result_type = tvm_ffi_d.ResultType.get(any_type)
-        with bind(results, result_types=[result_type]) as outputs:
-            values = outputs.arguments
+        with BindScope([result_type], results) as outputs:
+            outputs_arguments = outputs.arguments
+            values = outputs_arguments
             payload = (
                 values[0]
                 if len(values) == 1
@@ -839,15 +812,17 @@ class TridentFxImporter:
                     tuple_type([value.type for value in values]), values
                 )
             )
-            tvm_ffi_d.monad_yield(pure([payload], result_types=[result_type]))
-        success, payload = tvm_ffi_d.monad_unpack(outputs.outputs[0])
-        outcome = scf.IfOp(success, [any_type], has_else=True)
+            outputs.yield_(pure([payload], result_types=[result_type]))
+            outputs_results = outputs.results
+        success, payload = tvm_ffi_d.monad_unpack(outputs_results[0])
+        success = tvm_ffi_d.to(success)
+        outcome = scf.IfOp(native(success), [any_type], has_else=True)
         with ir.InsertionPoint(outcome.then_block):
             scf.yield_([payload])
         with ir.InsertionPoint(outcome.else_block):
             rejection = tvm_ffi_d.exception("GuardMatch")
             scf.yield_([tvm_ffi_d.upcast(any_type, rejection)])
-        tvm_ffi_d.return_(tvm_ffi_d.constant_bool(True), outcome.results[0])
+        return [tvm_ffi_d.constant_bool(True), outcome.results[0]]
 
     def symbolic(self, expression: Any) -> ir.Value:
         operations = {
@@ -859,9 +834,9 @@ class TridentFxImporter:
         if expression in self.symbols:
             return self.symbols[expression]
         elif expression.is_Integer:
-            return native_constant(operator.index(expression))
+            return constant(operator.index(expression))
         elif expression.is_Float:
-            return native_constant(float(expression))
+            return constant(float(expression))
         elif expression.func in operations:
             return reduce(
                 lambda lhs, rhs: binary(operations[expression.func], lhs, rhs),
@@ -893,50 +868,43 @@ class TridentFxImporter:
         *,
         result_types: Sequence[ir.Type],
     ) -> list[ir.Value]:
-        """Bind Result leaves and consume the shared iterator in their success scope."""
-        for node in nodes:
-            if node.op in ("placeholder", "output"):
-                continue
-            if node.op == "get_attr":
-                value = graph_module
-                for attribute in f"{node.target}".split("."):
-                    value = getattr(value, attribute)
-                if isinstance(value, torch.fx.GraphModule):
-                    pass
-                elif isinstance(value, (tuple, list)):
-                    [value] = self.build_arguments([value])
+        """Bind Result leaves while keeping subsequent nodes in their success scope."""
+        with ScopeStack() as stack:
+            for node in nodes:
+                if node.op in ("placeholder", "output"):
+                    continue
+                if node.op == "get_attr":
+                    value = graph_module
+                    for attribute in f"{node.target}".split("."):
+                        value = getattr(value, attribute)
+                    if isinstance(value, torch.fx.GraphModule):
+                        pass
+                    elif isinstance(value, (tuple, list)):
+                        [value] = self.build_arguments([value])
+                    else:
+                        value = self.argument(value)
+                elif node.op == "call_function":
+                    value = self._call_function(node)
                 else:
-                    value = self.argument(value)
-            elif node.op == "call_function":
-                value = self._call_function(node)
-            else:
-                raise NotImplementedError(f"unsupported FX node: {node.format_node()}")
-            leaves, structure = pytree.tree_flatten(value)
-            results = {
-                index: leaf
-                for index, leaf in enumerate(leaves)
-                if isinstance(leaf, ir.Value)
-                and isinstance(leaf.type, tvm_ffi_d.ResultType)
-            }
-            if not results:
-                self._bind(node, value)
-                continue
-            with bind([*results.values()], result_types=result_types) as operation:
-                for index, argument in zip(results, operation.arguments, strict=True):
-                    leaves[index] = (
-                        None
-                        if isinstance(argument.type, tvm_ffi_d.NoneType)
-                        else argument
+                    raise NotImplementedError(
+                        f"unsupported FX node: {node.format_node()}"
                     )
-                self._bind(node, pytree.tree_unflatten(leaves, structure))
-                yielded = self.visit(
-                    nodes, graph_module, outputs, result_types=result_types
-                )
-                tvm_ffi_d.monad_yield(yielded)
-            return [*operation.outputs]
-        with bind(
-            self.build_arguments(outputs), result_types=result_types
-        ) as operation:
-            tvm_ffi_d.monad_yield(pure(operation.arguments, result_types=result_types))
-
-        return [*operation.outputs]
+                leaves, structure = pytree.tree_flatten(value)
+                results = {
+                    index: leaf
+                    for index, leaf in enumerate(leaves)
+                    if isinstance(leaf, ir.Value)
+                    and isinstance(leaf.type, tvm_ffi_d.ResultType)
+                }
+                if results:
+                    arguments = stack.bind(result_types, [*results.values()])
+                    for index, argument in zip(results, arguments, strict=True):
+                        leaves[index] = (
+                            None
+                            if isinstance(argument.type, tvm_ffi_d.NoneType)
+                            else argument
+                        )
+                    value = pytree.tree_unflatten(leaves, structure)
+                self._bind(node, value)
+            arguments = stack.bind(result_types, self.build_arguments(outputs))
+            return stack.yield_(pure(arguments, result_types=result_types))

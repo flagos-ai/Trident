@@ -40,21 +40,29 @@ when FX recorded a Python scalar in a tensor overload, and name the existing
 through `trident.runtime.tvm_ffi_to_torch_type` to obtain the integer expected by
 ATen's boxed schema. Multiple ATen results are retrieved from an FFI Array.
 
-SymInt, SymFloat and SymBool computations use native `i64`, `f64` and `i1` SSA.
-Input tensor dimensions bind symbols to `tvm_ffi.tensor.size`; explicit scalar
-nodes bind their expressions to imported SSA values. Composite shape expressions
-are evaluated from those bindings. Runtime expressions never use example hints;
-unbound symbols produce an explicit import error. Native scalars are boxed only
-at FFI calls, containers or function return boundaries. `torch.cond` imports its
-branches into `scf.if`, with native predicates and monadic Result values.
+SymInt, SymFloat and SymBool values use TVM FFI Int, Float and Bool throughout
+Python construction, including constants, symbol bindings and graph-node results.
+Shared arithmetic builders extract temporary native `i64`, `f64` and `i1` SSA
+with `tvm_ffi.get` and immediately wrap their results with `tvm_ffi.to`.
+Metadata builders likewise wrap native tensor metadata before returning it;
+dtype and device fields are exposed as TVM FFI integer values. Native scalars
+are confined to local computation and explicit SCF, CF and GPU interfaces.
+Input tensor dimensions bind symbols to the semantic size builder; explicit
+scalar nodes bind their expressions to imported semantic SSA values. Composite
+shape expressions are evaluated from those bindings. Runtime expressions never
+use example hints; unbound symbols produce an explicit import error.
+`torch.cond` imports its branches into `scf.if`, extracting only its predicate
+and retaining monadic Result values.
 
-`ir.py` shares scalar arithmetic, constants, boxing and Result construction with
-the guard frontend. `make_result_types` boxes native scalar types before wrapping
-payload types and supplies the None default for empty sequences. `pure` infers CABI Result types
-from payloads unless the caller declares a boundary type; it boxes native
-scalars before wrapping them and widens semantic values at Any/Union boundaries.
-Bind arguments retain their CABI types; consumers extract native scalars for
-arithmetic and boolean conditions. Empty successful sequences produce one explicit None payload. Shared `checked_call` and
+`ir.py` shares semantic scalar arithmetic, constants, metadata and Result
+construction with the guard frontend. Numeric constants use
+`tvm_ffi.constant.bool/int/float` directly. `make_result_types` wraps CABI
+payload types and supplies the None default for empty sequences. `pure` infers
+CABI Result types from semantic payloads unless the caller declares a boundary
+type, and widens semantic values at Any/Union boundaries. Neither Result nor
+container construction implicitly accepts native scalar types or values.
+Bind arguments retain their CABI types; consumers extract native scalars only
+within a local builder or at an interface requiring them. Empty successful sequences produce one explicit None payload. Shared `checked_call` and
 `container_get` builders construct registry calls and typed container extraction
 without depending on the graph importer. The shared binary operation mappings
 also define the supported FX scalar operations; the importer only normalizes symbolic min/max
@@ -160,9 +168,9 @@ aggregate constraints and registration. `TVMFFITypeBase.td` and
 Guards are parsed into `GuardCode`, `Guard` and collection objects under
 `python/trident/guards/`. `InputTableBuilder` maps function arguments and nested
 list/tuple paths to semantic values. Lists use `!tvm_ffi.array<T>` with a common
-boxed element type, or `!tvm_ffi.any` for empty or heterogeneous lists. Tuples
-retain one type per element. `array_type` infers a common boxed element type;
-`tuple_type` boxes and preserves each element type independently. Nested
+semantic element type, or `!tvm_ffi.any` for empty or heterogeneous lists. Tuples
+retain one type per element. `array_type` infers a common semantic element type;
+`tuple_type` preserves each semantic element type independently. Nested
 containers preserve this structure. Strings use semantic Str throughout the frontend, including Result payloads
 and nested container elements. Decomposition admits RawStr, SmallStr and CStr
 representations after runtime container normalization.
@@ -175,14 +183,14 @@ indices and checks static bounds; static length comes from the Tuple type.
 Container decomposition checks lookup status, non-null handles and call status with
 runtime assertions that terminate on failure. Array indexing uses a
 native i64; runtime failures terminate through assertions. `InputTable.extract`
-builds and caches complete Results for a path; `extract_many` reconstructs leaf
+builds fresh complete Results for a path; `extract_many` reconstructs leaf
 inputs in exported order. Extraction is lazy in its consumer block. Guards use
 these table methods and shared IR builders directly, without a graph importer.
 Tuple length guards retain checked runtime `ffi.ArraySize` calls: wrapper inputs
 must validate arity before trusting their static tuple schema.
 A single input-node implementation handles leaves and containers; each fresh
-table keeps a scope-checked borrowed cache of complete extraction Results. Scalar guards
-use native arithmetic and comparisons; tensor metadata uses existing semantic
+table holds explicit root or consumer-local payload bindings without caching
+extraction Results. Scalar guards return TVM FFI values from local arithmetic and comparisons; tensor metadata uses existing semantic
 metadata operations. Guard collections build structured short-circuit branches
 with fresh input tables per region and explicitly bind fallible extraction
 Results. A failed specialization returns `!tvm_ffi.exception` widened to
@@ -197,7 +205,7 @@ DLPack does not expose Python wrapper identity or autograd view relationships.
 `importer.py` resolves the compiled Triton kernel from its warmup cache,
 imports its cubin as `gpu.binary`, and emits `tvm_ffi.kernel_launch`.
 The kernel construction method resolves the cache, builds specialization
-attributes and assembles operands. Recursive launch construction clones functional
+attributes and assembles operands. Ordered launch construction clones functional
 outputs, inserts the binary and emits the launch, returning complete Results
 for its output tensors.
 Each specialization has a unique binary symbol. Operands retain semantic FFI
@@ -297,17 +305,16 @@ continuation, so failure suppresses them without requiring a payload dependency.
 Private graph functions and guard wrappers use local packed calls. Function
 payloads are boxed into Any during monad lowering.
 
-`TridentFxImporter.visit` consumes a shared iterator over the original FX nodes.
-Pure nodes stay in a loop. Node handlers construct only their current node and
-return its ordinary value structure, whose leaves may include complete Results.
-The visitor flattens
-this structure, binds its Result leaves, restores payloads in place, and
-recursively imports the remaining iterator inside the successful body. Unit
-Result leaves with a None payload restore to Python `None`, consuming their
-corresponding block argument. The visitor does not redispatch on the node target
-after binding. Each bind yields inner
-Results as the stack unwinds. Final outputs use `pure`, including a None
-payload for no-data returns.
+`TridentFxImporter.visit` iterates over the original FX nodes. Node handlers
+construct only their current node and return its ordinary value structure, whose
+leaves may include complete Results. The visitor flattens this structure, binds
+its Result leaves, restores payloads in place, and continues the loop inside the
+successful body. Unit Result leaves with a None payload restore to Python `None`,
+consuming their corresponding block argument. The visitor does not redispatch on
+the node target after binding. Local `BindScope` contexts keep nested insertion
+points open; the visitor explicitly yields complete Results from the innermost
+bind outward. Final outputs use `pure`, including a None payload for no-data
+returns.
 
 Ordinary scalar, schema and metadata helpers return ordinary values. Independent
 fallible helpers construct arguments, checked calls, ATen conversions and result
@@ -318,22 +325,35 @@ keep their types; ordinary dtype constants and guard expressions retain the TVM
 FFI dtype representation.
 Ordered argument, input, guard-operand and result extraction builders carry
 accumulated payloads into each successful bind and wrap them once at the end.
-They keep pure prefixes iterative and nested list/tuple elements recursive,
-preserving element order and failure short circuiting.
+They use local `BindScope` contexts for ordered binds and recurse only into
+nested list/tuple elements, preserving element order and failure short circuiting.
 Empty argument and input builders return one None Result to preserve success
 tracking. Consumers use the original list length to omit this placeholder from
 actual call arguments; explicit Python None arguments retain their positions.
 Argument construction does not invoke an operator or traverse later FX nodes. Kernel clone, grid and
 launch construction likewise preserves its original order.
 
-The shared `trident.ir.bind` construction context manager borrows its inputs.
-Decomposition manages the bind's lowered Result containers automatically.
-Successful body arguments remain borrowed. It
-yields the `MonadBindOp`; its read-only `arguments` property exposes
-one successful payload per input in input order, including None payloads,
+The shared `trident.ir.Scope` abstraction manages one block's insertion point
+and exposes complete operation results. `BindScope` constructs one `MonadBindOp`;
+its `arguments` expose borrowed successful payloads in input order, including
+None payloads. Explicit `scope.yield_(results)` terminates only its own block;
+`scope.results` exposes complete Results that may leave the region.
+FX traversal uses a local `ScopeStack` to keep subsequent nodes inside successful
+bind bodies without recursive Python calls. Other iterative builders use a stack
+when they accumulate a dynamic chain of binds; single binds use `BindScope`
+directly. `stack.bind(result_types, inputs)` returns successful arguments, and
+`stack.yield_(values)` drains scopes from innermost outward, forwards complete
+results and immediately restores insertion points. An empty stack forwards values
+unchanged. Independent child stacks leave parent scopes open. Context exits
+clear stored scopes and restore insertion points without generating terminators,
+including on exceptions. ScopeStack uses the standard-library ExitStack for
+restoration. Simple SCF branches and function bodies use insertion points and
+explicit `scf.yield`, `func.return` or `tvm_ffi.return` directly.
+Decomposition manages the lowered Result containers automatically.
+The underlying `MonadBindOp.arguments` property exposes the successful payloads,
 while `outputs` exposes complete Results.
 The property is also available on parsed and traversed OpViews. MLIR verification
-checks the successful terminator and yielded Result types. The context manager
+checks the successful terminator and yielded Result types. Each `BindScope`
 gets its body through `MonadBindOp.add_entry_block()`, which infers argument
 types from input Result payloads; C++ builders use
 `MonadBindOp::addEntryBlock(builder)`, which creates the block through the builder
@@ -345,21 +365,21 @@ and accepts optional argument locations used only when creating the block.
 `getEntryBlock()` and Python `get_entry_block()` only query the body, returning
 null or None when no entry block exists without allocating or changing insertion
 points.
-The context manager
-restores insertion points on normal and exceptional exits. There are no
-continuation callbacks, Effects objects, generator resume protocols or task
-queues. Deep fallible chains may exceed the unchanged Python recursion limit;
-pure FX nodes and pure argument prefixes do not add recursive frames.
+There are no continuation callbacks, Effects objects, generator resume protocols
+or task queues. Linear fallible chains do not add Python recursive frames.
+Nested containers, expressions and control-flow branches remain recursive.
 `import_program` and direct `visit` calls retain their value and symbol mappings;
 use a fresh importer for each program.
 
 Python builds ordinary operations and exits without ownership attributes.
-Function entries and branches use insertion points directly. Cond branches use
-independent importers sharing the parent module, and return Results for the
-parent visitor to bind. Input tables cache complete Results, never extraction
-bind payloads. Cached Results must belong to an ancestor block; sibling scopes
-rebuild their extraction. Semantic reference lifetimes extend to the defining
-IR block's dominance-scope exit, independently of Python context-manager exits.
+Function entries and SCF branches use insertion points directly. Cond
+branches use independent importers sharing the parent module, and return Results for the
+parent visitor to bind. Input tables construct fresh complete Results for each
+extraction at the current insertion point, without caching Results or bind payloads.
+Explicit root and consumer-local payload bindings remain available within their
+lexical scopes. MLIR verification checks SSA visibility; frontend builders do not
+perform separate block-ancestry checks. Semantic reference lifetimes extend to
+the defining IR block's dominance-scope exit, independently of Python context-manager exits.
 Guards and backend input flattening use fresh tables. Construction exceptions propagate; discard
 an importer and its tables after a construction failure.
 

@@ -8,7 +8,7 @@ import unittest
 from trident.core import ir
 from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import ffi_type, native_constant, pure, value_type
+from trident.ir import constant, ffi_type, pure, value_type
 
 from test.support.ir import new_context
 
@@ -218,7 +218,7 @@ class BindingsTest(unittest.TestCase):
         with context, ir.Location.unknown(context):
             module = ir.Module.create()
             with ir.InsertionPoint(module.body):
-                [result] = pure([native_constant(7)])
+                [result] = pure([constant(7)])
                 unpacked = tvm_ffi_d.MonadUnpackOp(result)
                 self.assertEqual(unpacked.success.type, ir.IntegerType.get_signless(1))
                 self.assertEqual(unpacked.value.type, tvm_ffi_d.AnyType.get())

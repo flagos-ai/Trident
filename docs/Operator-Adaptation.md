@@ -26,8 +26,9 @@ frontend does not functionalize the graph.
 
 Check membership in `torch._C._dispatch_get_all_op_names()` before emitting a
 registry call. A JIT schema alone does not establish dispatch support. Scalar
-shape arithmetic belongs in native SSA, including comparisons, floor division,
-remainder and boolean operations. Metadata reads use `tvm_ffi.tensor.size`,
+shape arithmetic uses the shared semantic builders, including comparisons,
+floor division, remainder and boolean operations. Their temporary native SSA
+must be wrapped back into TVM FFI values before returning to the frontend. Metadata reads use `tvm_ffi.tensor.size`,
 `stride`, `dim`, `device`, `dtype` or `storage_offset`. Dtype values must be
 converted to ATen's integer enum when the schema expects it.
 
@@ -94,49 +95,65 @@ handle and call status before using its result.
 Stateless scalar arithmetic, boxing and leaf constants live in
 `python/trident/ir.py` and return ordinary values, as do schema and metadata
 helpers. Independent fallible construction helpers return complete Results.
-Callers consuming owned Results use explicit
-`with bind(..., result_types=...) as operation` and access
-successful payloads through `operation.arguments`, one per input in input order,
-including None payloads. Only complete `operation.outputs` Results may leave a
-successful bind body. Do not return bare payloads from these scopes. MLIR verification
-checks `monad.yield` termination and matching Result types.
+Callers consuming Results use `with BindScope(result_types, inputs) as scope`
+and `scope.arguments` to expose one successful payload per input in input order,
+including None payloads. Finish construction with `scope.yield_(results)`, which
+terminates only this bind and returns nothing. Read `scope.results` for complete
+Results after construction. Only these complete Results may leave the successful
+scope; do not return bare payloads. MLIR verification checks `monad.yield`
+termination and matching Result types.
 
 `trident.ir.checked_call` checks global lookup status, a non-null handle and call status,
 returning a complete Result without consuming a callback. `build_arguments`
 constructs nested list/tuple arguments in order and returns Results, leaving
 operator execution and subsequent graph traversal to its caller. Keep pure
-argument prefixes iterative. `pure` borrows payloads and constructs independent
-Results, including repeated payload occurrences. It infers boxed CABI types,
-boxes native scalars, and widens Any/Union payloads at declared boundaries.
-`make_result_types` applies the same scalar type boxing. Bind arguments are CABI
-values; use `native` or `tvm_ffi.get` for native computation. `bind` borrows its
-inputs and restores insertion points on exceptions.
+argument prefixes iterative. `pure` borrows semantic payloads and constructs independent
+Results, including repeated payload occurrences. It infers CABI types and
+widens Any/Union payloads at declared boundaries. `make_result_types` accepts
+CABI types directly; native scalar payloads and container elements are rejected.
+Use `constant` for all scalar constants and the shared arithmetic and metadata
+builders for frontend computations. Every ordinary builder returns TVM FFI
+values, and symbol/value tables store those values without native extraction.
+`native`/`tvm_ffi.get` is limited to temporary local arithmetic and native
+SCF/CF/GPU interfaces; local arithmetic results are immediately wrapped with
+`tvm_ffi.to`. Bind arguments remain CABI values. `BindScope` borrows its
+inputs; scope contexts restore insertion points on normal and exceptional exits.
 
-Build `func.return`, `tvm_ffi.return`, `scf.yield` and `monad.yield` normally.
+Use `ScopeStack` for FX traversal and other loops that accumulate a dynamic
+chain of binds: `stack.bind(result_types, inputs)` exposes payloads, and
+`stack.yield_(values)` drains scopes in reverse order, forwards complete Results
+and restores insertion points. An empty stack forwards values unchanged. Child
+stacks leave parent scopes open. Use `BindScope` directly for a single bind.
+Build simple SCF branches and function bodies with `ir.InsertionPoint` and
+explicit `scf.yield_`, `func.return_` or `tvm_ffi.return_`; they do not need Scope
+wrappers. Context exits do not generate terminators, including on construction
+failure.
 Decomposition automatically retains semantic exported references before releasing
 local owned references. Neither resource operations nor exits need attributes.
 
-`visit(nodes, graph_module, outputs, result_types=result_types)` consumes a
-shared FX iterator. Pure nodes stay in a loop. Node handlers return ordinary
-structures containing Result leaves; the visitor binds
-them, restores that structure and directly recurses into `visit` for subsequent
-nodes. None Result payloads become Python `None`, consuming their corresponding
-block arguments. Traversal keeps its working mappings, as does `import_program`. Use a fresh importer for
+`visit(nodes, graph_module, outputs, result_types=result_types)` consumes an
+FX iterator in a loop. Node handlers return ordinary structures containing Result
+leaves; the visitor binds them through local `BindScope` contexts, restores the
+structure and continues importing subsequent nodes in the successful scope. None Result payloads
+become Python `None`, consuming their corresponding block arguments. Traversal
+keeps its working mappings, as does `import_program`. Use a fresh importer for
 each program. Preserve ATen argument conversion,
 result extraction and kernel clone/grid/launch order. Cond branches use
 independent child importers sharing the module. `InputTable.extract` and
 `extract_many` own path extraction and ordered input reconstruction; `trident.ir.container_get` owns typed container extraction.
 Guards use these shared builders directly and do not create or receive a graph
-importer. Input extraction caches borrowed complete Results; reuse requires lexical
-visibility, with lifetime supplied by automatic semantic management. Returned resources get independent references. Guards and backend
-input flattening use fresh tables;
-construction helpers do not automatically clear caches on return or exception.
+importer. Input extraction constructs fresh complete Results at each call site,
+without caching. Explicit root and consumer-local payload bindings must remain
+lexically visible; MLIR verification checks SSA visibility. Automatic semantic
+management supplies lifetimes, and returned resources get independent references.
+Guards and backend input flattening use fresh tables; construction helpers do not
+automatically clear importer mappings on return or exception.
 Discard failed importers and their input tables; exceptional reuse is not
 guaranteed. Preserve insertion-point restoration. Guards and the backend
 explicitly bind their construction Results rather than passing continuation
 callbacks. Bind accepts independent input and output counts, including zero.
 An empty input list executes the body unconditionally; an empty output list is
-for effects only and ends with an empty `monad.yield`. The Python `bind` helper
+for effects only and ends with an empty `monad.yield`. The Python `BindScope` builder
 supports the same counts; `pure([])` still constructs the existing None Result.
 
 FFI functions declare exactly one C ABI payload type. `tvm_ffi.return` takes
@@ -315,7 +332,7 @@ Array's C++ element parameter and accessor use `TVMFFICABIType`; parsing and
 checked C/Python construction reject non-CABI elements. Native scalars and Results are not
 valid container elements. Frontend strings use Opaque Str, including constants, container elements and
 Result payloads. Decomposition erases Str to CAny; checking the RawStr, SmallStr
-and CStr alternatives after container normalization is deferred. Box native scalars before
+and CStr alternatives after container normalization is deferred. Keep scalar elements in their TVM FFI types before
 construction; heterogeneous and
 empty lists use `ArrayType.get(AnyType.get())`. The ABI Array binding is
 `CArrayType.get()`.
@@ -348,7 +365,7 @@ select a kernel, but launch dimensions and runtime operands must use SSA values.
 `python/trident/importer.py` reuses the compiled Triton cache after warmup,
 imports `gpu.binary`, and emits `tvm_ffi.kernel_launch`.
 `TridentFxImporter._build_kernel` performs cache and autotuner lookup and
-delegates parameter contracts to `_kernel_specialization`. Its recursive
+delegates parameter contracts to `_kernel_specialization`. Its iterative
 `_build_launch` constructs clones in order, resolves grid operands and emits the
 launch; `_import_kernel_binary` installs the module-level binary once. The
 handler returns a dictionary of complete Results for cloned output tensors, or
