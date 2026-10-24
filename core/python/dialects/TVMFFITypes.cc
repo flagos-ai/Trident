@@ -67,6 +67,7 @@ DEFINE_GENERIC_TYPE(Function)
 DEFINE_GENERIC_TYPE(Int)
 DEFINE_GENERIC_TYPE(None)
 DEFINE_GENERIC_TYPE(Object)
+DEFINE_GENERIC_TYPE(PackArguments)
 DEFINE_GENERIC_TYPE(RawStr)
 DEFINE_GENERIC_TYPE(SmallStr)
 DEFINE_GENERIC_TYPE(Str)
@@ -242,6 +243,7 @@ NB_MODULE(_tvm_ffi, module) {
   IntType::bind(module);
   NoneType::bind(module);
   ObjectType::bind(module);
+  PackArgumentsType::bind(module);
   RawStrType::bind(module);
   ResultType::bind(module);
   SmallStrType::bind(module);

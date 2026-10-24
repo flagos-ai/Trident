@@ -46,7 +46,7 @@ class GuardCode:
         ) as operation:
             [value] = operation.arguments
             scoped = tree.with_value(self.source.subscripts, value)
-            tvm_ffi_d.MonadYieldOp(
+            tvm_ffi_d.monad_yield(
                 pure([self.build(scoped, context)], result_types=types)
             )
 

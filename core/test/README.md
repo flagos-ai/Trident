@@ -33,10 +33,11 @@ adding a file for each type, arity or operator name.
 | `Transforms/decompose-containers` | Checked container calls, nested types/attributes and captured values inside nested continuations |
 | `Transforms/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, region transfers, loop-carried references, direct producer exports, CFG type conversion and synchronous captures and rejected legalization |
 | `Transforms/lower-defer*` | Generic SSACFG dominance-scope cleanup, CFG edges/loops, generic region exits, SSA cloning, empty bodies, repeat lowering and rejected region structure |
-| `DLPackToLLVM/metadata`, `FinalizeTVMFFI/metadata` | Metadata field mapping at each conversion boundary |
-| `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Wrapper guards, CFG cloning, opt-in wrappers, output writes, return status and symbol collision |
+| `DLPackToLLVM/metadata`, `Transforms/lower-tensor-metadata` | Tensor metadata expansion to DLPack and LLVM field mapping |
+| `Transforms/lower-to-pack` | Typed-body conversion, count/tag guards, CFG forwarding, success-only payload checks and visibility |
+| `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Packed entry ABI, output writes, return status, declarations and duplicate-symbol verification |
 | `TVMFFIToGPU/kernel-launch`, `invalid` | Launch arguments/stream, constant/variable specializations, Result success/rejection and unsupported native operands |
-| `TVMFFIToLLVM/call`, `invalid` | Packed argument/output slots, success-only reads, zero/repeated calls and undecomposed input rejection |
+| `TVMFFIToLLVM/call`, `invalid`, `pack` | Packed argument/output slots, success-only reads, zero/repeated calls, borrowed pointer/count forwarding, checked dynamic indexing and undecomposed input rejection |
 | `TVMFFIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
 | `TVMFFIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |
 | `TVMFFIToLLVM/runtime-ops` | Cached registry lookup/error/call checks, conditional reference updates and clone/copy operand data flow |
@@ -71,12 +72,12 @@ Pipeline cases are selected by interaction:
 
 | Fixture | Integration contract |
 | --- | --- |
-| `aten-dispatch` | Semantic call ownership, cached dispatch and packed wrapper |
+| `aten-dispatch` | Semantic call ownership, cached dispatch and packed entry |
 | `c-any-checks` | Erased finite constraints at packed boundaries |
 | `checked-continuation` | Nested status-gated calls and payload-independent mutation |
 | `containers` | Array metadata, tuple construction/extraction and packed tuple results |
 | `kernel-launch` | Specialization, tensor/native arguments and runtime stream |
-| `local-call` | Monadic local calls through generated packed wrappers |
+| `local-call` | Monadic local calls through converted packed entries |
 | `tensors` | Dynamic metadata and splat/nonsplat tensor literals through LLVM |
 
 Local passes own scalar boxing, None returns, copy operand order and string casts.

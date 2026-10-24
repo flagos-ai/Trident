@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "trident/core/Conversion/FinalizeTVMFFI/FinalizeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Dialect/DLPack/IR/DLPackDialect.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Dialect/DLPack/IR/DLPackOps.h"
 #include "trident/core/Dialect/DLPack/IR/DLPackTypes.h"
@@ -20,13 +20,13 @@
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 #include <utility>
 
-namespace trident::conversion {
+namespace trident::tvm_ffi {
 
-#define GEN_PASS_DEF_FINALIZETVMFFI
-#include "trident/core/Conversion/Passes.h.inc"
+#define GEN_PASS_DEF_LOWERTENSORMETADATA
+#include "trident/core/Dialect/TVMFFI/Transforms/Passes.h.inc"
 
 template <typename SourceOp, typename TargetOp>
-class FinalizeIndexedTensorMetadataOp final
+class LowerIndexedTensorMetadataOp final
     : public mlir::OpRewritePattern<SourceOp> {
 public:
   using mlir::OpRewritePattern<SourceOp>::OpRewritePattern;
@@ -34,12 +34,12 @@ public:
   mlir::LogicalResult
   matchAndRewrite(SourceOp op, mlir::PatternRewriter &rewriter) const override {
     mlir::MLIRContext *context = rewriter.getContext();
-    mlir::Type const objectType = tvm_ffi::ObjectType::get(context);
+    mlir::Type const objectType = ObjectType::get(context);
     mlir::Type const tensorType = dlpack::DLTensorType::get(context);
-    mlir::Value const object = tvm_ffi::GetOp::create(
-        rewriter, op.getLoc(), objectType, op.getTensor());
+    mlir::Value const object =
+        GetOp::create(rewriter, op.getLoc(), objectType, op.getTensor());
     mlir::Value const tensor =
-        tvm_ffi::AsOp::create(rewriter, op.getLoc(), tensorType, object);
+        AsOp::create(rewriter, op.getLoc(), tensorType, object);
     rewriter.replaceOpWithNewOp<TargetOp>(op, op.getResult().getType(), tensor,
                                           op.getIndex());
     return mlir::success();
@@ -47,44 +47,38 @@ public:
 };
 
 template <typename SourceOp, typename TargetOp>
-class FinalizeTensorMetadataOp final : public mlir::OpRewritePattern<SourceOp> {
+class LowerTensorMetadataOp final : public mlir::OpRewritePattern<SourceOp> {
 public:
   using mlir::OpRewritePattern<SourceOp>::OpRewritePattern;
 
   mlir::LogicalResult
   matchAndRewrite(SourceOp op, mlir::PatternRewriter &rewriter) const override {
     mlir::MLIRContext *context = rewriter.getContext();
-    mlir::Type const objectType = tvm_ffi::ObjectType::get(context);
+    mlir::Type const objectType = ObjectType::get(context);
     mlir::Type const tensorType = dlpack::DLTensorType::get(context);
-    mlir::Value const object = tvm_ffi::GetOp::create(
-        rewriter, op.getLoc(), objectType, op.getTensor());
+    mlir::Value const object =
+        GetOp::create(rewriter, op.getLoc(), objectType, op.getTensor());
     mlir::Value const tensor =
-        tvm_ffi::AsOp::create(rewriter, op.getLoc(), tensorType, object);
+        AsOp::create(rewriter, op.getLoc(), tensorType, object);
     rewriter.replaceOpWithNewOp<TargetOp>(op, op->getResultTypes(), tensor);
     return mlir::success();
   }
 };
 
-void populateFinalizeTVMFFIPatterns(mlir::RewritePatternSet &patterns) {
-  patterns.add<
-      FinalizeIndexedTensorMetadataOp<tvm_ffi::TensorSizeOp,
-                                      dlpack::TensorSizeOp>,
-      FinalizeIndexedTensorMetadataOp<tvm_ffi::TensorStrideOp,
-                                      dlpack::TensorStrideOp>,
-      FinalizeTensorMetadataOp<tvm_ffi::TensorDTypeOp, dlpack::TensorDTypeOp>,
-      FinalizeTensorMetadataOp<tvm_ffi::TensorDeviceOp, dlpack::TensorDeviceOp>,
-      FinalizeTensorMetadataOp<tvm_ffi::TensorDimOp, dlpack::TensorDimOp>,
-      FinalizeTensorMetadataOp<tvm_ffi::TensorStorageOffsetOp,
-                               dlpack::TensorStorageOffsetOp>>(
-      patterns.getContext());
-}
-
-class FinalizeTVMFFIPass final
-    : public impl::FinalizeTVMFFIBase<FinalizeTVMFFIPass> {
+class LowerTensorMetadataPass final
+    : public impl::LowerTensorMetadataBase<LowerTensorMetadataPass> {
 public:
   void runOnOperation() final {
     mlir::RewritePatternSet patterns(&getContext());
-    populateFinalizeTVMFFIPatterns(patterns);
+    patterns.add<
+        LowerIndexedTensorMetadataOp<TensorSizeOp, dlpack::TensorSizeOp>,
+        LowerIndexedTensorMetadataOp<TensorStrideOp, dlpack::TensorStrideOp>,
+        LowerTensorMetadataOp<TensorDTypeOp, dlpack::TensorDTypeOp>,
+        LowerTensorMetadataOp<TensorDeviceOp, dlpack::TensorDeviceOp>,
+        LowerTensorMetadataOp<TensorDimOp, dlpack::TensorDimOp>,
+        LowerTensorMetadataOp<TensorStorageOffsetOp,
+                              dlpack::TensorStorageOffsetOp>>(
+        patterns.getContext());
     if (mlir::failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
@@ -92,4 +86,4 @@ public:
   }
 };
 
-} // namespace trident::conversion
+} // namespace trident::tvm_ffi

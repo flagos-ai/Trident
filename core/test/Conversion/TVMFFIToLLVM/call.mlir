@@ -12,6 +12,7 @@ func.func private @__tvm_ffi_empty(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[SECOND:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>
 // CHECK: %[[TWO:[a-zA-Z0-9_]+]] = llvm.mlir.constant(2 : i64)
 // CHECK-NEXT: %[[ARGS:[a-zA-Z0-9_]+]] = llvm.alloca %[[TWO]]
+// CHECK-NEXT: %[[COUNT:[a-zA-Z0-9_]+]] = llvm.mlir.constant(2 : i32)
 // CHECK-NEXT: %[[FIRST:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[ARGS]][0]
 // CHECK-NEXT: llvm.store %[[INPUT]], %[[FIRST]]
 // CHECK-NEXT: %[[SECOND_SLOT:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[ARGS]][1]
@@ -20,7 +21,6 @@ func.func private @__tvm_ffi_empty(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK-NEXT: %[[ZERO:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.struct<(i32, i32, i64)>
 // CHECK-NEXT: llvm.store %[[ZERO]], %[[OUTPUT]]
 // CHECK-NEXT: %[[CONTEXT:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.ptr
-// CHECK-NEXT: %[[COUNT:[a-zA-Z0-9_]+]] = llvm.mlir.constant(2 : i32)
 // CHECK-NEXT: %[[STATUS:[a-zA-Z0-9_]+]] = call @__tvm_ffi_callee(%[[CONTEXT]], %[[ARGS]], %[[COUNT]], %[[OUTPUT]])
 // CHECK-NEXT: %[[SUCCESS_STATUS:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: %[[OK:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[STATUS]], %[[SUCCESS_STATUS]]
@@ -40,9 +40,9 @@ func.func @invoke(%input: !tvm_ffi.c.tensor, %second: !tvm_ffi.int) -> (!tvm_ffi
 // CHECK-LABEL: func.func @invoke_empty(
 // CHECK: %[[EMPTY_COUNT:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i64)
 // CHECK-NEXT: %[[EMPTY_ARGS:[a-zA-Z0-9_]+]] = llvm.alloca %[[EMPTY_COUNT]]
+// CHECK-NEXT: %[[EMPTY_ARITY:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32)
 // CHECK: %[[EMPTY_OUTPUT:[a-zA-Z0-9_]+]] = llvm.alloca
 // CHECK: %[[EMPTY_CONTEXT:[a-zA-Z0-9_]+]] = llvm.mlir.zero : !llvm.ptr
-// CHECK-NEXT: %[[EMPTY_ARITY:[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: %[[EMPTY_STATUS:[a-zA-Z0-9_]+]] = call @__tvm_ffi_empty(%[[EMPTY_CONTEXT]], %[[EMPTY_ARGS]], %[[EMPTY_ARITY]], %[[EMPTY_OUTPUT]])
 // CHECK: llvm.icmp "eq" %[[EMPTY_STATUS]], %[[EMPTY_ZERO:[a-zA-Z0-9_]+]]
 func.func @invoke_empty() -> (!tvm_ffi.bool, !tvm_ffi.c.any) {

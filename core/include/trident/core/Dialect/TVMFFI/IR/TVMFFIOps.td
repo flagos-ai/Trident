@@ -226,8 +226,12 @@ def TVMFFI_FuncOp : TVMFFI_Op<"func", [
   >];
 
   let extraClassDeclaration = [{
-    ::mlir::Region *getCallableRegion();
+    // Return the existing entry block, or create one from the function inputs.
+    ::mlir::Block *addEntryBlock(::mlir::OpBuilder &builder);
     ::llvm::ArrayRef<::mlir::Type> getArgumentTypes();
+    ::mlir::Region *getCallableRegion();
+    // Return nullptr for an external function.
+    ::mlir::Block *getEntryBlock();
     ::llvm::ArrayRef<::mlir::Type> getResultTypes();
   }];
 
@@ -265,6 +269,18 @@ def TVMFFI_GetOp : TVMFFI_Op<"get", [Pure,
   let results = (outs AnyTVMFFIGetResultType:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+}
+
+def TVMFFI_IsaOp : TVMFFI_Op<"isa", [Pure]> {
+  let summary = "Test a tagged value's runtime type without trapping";
+  let description = [{
+    Tests a concrete runtime tag, not container element types. Targets must
+    have one runtime type index, directly or after semantic decomposition.
+  }];
+  let arguments = (ins TVMFFI_AnyValue:$value, TypeAttr:$target);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$value `is` $target attr-dict `:` type($value)";
+  let hasVerifier = 1;
 }
 
 // Define the operand constraint before the launch operation that uses it.
@@ -356,8 +372,70 @@ def TVMFFI_ObjectIncRefOp : TVMFFI_Op<"ObjectIncRef"> {
   let assemblyFormat = "$object attr-dict `:` type($object)";
 }
 
+def TVMFFI_PackCallOp : TVMFFI_Op<"pack.call"> {
+  let summary = "Forward a borrowed argument pack to a local packed ABI entry";
+  let arguments = (ins FlatSymbolRefAttr:$callee, TVMFFI_PackArgumentsType:$arguments);
+  let results = (outs TVMFFI_BoolType:$success, TVMFFI_AnyValue:$value);
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                        ::mlir::TypeRange rhs);
+  }];
+  let assemblyFormat = "$callee `(` $arguments `)` attr-dict `:` functional-type(operands, results)";
+}
+
+def TVMFFI_PackFuncOp : TVMFFI_Op<"pack.func", [
+  AffineScope, AutomaticAllocationScope, FunctionOpInterface, IsolatedFromAbove,
+  OpAsmOpInterface
+]> {
+  let summary = "A borrowed packed entry with one C ABI return";
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       TypeAttrOf<FunctionType>:$function_type,
+                       OptionalAttr<StrAttr>:$sym_visibility,
+                       OptionalAttr<DictArrayAttr>:$arg_attrs,
+                       OptionalAttr<DictArrayAttr>:$res_attrs);
+  let regions = (region AnyRegion : $body);
+
+  let builders = [OpBuilder<(ins
+    "::llvm::StringRef":$name, "::mlir::FunctionType":$type,
+    CArg<"::llvm::ArrayRef<::mlir::NamedAttribute>", "{}">:$attrs)
+  >];
+
+  let extraClassDeclaration = [{
+    // Return the existing entry block, or create one from the function inputs.
+    ::mlir::Block *addEntryBlock(::mlir::OpBuilder &builder);
+    ::llvm::ArrayRef<::mlir::Type> getArgumentTypes();
+    ::mlir::Region *getCallableRegion();
+    // Return nullptr for an external function.
+    ::mlir::Block *getEntryBlock();
+    ::llvm::ArrayRef<::mlir::Type> getResultTypes();
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let skipDefaultBuilders = 1;
+}
+
+def TVMFFI_PackGetOp : TVMFFI_Op<"pack.get"> {
+  let summary = "Borrow a tagged argument after asserting the index is in bounds";
+  let arguments = (ins TVMFFI_PackArgumentsType:$arguments, I64:$index);
+  let results = (outs TVMFFI_AnyValue:$value);
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                        ::mlir::TypeRange rhs);
+  }];
+  let assemblyFormat = "$arguments `[` $index `]` attr-dict `:` functional-type(operands, results)";
+}
+
+def TVMFFI_PackSizeOp : TVMFFI_Op<"pack.size", [Pure]> {
+  let summary = "Read the native i64 argument count";
+  let arguments = (ins TVMFFI_PackArgumentsType:$arguments);
+  let results = (outs I64:$size);
+  let assemblyFormat = "$arguments attr-dict `:` type($arguments)";
+}
+
 def TVMFFI_ReturnOp
-    : TVMFFI_Op<"return", [HasParent<"FuncOp">, ReturnLike, Terminator]> {
+    : TVMFFI_Op<"return", [ParentOneOf<["FuncOp", "PackFuncOp"]>, ReturnLike, Terminator]> {
   let summary = "Return explicit success and an Any payload from a C ABI function";
   let description = [{
     The function signature declares the successful C ABI payload type. Return

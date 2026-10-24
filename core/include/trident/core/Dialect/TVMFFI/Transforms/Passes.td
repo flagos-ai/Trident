@@ -63,3 +63,26 @@ def LowerTVMFFIMonad : Pass<"lower-tvm-ffi-monad", "mlir::ModuleOp"> {
     "trident::tvm_ffi::TVMFFIDialect"
   ];
 }
+
+def LowerTensorMetadata : Pass<"lower-tensor-metadata", "mlir::ModuleOp"> {
+  let summary = "Lower TVM FFI tensor metadata operations through DLPack";
+  let description = [{
+    Rewrite TVMFFI tensor metadata operations into TVMFFI object views and
+    DLPack tensor metadata operations.
+  }];
+  let dependentDialects = [
+    "trident::dlpack::DLPackDialect", "trident::tvm_ffi::TVMFFIDialect"
+  ];
+}
+
+def LowerToPack : Pass<"lower-to-pack", "mlir::ModuleOp"> {
+  let summary = "Convert typed TVM FFI functions to packed entries";
+  let description = [{
+    Replace typed function bodies with packed entries, validating argument
+    counts and tags before entering the original body. Requires decomposition.
+  }];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
+    "mlir::scf::SCFDialect", "trident::tvm_ffi::TVMFFIDialect"
+  ];
+}

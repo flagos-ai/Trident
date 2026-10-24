@@ -16,6 +16,9 @@ include "trident/core/Dialect/TVMFFI/IR/Opaque/TVMFFITypes.td"
 
 def TVMFFI_ObjectType
     : TVMFFIABI_Type<"Object", "object">;
+// Borrowed pointer/count view, deliberately outside the tagged C ABI.
+def TVMFFI_PackArgumentsType
+    : TVMFFI_Type<"PackArguments", "pack.arguments">;
 def TVMFFI_AnyValue : AnyTypeOf<[TVMFFI_AnyType, TVMFFI_C_AnyType], "TVM FFI dynamic tagged value"> {
   let builderCall = "::trident::tvm_ffi::AnyType::get($_builder.getContext())";
 }

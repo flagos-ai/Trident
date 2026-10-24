@@ -197,14 +197,6 @@ func.func @invalid_dtype_constant() {
 
 // -----
 
-// expected-error@+1 {{must have public visibility}}
-tvm_ffi.func private @private_function() -> !tvm_ffi.none {
-  %none = tvm_ffi.constant.none
-  %value = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
-  %ok = tvm_ffi.constant.bool true
-  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
-}
-
 // -----
 
 func.func @to_mismatched_native_type(%value: i64) {
@@ -251,4 +243,12 @@ func.func @scalar(%value: !tvm_ffi.int) {
   // expected-error@+1 {{operand #0 must be TVM FFI object handle}}
   tvm_ffi.ObjectIncRef %value : !tvm_ffi.int
   return
+}
+
+// -----
+
+func.func @is_unindexed(%input: !tvm_ffi.any) -> i1 {
+  // expected-error@+1 {{target must have a concrete runtime type index}}
+  %match = tvm_ffi.isa %input is !tvm_ffi.str : !tvm_ffi.any
+  return %match : i1
 }

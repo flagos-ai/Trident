@@ -141,8 +141,10 @@ supports the same counts; `pure([])` still constructs the existing None Result.
 
 FFI functions declare exactly one C ABI payload type. `tvm_ffi.return` takes
 a boxed success boolean and an Any payload. Pack multiple values into a semantic
-tuple payload; no-data functions declare `!tvm_ffi.none`. Private graph helpers
-and construction helpers continue to use complete Results. Every Result requires
+tuple payload; generic no-data functions can declare `!tvm_ffi.none`. Generated
+graph functions declare Any to admit both ordinary payloads and GuardMatch.
+Graph computation and construction helpers use complete Results internally;
+graph functions pack outputs at their TVM FFI boundary. Every Result requires
 one CABI payload type; use `monad.pure` for success and explicit None payloads
 for no-data Results. Empty argument builders retain a None Result success marker;
 pass only the original number of arguments to calls, including zero for empty
@@ -169,14 +171,23 @@ calls continue to use `tvm_ffi.FunctionCall`.
 
 `decompose-tvm-ffi` preserves the call's two results and converts container
 operands and explicit tuples to CArrays. `TVMFFIToLLVM` requires this decomposition
-and expands packed wrappers directly into LLVM control flow. Success returns
+and expands local packed calls directly into LLVM control flow. Success returns
 separate `(true, payload)` results; failure returns `(false, None)` without
 reading the output slot or clearing the runtime error. The Any result owns the
 returned payload reference; semantic calls receive automatic Any cleanup, while
 Bool needs none. Local call lowering constructs no Array and performs no
 registry lookup or temporary reference adjustment. Monad lowering and
-`TVMFFIToFunc` contain no packed call expansion, and LLVM conversion receives no
-Result types.
+`LowerToPack`/`TVMFFIToFunc` contain no packed call expansion, and LLVM conversion
+receives no Result types.
+
+Run `lower-to-pack` after decomposition and cleanup, then
+`convert-tvm-ffi-to-func`. The first pass replaces all typed function bodies with
+same-name packed entries, including functions without `emit_tvm_ffi_abi`.
+Parameters must be decomposed indexed Base types or CAny. Count and tag guards
+precede the original CFG; rejection returns successful GuardMatch. Successful
+original returns check their declared payload type before widening to CAny.
+The second pass lowers only packed entries to `__tvm_ffi_<name>` native ABI
+functions; it creates no separate typed implementation or wrapper call.
 
 Ownership contracts are implemented by semantic lowering. Decomposition selects
 producer ownership through explicit helper calls and template arguments. Conversion legality
@@ -358,8 +369,8 @@ Bind the launch Result explicitly so rejection suppresses later effects and
 passes through normal cleanup.
 It extracts native tensor data pointers and scalars from semantic operands,
 validates specializations, obtains the current stream through TVM FFI, and emits
-`gpu.launch_func`. At the Python-built graph-call boundary, map graph Result failure to a successful
-GuardMatch payload for the dispatcher. Keep private graph signatures unchanged;
+`gpu.launch_func`. At the graph function exit, map graph Result failure to a successful
+GuardMatch payload for the dispatcher. Private graphs use `tvm_ffi.func`;
 do not add Union payloads or generate function exits in GPU lowering. Graph failure
 currently means rejection because ordinary FFI calls assert on errors. Preserve
 generic ABI runtime-error propagation outside this boundary.
@@ -368,3 +379,15 @@ Add a kernel launch or specialization Lit test and a cached Python execution
 test under `test/e2e` for changes to this path. Use hook-free `triton.Config`
 definitions in JIT examples because Dynamo export cannot capture arbitrary
 Triton callbacks.
+
+## Backend function construction
+
+Construct the dispatcher with `tvm_ffi.pack.func`, and the guard wrapper and private graph with `tvm_ffi.func`
+before running the common lowering pipeline. Use local packed calls between
+layers. The dispatcher accepts one borrowed `!tvm_ffi.pack.arguments` view and retries only successful
+Exception payloads; failed calls propagate their status without retrying.
+Use `tvm_ffi.isa` for a non-trapping concrete runtime-tag test; `downcast`
+remains an asserting cast. Packed argument counts and tags are checked by the converted callee entry before
+reading slots or entering the implementation. Graph exits pack multiple successful outputs into a semantic
+Tuple and translate internal specialization rejection to GuardMatch. Keep the
+existing single-output and None conventions for Python pytree reconstruction.

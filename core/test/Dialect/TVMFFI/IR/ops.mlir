@@ -162,3 +162,24 @@ func.func @to_native_scalars(%bool: i1, %int: i64, %float: f64)
   return %bool_value, %int_value, %float_value
      : !tvm_ffi.bool, !tvm_ffi.int, !tvm_ffi.float
 }
+
+// -----
+
+// CHECK-LABEL: func.func @is_exception(
+// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.any
+// CHECK: %[[MATCH:[a-zA-Z0-9_]+]] = tvm_ffi.isa %[[INPUT]] is !tvm_ffi.exception
+// CHECK: return %[[MATCH]]
+func.func @is_exception(%input: !tvm_ffi.any) -> i1 {
+  %match = tvm_ffi.isa %input is !tvm_ffi.exception : !tvm_ffi.any
+  return %match : i1
+}
+
+// -----
+
+// CHECK-LABEL: tvm_ffi.func private @private_function
+tvm_ffi.func private @private_function() -> !tvm_ffi.none {
+  %none = tvm_ffi.constant.none
+  %value = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
+  %ok = tvm_ffi.constant.bool true
+  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
+}

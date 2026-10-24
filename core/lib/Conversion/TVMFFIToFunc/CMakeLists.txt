@@ -5,12 +5,11 @@ add_mlir_conversion_library(
   MLIRConversionPassIncGen
   LINK_LIBS
   PUBLIC
-  ConversionUtils
   MLIRArithDialect
   MLIRControlFlowDialect
   MLIRFuncDialect
-  MLIRLLVMCommonConversion
   MLIRLLVMDialect
   MLIRPass
   MLIRSCFDialect
+  MLIRTransformUtils
   TVMFFIDialect)

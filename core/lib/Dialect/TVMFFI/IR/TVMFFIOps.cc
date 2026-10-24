@@ -32,6 +32,7 @@
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Support/LLVM.h>
 #include <optional>
+#include <string>
 
 namespace trident::tvm_ffi {
 
@@ -83,6 +84,18 @@ bool CallOp::isCompatibleReturnTypes(mlir::TypeRange lhs, mlir::TypeRange rhs) {
   return lhs.size() == 2 && rhs.size() == 2 && lhs[0] == rhs[0] &&
          mlir::isa<AnyType, CAnyType>(lhs[1]) &&
          mlir::isa<AnyType, CAnyType>(rhs[1]);
+}
+
+bool PackCallOp::isCompatibleReturnTypes(mlir::TypeRange lhs,
+                                         mlir::TypeRange rhs) {
+  return CallOp::isCompatibleReturnTypes(lhs, rhs);
+}
+
+bool PackGetOp::isCompatibleReturnTypes(mlir::TypeRange lhs,
+                                        mlir::TypeRange rhs) {
+  return lhs.size() == 1 && rhs.size() == 1 &&
+         mlir::isa<AnyType, CAnyType>(lhs[0]) &&
+         mlir::isa<AnyType, CAnyType>(rhs[0]);
 }
 
 bool ExceptionOp::isCompatibleReturnTypes(mlir::TypeRange lhs,
@@ -141,12 +154,74 @@ mlir::LogicalResult ConstantDTypeOp::verify() {
              : emitOpError("dtype result requires [code, bits, lanes]");
 }
 
+mlir::Block *PackFuncOp::addEntryBlock(mlir::OpBuilder &builder) {
+  if (mlir::Block *entry = getEntryBlock()) {
+    return entry;
+  }
+  llvm::SmallVector<mlir::Location> const locations(getArgumentTypes().size(),
+                                                    getLoc());
+  return builder.createBlock(&getBody(), {}, getArgumentTypes(), locations);
+}
+
+mlir::Block *PackFuncOp::getEntryBlock() {
+  mlir::Region &body = getBody();
+  return body.empty() ? nullptr : &body.front();
+}
+
+mlir::LogicalResult PackFuncOp::verify() {
+  if (getArgumentTypes().size() != 1 ||
+      !mlir::isa<PackArgumentsType>(getArgumentTypes().front())) {
+    return emitOpError("requires exactly one pack.arguments input");
+  }
+  if (getResultTypes().size() != 1 ||
+      !mlir::isa<TVMFFICABIType>(getResultTypes().front())) {
+    return emitOpError("function must return exactly one C ABI value");
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult PackCallOp::verify() {
+  mlir::Operation *callee = mlir::SymbolTable::lookupNearestSymbolFrom(
+      getOperation(), getCalleeAttr());
+  if (!callee) {
+    // Function conversion replaces packed definitions with their ABI symbols.
+    std::string const name = "__tvm_ffi_" + getCallee().str();
+    callee = mlir::SymbolTable::lookupNearestSymbolFrom(
+        getOperation(), mlir::StringAttr::get(getContext(), name));
+  }
+  if (mlir::isa_and_nonnull<PackFuncOp, mlir::func::FuncOp>(callee)) {
+    return mlir::success();
+  }
+  if (mlir::isa_and_nonnull<FuncOp>(callee) &&
+      callee->hasAttr("emit_tvm_ffi_abi")) {
+    return mlir::success();
+  }
+  return emitOpError(
+      "callee must be a local packed entry or have emit_tvm_ffi_abi");
+}
+
+mlir::Block *FuncOp::addEntryBlock(mlir::OpBuilder &builder) {
+  if (mlir::Block *entry = getEntryBlock()) {
+    return entry;
+  }
+  llvm::SmallVector<mlir::Location> const locations(getArgumentTypes().size(),
+                                                    getLoc());
+  return builder.createBlock(&getBody(), {}, getArgumentTypes(), locations);
+}
+
+mlir::Block *FuncOp::getEntryBlock() {
+  mlir::Region &body = getBody();
+  return body.empty() ? nullptr : &body.front();
+}
+
 mlir::LogicalResult FuncOp::verify() {
-  if (std::optional<llvm::StringRef> visibility = getSymVisibility();
-      visibility && *visibility != "public") {
-    return emitOpError("must have public visibility");
-  } else if (getResultTypes().size() != 1 ||
-             !mlir::isa<TVMFFICABIType>(getResultTypes().front())) {
+  if (llvm::any_of(getArgumentTypes(), [](mlir::Type type) -> bool {
+        return mlir::isa<PackArgumentsType>(type);
+      })) {
+    return emitOpError("pack.arguments inputs require pack.func");
+  }
+  if (getResultTypes().size() != 1 ||
+      !mlir::isa<TVMFFICABIType>(getResultTypes().front())) {
     return emitOpError("function must return exactly one C ABI value; use a "
                        "tuple for multiple values and None for no value");
   }
@@ -247,6 +322,24 @@ mlir::LogicalResult KernelLaunchOp::verify() {
 }
 
 mlir::LogicalResult CallOp::verify() {
+  auto matches = [](mlir::Type actual, mlir::Type expected) -> bool {
+    return actual == expected;
+  };
+  FuncOp function = mlir::SymbolTable::lookupNearestSymbolFrom<FuncOp>(
+      getOperation(), getCalleeAttr());
+  if (function) {
+    if (!function.getEmitTvmFfiAbi()) {
+      return emitOpError("callee must have emit_tvm_ffi_abi");
+    }
+    if (function.getArgumentTypes().size() != getNumOperands() ||
+        !llvm::all_of(llvm::zip(getOperandTypes(), function.getArgumentTypes()),
+                      [&](auto pair) -> bool {
+                        auto [actual, expected] = pair;
+                        return matches(actual, expected);
+                      })) {
+      return emitOpError("operand types must match the callee arguments");
+    }
+  }
   // After function conversion the implementation has one output slot and an
   // i32 status. Preserve the ABI marker so this boundary remains verifiable.
   mlir::func::FuncOp lowered =
@@ -258,13 +351,27 @@ mlir::LogicalResult CallOp::verify() {
       return emitOpError("callee must have emit_tvm_ffi_abi");
     }
     if (signature.getNumInputs() != getNumOperands() + 1 ||
-        !llvm::equal(signature.getInputs().drop_back(), getOperandTypes()) ||
+        !llvm::all_of(
+            llvm::zip(getOperandTypes(), signature.getInputs().drop_back()),
+            [&](auto pair) -> bool {
+              auto [actual, expected] = pair;
+              return matches(actual, expected);
+            }) ||
         !mlir::isa<mlir::LLVM::LLVMPointerType>(signature.getInputs().back()) ||
         signature.getNumResults() != 1 ||
         !signature.getResult(0).isSignlessInteger(32)) {
       return emitOpError(
           "operand types must match the lowered callee arguments");
     }
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult IsaOp::verify() {
+  mlir::Type const target = getTarget();
+  if (!mlir::isa<TVMFFITypeIndexInterface, ArrayType, ExceptionType,
+                 FunctionType, TensorType, TupleType>(target)) {
+    return emitOpError("target must have a concrete runtime type index");
   }
   return mlir::success();
 }

@@ -13,13 +13,14 @@
 // test/e2e/test_storage.py checks distinct allocations for contiguous
 // and preserve-format clones through the public frontend.
 
-// CHECK-LABEL: llvm.func @clone(
-// CHECK-SAME: %[[ARG0:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[OUTPUT_SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32 attributes {emit_tvm_ffi_abi} {
+// CHECK-LABEL: llvm.func @__tvm_ffi_clone(
+// CHECK-SAME: %[[CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[INPUTS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[COUNT:[a-zA-Z0-9_]+]]: i32, %[[OUTPUT_SLOT:[a-zA-Z0-9_]+]]: !llvm.ptr) -> i32
 // The callee is resolved once at load time, so the dispatch reads the cached
 // handle rather than calling TVMFFIFunctionGetGlobal per invocation. The
 // module owns the cached reference.
 // CHECK-NOT: llvm.call @TVMFFIFunctionGetGlobal
 // CHECK: %[[HANDLE_ADDR:[a-zA-Z0-9_]+]] = llvm.mlir.addressof @__trident_tvm_ffi_handle_trident.aten.clone : !llvm.ptr
+// CHECK: %[[ARG0:[a-zA-Z0-9_]+]] = llvm.load %[[INPUTS]]
 // CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[HANDLE_ADDR]] : !llvm.ptr -> !llvm.ptr
 // CHECK: llvm.call @TVMFFIObjectIncRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
 // CHECK: %[[ARGS:[a-zA-Z0-9_]+]] = llvm.alloca %[[ARGS_COUNT:[a-zA-Z0-9_]+]] x !llvm.struct<(i32, i32, i64)>
@@ -31,14 +32,12 @@
 // CHECK: %[[RET:[a-zA-Z0-9_]+]] = llvm.load %[[RET_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // Automatic ownership releases the local handle before exporting the payload.
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
-// CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
+// CHECK: llvm.br ^[[CHECKED:bb[0-9]+]](%[[RET]] : !llvm.struct<(i32, i32, i64)>)
+// CHECK: ^[[CHECKED]](%[[PAYLOAD:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>):
+// CHECK: llvm.cond_br %[[SUCCESS:[a-zA-Z0-9_]+]], ^[[STORE:bb[0-9]+]](%[[PAYLOAD]], %[[CODE:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, i32)
+// CHECK: ^[[STORE]](%[[OUTPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[STORE_CODE:[a-zA-Z0-9_]+]]: i32):
+// CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUTPUT_SLOT]]
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
-// CHECK-LABEL: llvm.func @__tvm_ffi_clone(
-// CHECK-SAME: %[[WRAP_CONTEXT:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAP_ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[WRAP_NARGS:[a-zA-Z0-9_]+]]: i32, %[[WRAP_RESULT:[a-zA-Z0-9_]+]]: !llvm.ptr)
-// CHECK: %[[WRAP_ARG:[a-zA-Z0-9_]+]] = llvm.load %[[WRAP_ARGS]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: %[[WRAP_STATUS:[a-zA-Z0-9_]+]] = llvm.call @clone(%[[WRAP_ARG]], %[[WRAP_SLOT:[a-zA-Z0-9_]+]]) : (!llvm.struct<(i32, i32, i64)>, !llvm.ptr) -> i32
-// CHECK: %[[WRAP_RET:[a-zA-Z0-9_]+]] = llvm.load %[[WRAP_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.store %[[WRAP_RET]], %[[WRAP_RESULT]]
 
 tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
   %memory_format = tvm_ffi.constant.int 0

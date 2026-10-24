@@ -116,7 +116,7 @@ class InputTable:
             with bind(
                 node.result, result_types=[value.type for value in node.result]
             ) as cached:
-                tvm_ffi_d.MonadYieldOp(pure(cached.arguments))
+                tvm_ffi_d.monad_yield(pure(cached.arguments))
             return [*cached.outputs]
         else:
             assert len(path) > 1, f"input cannot be resolved: {path}"
@@ -124,7 +124,7 @@ class InputTable:
             *parent_path, index = path
             with bind(self.extract(parent_path), result_types=types) as operation:
                 [array] = operation.arguments
-                tvm_ffi_d.MonadYieldOp(container_get(array, index, node.type))
+                tvm_ffi_d.monad_yield(container_get(array, index, node.type))
 
             node.result = [*operation.outputs]
             return node.result
@@ -143,7 +143,7 @@ class InputTable:
                     values.append(value)
                     continue
                 with bind(self.extract(path), result_types=types) as operation:
-                    tvm_ffi_d.MonadYieldOp(
+                    tvm_ffi_d.monad_yield(
                         build(index + 1, [*values, *operation.arguments])
                     )
 

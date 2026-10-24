@@ -459,13 +459,14 @@ class DecomposeTVMFFIPass final
         ConvertGenericOp<ExceptionOp, true>,
         ConvertGenericOp<FunctionCallOp, true>,
         ConvertGenericOp<FunctionGetGlobalOp, true>, ConvertGenericOp<GetOp>,
-        ConvertGenericOp<MonadFailOp>, ConvertGenericOp<MonadPureOp>,
-        ConvertGenericOp<MonadUnpackOp>, ConvertGenericOp<ObjectDecRefOp>,
-        ConvertGenericOp<ObjectIncRefOp>, ConvertGenericOp<TensorCloneOp, true>,
-        ConvertGenericOp<TensorCopyOp>, ConvertGenericOp<TensorDTypeOp>,
-        ConvertGenericOp<TensorDeviceOp>, ConvertGenericOp<TensorDimOp>,
-        ConvertGenericOp<TensorLiteralOp, true>, ConvertGenericOp<TensorSizeOp>,
-        ConvertGenericOp<TensorStorageOffsetOp>,
+        ConvertGenericOp<IsaOp>, ConvertGenericOp<MonadFailOp>,
+        ConvertGenericOp<MonadPureOp>, ConvertGenericOp<MonadUnpackOp>,
+        ConvertGenericOp<ObjectDecRefOp>, ConvertGenericOp<ObjectIncRefOp>,
+        ConvertGenericOp<PackCallOp, true>, ConvertGenericOp<PackGetOp>,
+        ConvertGenericOp<TensorCloneOp, true>, ConvertGenericOp<TensorCopyOp>,
+        ConvertGenericOp<TensorDTypeOp>, ConvertGenericOp<TensorDeviceOp>,
+        ConvertGenericOp<TensorDimOp>, ConvertGenericOp<TensorLiteralOp, true>,
+        ConvertGenericOp<TensorSizeOp>, ConvertGenericOp<TensorStorageOffsetOp>,
         ConvertGenericOp<TensorStrideOp>, ConvertGenericOp<UpcastOp>,
         ConvertGenericOp<mlir::func::CallOp, true>, ConvertTupleUnconstructOp>(
         converter, context);
@@ -473,6 +474,8 @@ class DecomposeTVMFFIPass final
                     ConvertWhileOp, ConvertYieldOp>(converter, context);
     mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(conversions,
                                                                    converter);
+    mlir::populateFunctionOpInterfaceTypeConversionPattern<PackFuncOp>(
+        conversions, converter);
     mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(
         conversions, converter);
     mlir::cf::populateCFStructuralTypeConversionsAndLegality(
@@ -487,7 +490,7 @@ class DecomposeTVMFFIPass final
                                 return converter.isLegal(&region);
                               });
         });
-    target.addDynamicallyLegalOp<FuncOp, mlir::func::FuncOp>(
+    target.addDynamicallyLegalOp<FuncOp, PackFuncOp, mlir::func::FuncOp>(
         [&](mlir::Operation *operation) -> bool {
           mlir::FunctionOpInterface function =
               mlir::cast<mlir::FunctionOpInterface>(operation);

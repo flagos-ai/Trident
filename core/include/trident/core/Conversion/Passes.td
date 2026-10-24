@@ -17,8 +17,8 @@ def ConvertDLPackToLLVM : Pass<"convert-dlpack-to-llvm", "mlir::ModuleOp"> {
 }
 
 def ConvertTVMFFIToFunc : Pass<"convert-tvm-ffi-to-func", "mlir::ModuleOp"> {
-  let summary = "Convert TVMFFI functions to Func operations";
-  let description = [{Convert TVMFFI functions to Any ABI Func operations.}];
+  let summary = "Convert packed TVM FFI functions to Func operations";
+  let description = [{Convert packed TVM FFI entries to status-returning Func operations.}];
   let dependentDialects = [
     "mlir::LLVM::LLVMDialect", "mlir::arith::ArithDialect",
     "mlir::cf::ControlFlowDialect", "mlir::func::FuncDialect",
@@ -43,17 +43,6 @@ def ConvertTVMFFIToLLVM : Pass<"convert-tvm-ffi-to-llvm", "mlir::ModuleOp"> {
   let description = [{Lower TVMFFI dialect operations to LLVM dialect.}];
   let dependentDialects = [
     "mlir::LLVM::LLVMDialect", "mlir::func::FuncDialect"
-  ];
-}
-
-def FinalizeTVMFFI : Pass<"finalize-tvm-ffi", "mlir::ModuleOp"> {
-  let summary = "Finalize TVMFFI tensor metadata operations through DLPack";
-  let description = [{
-    Rewrite TVMFFI tensor metadata operations into TVMFFI object views and
-    DLPack tensor metadata operations.
-  }];
-  let dependentDialects = [
-    "trident::dlpack::DLPackDialect", "trident::tvm_ffi::TVMFFIDialect"
   ];
 }
 

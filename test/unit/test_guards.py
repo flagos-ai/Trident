@@ -104,7 +104,7 @@ class GuardExpressionTest(unittest.TestCase):
                     block = function.add_entry_block()
                 with ir.InsertionPoint(block):
                     results = code.build_result(builder.build(block.arguments), context)
-                    func.ReturnOp(results)
+                    func.return_(results)
                 self.assertEqual([result.type for result in results], [result_type])
                 self.assertTrue(module.operation.verify())
                 module_text = f"{module}"
