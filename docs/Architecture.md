@@ -184,6 +184,29 @@ implementations. Top-level files retain common ABI utilities, native Object,
 aggregate constraints and registration. `TVMFFITypeBase.td` and
 `TVMFFIOpBase.td` provide the shared TableGen hierarchy and operation base.
 
+## Reusable lowering entry points
+
+Pattern-based pass headers expose population interfaces for composing custom
+lowering flows.
+`populateDecomposeTVMFFIConversionPatterns` and
+`populateLowerTVMFFIMonadConversionPatterns` each register default type rules,
+patterns and target legality in one call using a caller-owned
+`mlir::TypeConverter`. Add any overriding type rules after population. Keep the converter at a stable address and
+alive through conversion; patterns and legality callbacks refer to it. After
+successful operation conversion, recursively replace nested type attributes with
+`mlir::AttrTypeReplacer`, as the standalone passes do.
+
+`populateLowerTensorMetadataPatterns` adds ordinary rewrite patterns.
+`populateLowerToPackConversionPatterns` and
+`populateTVMFFIToFuncConversionPatterns` add patterns and target legality.
+DLPack-to-LLVM, TVMFFI-to-GPU and TVMFFI-to-LLVM retain their existing population
+interfaces. Callers load the dependent dialects declared by the corresponding
+passes before applying these entry points.
+
+Pattern-based passes use these same population interfaces internally. Deferred
+cleanup and the lowering pipeline do not use patterns and expose only their pass
+interfaces.
+
 ## Guards and containers
 
 Guards are parsed into `GuardCode`, `Guard` and collection objects under
@@ -501,9 +524,16 @@ Patterns use original types to classify ownership. Retains and cleanup
 use remapped operands and replacement values, including child exit retains
 whose values come from the terminator pattern's adaptor. Any/Union become CAny,
 so type legality forces their ownership patterns to run once without tracking
-completed replacements. Patterns run before conversion-time folding so
-a producer or branch cannot vanish before registering its ownership. Region
-conversion moves existing child operations rather than cloning them.
+completed replacements. The pass uses the default dialect conversion configuration:
+rollback remains enabled, preserving original operand types until commit, and
+folding is attempted before patterns. Region conversion moves existing child
+operations rather than cloning them.
+
+Patterns use default benefits unless they compete for the same operation.
+Monad lowering gives its attribute-preserving `scf.yield` conversion priority
+over the upstream structural conversion. LLVM constant PDLL patterns use default
+benefits and retain `PDLConversionConfig` so `convertType` uses the LLVM type
+converter.
 
 `lower-tvm-ffi-defer` clones cleanup bodies at registration dominance-scope
 exits, after all export retains. A registration remains active through blocks

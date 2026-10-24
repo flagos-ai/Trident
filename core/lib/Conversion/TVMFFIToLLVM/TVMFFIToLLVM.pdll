@@ -11,7 +11,7 @@
 
 Rewrite convertType(type: Type) -> Type;
 
-Pattern ConstantInt with benefit(1) {
+Pattern ConstantInt {
   let root = op<tvm_ffi.constant.int> {value = value: Attr}
       -> (rootType: Type);
     rewrite root with {
@@ -33,7 +33,7 @@ Pattern ConstantInt with benefit(1) {
   };
 }
 
-Pattern ConstantBool with benefit(1) {
+Pattern ConstantBool {
   let root = op<tvm_ffi.constant.bool> {value = value: Attr}
       -> (rootType: Type);
   rewrite root with {
@@ -56,7 +56,7 @@ Pattern ConstantBool with benefit(1) {
   };
 }
 
-Pattern ConstantFloat with benefit(1) {
+Pattern ConstantFloat {
   let root = op<tvm_ffi.constant.float> {value = value: Attr}
       -> (rootType: Type);
   rewrite root with {
@@ -79,7 +79,7 @@ Pattern ConstantFloat with benefit(1) {
   };
 }
 
-Pattern ConstantNone with benefit(1) {
+Pattern ConstantNone {
   let root = op<tvm_ffi.constant.none> -> (rootType: Type);
     rewrite root with {
       let payload = op<llvm.mlir.constant>() {value = attr<"0 : i64">}

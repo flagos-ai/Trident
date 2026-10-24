@@ -81,6 +81,8 @@ func.func private @record_values(!tvm_ffi.int, !tvm_ffi.int)
 // CHECK-LABEL: func.func @aggregate(
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: i64, %[[READY:[a-zA-Z0-9_]+]]: i1)
 // CHECK: %[[INPUT:[a-zA-Z0-9_]+]] = scf.if %[[READY]]
+// CHECK: %[[INITIAL:[a-zA-Z0-9_]+]] = tvm_ffi.tuple.construct(%[[INITIAL_OK:[a-zA-Z0-9_]+]], %[[INITIAL_VALUE:[a-zA-Z0-9_]+]])
+// CHECK: scf.yield {test.transfer} %[[INITIAL]]
 // CHECK: %[[PARTS:[a-zA-Z0-9_]+]]:2 = tvm_ffi.tuple.unconstruct %[[INPUT]]
 // CHECK: %[[OK:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[PARTS]]#0 : !tvm_ffi.bool -> i1
 // CHECK: %[[OUTPUT:[a-zA-Z0-9_]+]] = scf.if %[[OK]]
@@ -102,7 +104,7 @@ func.func @aggregate(%value: i64, %ready: i1) -> !tvm_ffi.monad.result<!tvm_ffi.
   %input = scf.if %ready -> (!tvm_ffi.monad.result<!tvm_ffi.int>) {
     %value_boxed = tvm_ffi.to %value : i64 -> !tvm_ffi.int
     %success = tvm_ffi.monad.pure %value_boxed : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
-    scf.yield %success : !tvm_ffi.monad.result<!tvm_ffi.int>
+    scf.yield {test.transfer} %success : !tvm_ffi.monad.result<!tvm_ffi.int>
   } else {
     %failure = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.int>
     scf.yield %failure : !tvm_ffi.monad.result<!tvm_ffi.int>

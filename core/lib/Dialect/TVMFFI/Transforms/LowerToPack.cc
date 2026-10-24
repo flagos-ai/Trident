@@ -139,16 +139,21 @@ public:
 class LowerToPackPass final : public impl::LowerToPackBase<LowerToPackPass> {
   void runOnOperation() final {
     mlir::ConversionTarget target(getContext());
-    target.addIllegalOp<FuncOp>();
-    target.markUnknownOpDynamicallyLegal(
-        [](mlir::Operation *) -> bool { return true; });
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<ConvertFuncOp>(&getContext());
+    populateLowerToPackConversionPatterns(target, patterns);
     if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
                                                   std::move(patterns)))) {
       signalPassFailure();
     }
   }
 };
+
+void populateLowerToPackConversionPatterns(mlir::ConversionTarget &target,
+                                           mlir::RewritePatternSet &patterns) {
+  target.addIllegalOp<FuncOp>();
+  target.markUnknownOpDynamicallyLegal(
+      [](mlir::Operation *) -> bool { return true; });
+  patterns.add<ConvertFuncOp>(patterns.getContext());
+}
 
 } // namespace trident::tvm_ffi

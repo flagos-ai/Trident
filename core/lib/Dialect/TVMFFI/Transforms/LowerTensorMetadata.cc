@@ -70,20 +70,24 @@ class LowerTensorMetadataPass final
 public:
   void runOnOperation() final {
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<
-        LowerIndexedTensorMetadataOp<TensorSizeOp, dlpack::TensorSizeOp>,
-        LowerIndexedTensorMetadataOp<TensorStrideOp, dlpack::TensorStrideOp>,
-        LowerTensorMetadataOp<TensorDTypeOp, dlpack::TensorDTypeOp>,
-        LowerTensorMetadataOp<TensorDeviceOp, dlpack::TensorDeviceOp>,
-        LowerTensorMetadataOp<TensorDimOp, dlpack::TensorDimOp>,
-        LowerTensorMetadataOp<TensorStorageOffsetOp,
-                              dlpack::TensorStorageOffsetOp>>(
-        patterns.getContext());
+    populateLowerTensorMetadataPatterns(patterns);
     if (mlir::failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
     }
   }
 };
+
+void populateLowerTensorMetadataPatterns(mlir::RewritePatternSet &patterns) {
+  patterns
+      .add<LowerIndexedTensorMetadataOp<TensorSizeOp, dlpack::TensorSizeOp>,
+           LowerIndexedTensorMetadataOp<TensorStrideOp, dlpack::TensorStrideOp>,
+           LowerTensorMetadataOp<TensorDTypeOp, dlpack::TensorDTypeOp>,
+           LowerTensorMetadataOp<TensorDeviceOp, dlpack::TensorDeviceOp>,
+           LowerTensorMetadataOp<TensorDimOp, dlpack::TensorDimOp>,
+           LowerTensorMetadataOp<TensorStorageOffsetOp,
+                                 dlpack::TensorStorageOffsetOp>>(
+          patterns.getContext());
+}
 
 } // namespace trident::tvm_ffi

@@ -177,8 +177,7 @@ tvm_ffi.func @cfg_packed(%input: !tvm_ffi.tensor, %condition: i1) -> !tvm_ffi.te
   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
 }
 
-// The conversion driver must apply the ownership pattern before folding a
-// constant-condition if. Both branch exits export independent references.
+// Both exits of a constant-condition if export independent references.
 // DEFER-LABEL: func.func @constant_if(
 // DEFER-SAME: %[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi.c.any, %[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.c.any)
 // DEFER: %[[CHOSEN:[a-zA-Z0-9_]+]] = scf.if

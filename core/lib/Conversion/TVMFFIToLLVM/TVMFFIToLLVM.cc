@@ -750,18 +750,9 @@ public:
         [&](mlir::func::FuncOp op) -> bool {
           return typeConverter.isSignatureLegal(op.getFunctionType());
         });
-    target.markOpRecursivelyLegal<mlir::func::FuncOp>(
-        [](mlir::func::FuncOp) -> bool { return false; });
     target.addDynamicallyLegalOp<mlir::func::CallOp>(
         [&](mlir::func::CallOp op) -> bool {
-          return llvm::all_of(op.getOperandTypes(),
-                              [&](mlir::Type type) -> bool {
-                                return typeConverter.isLegal(type);
-                              }) &&
-                 llvm::all_of(op.getResultTypes(),
-                              [&](mlir::Type type) -> bool {
-                                return typeConverter.isLegal(type);
-                              });
+          return typeConverter.isLegal(op);
         });
     target.addDynamicallyLegalOp<mlir::func::ReturnOp>(
         [&](mlir::func::ReturnOp op) -> bool {

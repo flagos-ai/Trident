@@ -128,16 +128,21 @@ class ConvertTVMFFIToFuncPass final
     : public impl::ConvertTVMFFIToFuncBase<ConvertTVMFFIToFuncPass> {
   void runOnOperation() final {
     mlir::ConversionTarget target(getContext());
-    target.addIllegalOp<tvm_ffi::PackFuncOp>();
-    target.markUnknownOpDynamicallyLegal(
-        [](mlir::Operation *) -> bool { return true; });
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<ConvertPackFuncOp>(&getContext());
+    populateTVMFFIToFuncConversionPatterns(target, patterns);
     if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
                                                   std::move(patterns)))) {
       signalPassFailure();
     }
   }
 };
+
+void populateTVMFFIToFuncConversionPatterns(mlir::ConversionTarget &target,
+                                            mlir::RewritePatternSet &patterns) {
+  target.addIllegalOp<tvm_ffi::PackFuncOp>();
+  target.markUnknownOpDynamicallyLegal(
+      [](mlir::Operation *) -> bool { return true; });
+  patterns.add<ConvertPackFuncOp>(patterns.getContext());
+}
 
 } // namespace trident::conversion

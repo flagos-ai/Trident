@@ -18,10 +18,6 @@
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerToPack.h"
-#include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
-#include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
-#include <mlir/Conversion/GPUCommon/GPUToLLVM.h>
-#include <mlir/Conversion/Passes.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
 #include <mlir/InitAllPasses.h>
@@ -32,16 +28,12 @@ void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
   registry.insert<trident::dlpack::DLPackDialect,
                   trident::tvm_ffi::TVMFFIDialect>();
   mlir::registerAllExtensions(registry);
-  mlir::arith::registerConvertArithToLLVMInterface(registry);
-  mlir::registerConvertFuncToLLVMInterface(registry);
-  mlir::gpu::registerConvertGpuToLLVMInterface(registry);
   trident::conversion::registerConvertDLPackToLLVMInterface(registry);
   trident::conversion::registerConvertTVMFFIToLLVMInterface(registry);
 }
 
 void trident::conversion::registerAllPasses() {
   mlir::registerAllPasses();
-  mlir::registerReconcileUnrealizedCastsPass();
   trident::conversion::registerConvertDLPackToLLVMPass();
   trident::conversion::registerConvertTVMFFIToFuncPass();
   trident::conversion::registerConvertTVMFFIToGPUPass();
