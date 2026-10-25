@@ -388,15 +388,18 @@ Kernel constant specializations compare ABI values directly, including semantic
 strings; only variable launch operands require native materialization. Constant
 operands participate in guards and are omitted from the GPU launch arguments.
 
-`ConvertTVMFFIToGPU` runs before monad lowering, container decomposition and
-cleanup. The launch returns `Result<None>`: matching inputs launch and return success;
+`lower-kernel-launch` runs before `ConvertTVMFFIToGPU`, monad lowering,
+container decomposition and cleanup. The launch returns `Result<None>`:
+matching inputs launch and return success;
 rejection returns `monad.fail`, does not launch and does not exit the function.
 Bind the launch Result explicitly so rejection suppresses later effects and
 passes through normal cleanup.
-It extracts native tensor data pointers and scalars from semantic operands,
-validates specializations, obtains the current stream through TVM FFI, and emits
-`gpu.launch_func`. At the graph function exit, map graph Result failure to a successful
-GuardMatch payload for the dispatcher. Private graphs use `tvm_ffi.func`;
+`lower-kernel-launch` extracts native tensor data pointers and scalars, expands
+specialization checks and constructs Monad pure/fail Results around an
+unconditional `tvm_ffi.native_kernel_launch`. This operation has no specialization
+attributes. `ConvertTVMFFIToGPU` only obtains the current stream through TVM FFI
+and converts that native launch to `gpu.launch_func`. At the graph function exit,
+map graph Result failure to a successful GuardMatch payload for the dispatcher. Private graphs use `tvm_ffi.func`;
 do not add Union payloads or generate function exits in GPU lowering. Graph failure
 currently means rejection because ordinary FFI calls assert on errors. Preserve
 generic ABI runtime-error propagation outside this boundary.

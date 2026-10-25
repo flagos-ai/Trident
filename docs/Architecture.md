@@ -260,10 +260,12 @@ are used only to select the compiled kernel, never to substitute runtime shapes.
 Functional Triton wrapper outputs explicitly clone `tensors_to_clone` before
 launching; mutation wrappers use the original operands.
 
-`tvm_ffi.kernel_launch` returns `Result<None>`. `ConvertTVMFFIToGPU`
-validates specializations and emits `gpu.launch_func` with the current TVM FFI
-CUDA stream only on a match. That branch returns successful None; rejection
-returns failure without setting a runtime error or exiting the function.
+`tvm_ffi.kernel_launch` returns `Result<None>`. `lower-kernel-launch`
+expands specialization attributes into checks and Monad pure/fail Results. Its
+success branch contains `tvm_ffi.native_kernel_launch` with native operands and
+no specialization attributes. `ConvertTVMFFIToGPU` lowers only that unconditional
+operation to `gpu.launch_func` with the current TVM FFI CUDA stream.
+That branch returns successful None; rejection returns failure without setting a runtime error or exiting the function.
 Constant operands are checked and omitted from the native argument list.
 Python binds the launch result, skipping later computation on rejection.
 Success means the launch path was taken, not asynchronous execution completed.
@@ -272,8 +274,9 @@ Success means the launch path was taken, not asynchronous execution completed.
 
 The lowering pipeline is:
 
-1. Lower kernel launches to GPU operations, retaining their success/rejection
-   Results.
+1. Run `lower-kernel-launch` to remove specialization attributes and construct
+   guarded native launches with Monad success/rejection Results. Then run
+   `convert-tvm-ffi-to-gpu` for stream lookup and GPU launches.
 2. Run `lower-tvm-ffi-monad`. Every `Result<T>` becomes a semantic
    `tuple<bool, any>`. Pure values become `(true, payload)` and failures become
    `(false, None)`. Binds become tuple extraction and `scf.if`; their typed

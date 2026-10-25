@@ -358,6 +358,44 @@ let extraClassDeclaration = [{
 }];
 }
 
+def TVMFFI_NativeKernelLaunchOp
+    : TVMFFI_Op<"native_kernel_launch", [
+  AttrSizedOperandSegments, AllTypesMatch<[
+    "gridSizeX", "gridSizeY", "gridSizeZ", "blockSizeX", "blockSizeY",
+    "blockSizeZ"
+  ]>
+]> {
+  let summary = "Launch a compiled kernel with native ABI operands";
+  let hasVerifier = 1;
+  let description = [{
+    Unconditionally launch with native ABI operands. Specialization guards and
+    Result construction are supplied by lower-kernel-launch using Monad ops.
+  }];
+
+let arguments = (ins SymbolRefAttr:$kernel,
+                   I64:$gridSizeX,
+                   I64:$gridSizeY,
+                   I64:$gridSizeZ,
+                   I64:$blockSizeX,
+                   I64:$blockSizeY,
+                   I64:$blockSizeZ,
+                   Optional<I64>:$clusterSizeX,
+                   Optional<I64>:$clusterSizeY,
+                   Optional<I64>:$clusterSizeZ,
+                   Optional<I32>:$dynamicSharedMemorySize,
+                   Variadic<AnyType>:$kernelOperands);
+  let assemblyFormat = [{
+    $kernel
+    (`clusters` `in` `(` $clusterSizeX^ `,` $clusterSizeY `,` $clusterSizeZ `)`)?
+    `blocks` `in` `(` $gridSizeX `,` $gridSizeY `,` $gridSizeZ `)`
+    `:` type($gridSizeX)
+    `threads` `in` `(` $blockSizeX `,` $blockSizeY `,` $blockSizeZ `)`
+    (`dynamic_shared_memory_size` $dynamicSharedMemorySize^)?
+    `args` `(` $kernelOperands `:` type($kernelOperands) `)`
+    prop-dict attr-dict
+}];
+}
+
 include "trident/core/Dialect/TVMFFI/IR/Monad/TVMFFIOps.td"
 
 def TVMFFI_ObjectDecRefOp : TVMFFI_Op<"ObjectDecRef"> {

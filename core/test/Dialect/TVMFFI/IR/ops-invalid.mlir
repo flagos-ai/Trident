@@ -252,3 +252,14 @@ func.func @is_unindexed(%input: !tvm_ffi.any) -> i1 {
   %match = tvm_ffi.isa %input is !tvm_ffi.str : !tvm_ffi.any
   return %match : i1
 }
+
+// -----
+
+func.func @native_launch_rejects_semantic_operand(%value: !tvm_ffi.int) {
+  %one = arith.constant 1 : i64
+  // expected-error@+1 {{kernel operands must have native integer, float or pointer types}}
+  tvm_ffi.native_kernel_launch @kernel::@entry
+    blocks in (%one, %one, %one) : i64 threads in (%one, %one, %one)
+    args (%value : !tvm_ffi.int)
+  return
+}

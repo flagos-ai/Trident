@@ -1,6 +1,7 @@
 add_mlir_library(
   TVMFFITransforms
   DecomposeTVMFFI.cc
+  LowerKernelLaunch.cc
   LowerTVMFFIDefer.cc
   LowerTVMFFIMonad.cc
   LowerTensorMetadata.cc

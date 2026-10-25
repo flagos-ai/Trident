@@ -30,6 +30,16 @@ def DecomposeTVMFFI : Pass<"decompose-tvm-ffi", "mlir::ModuleOp"> {
   ];
 }
 
+def LowerKernelLaunch : Pass<"lower-kernel-launch", "mlir::ModuleOp"> {
+  let summary = "Expand launch specializations into guards and Monad Results";
+  let dependentDialects = [
+    "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
+    "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
+    "mlir::scf::SCFDialect", "trident::dlpack::DLPackDialect",
+    "trident::tvm_ffi::TVMFFIDialect"
+  ];
+}
+
 def LowerTVMFFIDefer : Pass<"lower-tvm-ffi-defer", "mlir::ModuleOp"> {
   let summary = "Expand deferred cleanup at dominance-scope exits";
   let description = [{

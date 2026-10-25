@@ -14,6 +14,7 @@
 #include "trident/core/Dialect/DLPack/IR/DLPackDialect.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerKernelLaunch.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h"
@@ -40,6 +41,7 @@ void trident::conversion::registerAllPasses() {
   trident::conversion::registerConvertTVMFFIToLLVMPass();
   trident::conversion::registerTridentLoweringPipelinePass();
   trident::tvm_ffi::registerDecomposeTVMFFIPass();
+  trident::tvm_ffi::registerLowerKernelLaunchPass();
   trident::tvm_ffi::registerLowerTVMFFIDeferPass();
   trident::tvm_ffi::registerLowerTVMFFIMonadPass();
   trident::tvm_ffi::registerLowerTensorMetadataPass();
