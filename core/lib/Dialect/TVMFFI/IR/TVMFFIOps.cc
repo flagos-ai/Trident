@@ -321,6 +321,17 @@ mlir::LogicalResult KernelLaunchOp::verify() {
   return mlir::success();
 }
 
+mlir::LogicalResult NativeKernelLaunchOp::verify() {
+  for (mlir::Type const type : getKernelOperands().getTypes()) {
+    if (!mlir::isa<mlir::IntegerType, mlir::FloatType,
+                   mlir::LLVM::LLVMPointerType>(type)) {
+      return emitOpError(
+          "kernel operands must have native integer, float or pointer types");
+    }
+  }
+  return mlir::success();
+}
+
 mlir::LogicalResult CallOp::verify() {
   auto matches = [](mlir::Type actual, mlir::Type expected) -> bool {
     return actual == expected;

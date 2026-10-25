@@ -1,7 +1,7 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --split-input-file --convert-tvm-ffi-to-gpu --verify-each | FileCheck %s --implicit-check-not='tvm_ffi.exception' --implicit-check-not='tvm_ffi.return'
+// RUN: trident-core-opt %s --split-input-file --lower-kernel-launch --convert-tvm-ffi-to-gpu --verify-each | FileCheck %s --implicit-check-not='tvm_ffi.exception' --implicit-check-not='tvm_ffi.return'
 
 // Only kernel lowering runs here: semantic ABI values remain available.
 // CHECK-LABEL: module attributes {gpu.container_module}

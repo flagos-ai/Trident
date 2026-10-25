@@ -43,7 +43,8 @@ adding a file for each type, arity or operator name.
 | `DLPackToLLVM/metadata`, `Transforms/lower-tensor-metadata` | Tensor metadata expansion to DLPack and LLVM field mapping |
 | `Transforms/lower-to-pack` | Typed-body conversion, count/tag guards, CFG forwarding, success-only payload checks and visibility |
 | `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Packed entry ABI, output writes, return status, declarations and duplicate-symbol verification |
-| `TVMFFIToGPU/kernel-launch`, `invalid` | Launch arguments/stream, constant/variable specializations, Result success/rejection and unsupported native operands |
+| `Transforms/lower-kernel-launch` | Attribute removal, native arguments and Monad success/rejection |
+| `TVMFFIToGPU/kernel-launch`, `invalid` | Guarded launch integration, launch arguments/stream, specializations and unsupported native operands |
 | `TVMFFIToLLVM/call`, `invalid`, `pack` | Packed argument/output slots, success-only reads, zero/repeated calls, borrowed pointer/count forwarding, checked dynamic indexing and undecomposed input rejection |
 | `TVMFFIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
 | `TVMFFIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |

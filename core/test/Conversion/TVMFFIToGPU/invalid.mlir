@@ -1,7 +1,7 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --convert-tvm-ffi-to-gpu -verify-diagnostics
+// RUN: trident-core-opt %s --lower-kernel-launch --convert-tvm-ffi-to-gpu -verify-diagnostics
 
 module attributes {gpu.container_module} {
   gpu.binary @kernel [#gpu.object<#nvvm.target, "">]
