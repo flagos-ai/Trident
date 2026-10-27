@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Hashable
-from typing import Final, Self, override
+from typing import Final
+
+from typing_extensions import Self, override
 
 from trident.core import ir
 from trident.input import InputTable

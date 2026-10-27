@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from typing import Self
+from typing_extensions import Self
 
 from trident.core import ir
 from trident.core.dialects import arith

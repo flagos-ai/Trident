@@ -16,7 +16,12 @@
 #include <new>
 #include <optional>
 #include <pystate.h>
+#if PY_VERSION_HEX < 0x030C0000
+// Python 3.10 does not provide pytypedefs.h. Python.h (included above)
+// supplies the equivalent forward declarations on this version.
+#else
 #include <pytypedefs.h>
+#endif
 #include <stdexcept>
 #include <torch/csrc/Layout.h>
 #include <torch/csrc/MemoryFormat.h>

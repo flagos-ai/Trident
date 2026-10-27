@@ -6,7 +6,7 @@ authors = [
 ]
 license = { text = "MIT" }
 # Require torch >= 2.10.0 for the stable C API.
-dependencies = ["apache-tvm-ffi"]
+dependencies = ["apache-tvm-ffi", "typing-extensions>=4.5"]
 
 [build-system]
 requires = ["apache-tvm-ffi", "cmake", "jinja2", "nanobind", "ninja", "scikit-build-core", "torch>=2.10.0", "triton"]
