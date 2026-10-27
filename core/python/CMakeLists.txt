@@ -12,6 +12,15 @@ set(TRIDENT_CORE_MLIR_SOURCE_COMPONENTS
 
 declare_mlir_python_sources(TridentCorePythonExtensions)
 
+# LLVM versions before build_nanobind_lib was introduced select the binding
+# implementation per extension. Newer versions use nanobind unconditionally
+# and reject PYTHON_BINDINGS_LIBRARY as an unknown argument.
+set(_trident_mlir_python_extension_args)
+if(NOT COMMAND build_nanobind_lib)
+  list(APPEND _trident_mlir_python_extension_args
+       PYTHON_BINDINGS_LIBRARY nanobind)
+endif()
+
 declare_mlir_python_extension(
   TridentCorePythonExtensions.CoreRegister
   MODULE_NAME
@@ -24,7 +33,8 @@ declare_mlir_python_extension(
   TridentCoreCAPI
   PRIVATE_LINK_LIBS
   LLVMSupport
-  MLIRToLLVMIRTranslationRegistration)
+  MLIRToLLVMIRTranslationRegistration
+  ${_trident_mlir_python_extension_args})
 
 declare_mlir_python_extension(
   TridentCorePythonExtensions.TVMFFI
@@ -35,7 +45,8 @@ declare_mlir_python_extension(
   SOURCES
   dialects/TVMFFITypes.cc
   EMBED_CAPI_LINK_LIBS
-  TridentCoreCAPI)
+  TridentCoreCAPI
+  ${_trident_mlir_python_extension_args})
 
 list(APPEND TRIDENT_CORE_MLIR_SOURCE_COMPONENTS TridentCorePythonExtensions)
 
@@ -97,15 +108,19 @@ add_mlir_python_sources_target(
   TridentCorePythonSources.Core
   TridentCorePythonSources.Core.tvm_ffi.ops_gen)
 
-build_nanobind_lib(
-  INSTALL_COMPONENT
-  TridentCorePythonModules
-  INSTALL_DESTINATION
-  ${TRIDENT_CORE_PYTHON_INSTALL_ROOT}
-  OUTPUT_DIRECTORY
-  ${TRIDENT_CORE_PYTHON_OUTPUT_ROOT}
-  MLIR_BINDINGS_PYTHON_NB_DOMAIN
-  trident_core)
+set(_trident_nanobind_target)
+if(COMMAND build_nanobind_lib)
+  build_nanobind_lib(
+    INSTALL_COMPONENT
+    TridentCorePythonModules
+    INSTALL_DESTINATION
+    ${TRIDENT_CORE_PYTHON_INSTALL_ROOT}
+    OUTPUT_DIRECTORY
+    ${TRIDENT_CORE_PYTHON_OUTPUT_ROOT}
+    MLIR_BINDINGS_PYTHON_NB_DOMAIN
+    trident_core)
+  set(_trident_nanobind_target ${NB_LIBRARY_TARGET_NAME})
+endif()
 
 file(GLOB _mlir_runtime_libs "${MLIR_DIR}/../../*_runtime.so*")
 install(
@@ -115,5 +130,5 @@ install(
 
 add_custom_target(
   TridentCorePythonModules ALL
-  DEPENDS ${NB_LIBRARY_TARGET_NAME} TridentCoreMLIRPythonModules
+  DEPENDS ${_trident_nanobind_target} TridentCoreMLIRPythonModules
           TridentCorePythonSourcesTarget)
