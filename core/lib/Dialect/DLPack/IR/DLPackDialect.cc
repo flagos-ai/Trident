@@ -20,6 +20,7 @@
 #include <mlir/IR/Region.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Support/LogicalResult.h>
+#include <mlir/Transforms/InliningUtils.h>
 #include <optional>
 
 #include "trident/core/Dialect/DLPack/IR/DLPackDialect.cpp.inc"
@@ -32,7 +33,23 @@
 
 namespace trident::dlpack {
 
+// Tensor metadata operations retain their meaning when cloned into a caller.
+struct DLPackInlinerInterface final : mlir::DialectInlinerInterface {
+  using mlir::DialectInlinerInterface::DialectInlinerInterface;
+
+  bool isLegalToInline(mlir::Operation *, mlir::Region *, bool,
+                       mlir::IRMapping &) const final {
+    return true;
+  }
+
+  bool isLegalToInline(mlir::Region *, mlir::Region *, bool,
+                       mlir::IRMapping &) const final {
+    return true;
+  }
+};
+
 void DLPackDialect::initialize() {
+  addInterfaces<DLPackInlinerInterface>();
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "trident/core/Dialect/DLPack/IR/DLPackTypes.cpp.inc"

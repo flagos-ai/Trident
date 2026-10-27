@@ -73,7 +73,37 @@ mlir::LogicalResult DeferYieldOp::verify() {
 }
 
 mlir::OpFoldResult DowncastOp::fold(FoldAdaptor) {
-  return getValue().getType() == getType() ? getValue() : mlir::OpFoldResult{};
+  if (UpcastOp upcast = getValue().getDefiningOp<UpcastOp>();
+      upcast && upcast.getValue().getType() == getType()) {
+    return upcast.getValue();
+  } else if (getValue().getType() == getType()) {
+    return getValue();
+  } else {
+    return {};
+  }
+}
+
+mlir::OpFoldResult GetOp::fold(FoldAdaptor) {
+  if (ToOp to = getOperand().getDefiningOp<ToOp>()) {
+    return to.getValue();
+  } else if (ConstantBoolOp constant =
+                 getOperand().getDefiningOp<ConstantBoolOp>()) {
+    return constant.getValueAttr();
+  } else if (ConstantFloatOp constant =
+                 getOperand().getDefiningOp<ConstantFloatOp>()) {
+    return constant.getValueAttr();
+  } else if (ConstantIntOp constant =
+                 getOperand().getDefiningOp<ConstantIntOp>()) {
+    return constant.getValueAttr();
+  } else {
+    return {};
+  }
+}
+
+mlir::OpFoldResult ToOp::fold(FoldAdaptor) {
+  GetOp get = getValue().getDefiningOp<GetOp>();
+  return get && get.getOperand().getType() == getType() ? get.getOperand()
+                                                        : mlir::OpFoldResult{};
 }
 
 mlir::OpFoldResult UpcastOp::fold(FoldAdaptor) {

@@ -40,11 +40,7 @@ func.func @container_roundtrip(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi
 // CHECK: llvm.store %[[COPY_Z]], %[[PACKED_Z]]
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE:[a-zA-Z0-9_]+]], %[[PACKED_ARGS]], %[[COUNT:[a-zA-Z0-9_]+]], %[[ARRAY_SLOT:[a-zA-Z0-9_]+]])
 // CHECK: %[[ARRAY:[a-zA-Z0-9_]+]] = llvm.load %[[ARRAY_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// CHECK: llvm.br ^[[CHECKED:bb[0-9]+]](%[[ARRAY]] : !llvm.struct<(i32, i32, i64)>)
-// CHECK: ^[[CHECKED]](%[[PAYLOAD:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>):
-// CHECK: llvm.cond_br %[[SUCCESS:[a-zA-Z0-9_]+]], ^[[STORE:bb[0-9]+]](%[[PAYLOAD]], %[[CODE:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, i32)
-// CHECK: ^[[STORE]](%[[OUTPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[STORE_CODE:[a-zA-Z0-9_]+]]: i32):
-// CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUT]]
+// CHECK: llvm.store %[[ARRAY]], %[[OUT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 tvm_ffi.func @tuple_return(%x: !tvm_ffi.c.tensor,
     %y: !tvm_ffi.c.tensor, %z: !tvm_ffi.c.tensor) -> !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor>
  {

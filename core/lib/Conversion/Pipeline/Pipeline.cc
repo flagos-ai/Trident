@@ -18,6 +18,7 @@
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerToPack.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
+#include <mlir/Conversion/ControlFlowToSCF/ControlFlowToSCF.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
 #include <mlir/Conversion/Passes.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
@@ -55,10 +56,16 @@ class TridentLoweringPipelinePass final
     pm.addPass(tvm_ffi::createLowerToPack());
     pm.addPass(createConvertTVMFFIToFunc());
     pm.addPass(mlir::createCanonicalizerPass());
+    // Packed ABI preflight introduces CFG blocks. Structure them so calls in
+    // single-block SCF regions can inline the entire callee, including guards.
+    pm.addPass(mlir::createLiftControlFlowToSCFPass());
     // Local calls now target packed ABI functions. Inline while their control
     // flow still uses SCF regions, before lowering SCF to the LLVM CFG.
     pm.addPass(mlir::createInlinerPass());
     pm.addPass(mlir::createSymbolDCEPass());
+    // Expose identical inlined guard predicates to SCF condition propagation.
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
     // GPU conversion simplifies regions before applying LLVM patterns. Run it
     // before packed calls and reference checks expand into large LLVM CFGs.

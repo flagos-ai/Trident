@@ -94,7 +94,8 @@ tvm_ffi.func nested @external_nested(!tvm_ffi.tensor) -> !tvm_ffi.none
 
 // CHECK-LABEL: tvm_ffi.pack.func private @packed_unit(
 // CHECK: scf.if
-// CHECK: tvm_ffi.downcast %[[VALUE:[a-zA-Z0-9_]+]] : !tvm_ffi.c.any -> !tvm_ffi.none
+// CHECK-NOT: tvm_ffi.downcast
+// CHECK: tvm_ffi.constant.none
 // CHECK: tvm_ffi.return
 tvm_ffi.func private @packed_unit() -> !tvm_ffi.none {
   %none = tvm_ffi.constant.none

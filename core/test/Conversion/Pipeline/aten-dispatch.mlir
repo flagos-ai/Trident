@@ -32,11 +32,7 @@
 // CHECK: %[[RET:[a-zA-Z0-9_]+]] = llvm.load %[[RET_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // Automatic ownership releases the local handle before exporting the payload.
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
-// CHECK: llvm.br ^[[CHECKED:bb[0-9]+]](%[[RET]] : !llvm.struct<(i32, i32, i64)>)
-// CHECK: ^[[CHECKED]](%[[PAYLOAD:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>):
-// CHECK: llvm.cond_br %[[SUCCESS:[a-zA-Z0-9_]+]], ^[[STORE:bb[0-9]+]](%[[PAYLOAD]], %[[CODE:[a-zA-Z0-9_]+]] : !llvm.struct<(i32, i32, i64)>, i32)
-// CHECK: ^[[STORE]](%[[OUTPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[STORE_CODE:[a-zA-Z0-9_]+]]: i32):
-// CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUTPUT_SLOT]]
+// CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 
 tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor {

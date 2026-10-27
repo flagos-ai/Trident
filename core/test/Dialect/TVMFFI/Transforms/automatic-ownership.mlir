@@ -356,18 +356,16 @@ func.func @nested_construction() -> (!tvm_ffi.tuple<!tvm_ffi.array<!tvm_ffi.str>
 // DEFER: tvm_ffi.ObjectIncRef %[[FALLBACK]] : !tvm_ffi.c.tensor
 // DEFER-NEXT: scf.yield %[[FALLBACK]]
 // DEFER: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[OUTER]]
-// DEFER-NEXT: %[[NARROW:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[WIDE]]
 // DEFER-NEXT: tvm_ffi.ObjectIncRef %[[WIDE]] : !tvm_ffi.c.any
-// DEFER-NEXT: tvm_ffi.ObjectIncRef %[[NARROW]] : !tvm_ffi.c.tensor
-// DEFER-NEXT: return %[[WIDE]], %[[NARROW]]
+// DEFER-NEXT: tvm_ffi.ObjectIncRef %[[OUTER]] : !tvm_ffi.c.tensor
+// DEFER-NEXT: return %[[WIDE]], %[[OUTER]]
 // CHECK-LABEL: func.func @nested_opaque(
 // CHECK: %[[OUTER:[a-zA-Z0-9_]+]] = scf.if
 // CHECK: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[OUTER]]
-// CHECK-NEXT: %[[NARROW:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[WIDE]]
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[WIDE]] : !tvm_ffi.c.any
-// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[NARROW]] : !tvm_ffi.c.tensor
+// CHECK-NEXT: tvm_ffi.ObjectIncRef %[[OUTER]] : !tvm_ffi.c.tensor
 // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OUTER]] : !tvm_ffi.c.tensor
-// CHECK-NEXT: return %[[WIDE]], %[[NARROW]]
+// CHECK-NEXT: return %[[WIDE]], %[[OUTER]]
 func.func @nested_opaque(%condition: i1, %tuple: !tvm_ffi.tuple<!tvm_ffi.tensor>, %fallback: !tvm_ffi.tensor) -> (!tvm_ffi.any, !tvm_ffi.tensor) {
   %outer = scf.if %condition -> (!tvm_ffi.tensor) {
     %inner = scf.if %condition -> (!tvm_ffi.tensor) {

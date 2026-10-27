@@ -14,7 +14,9 @@ include "mlir/IR/DialectBase.td"
 def TVMFFI_Dialect : Dialect {
   let name = "tvm_ffi";
   let cppNamespace = "::trident::tvm_ffi";
-  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["::mlir::arith::ArithDialect",
+                           "::mlir::LLVM::LLVMDialect"];
+  let hasConstantMaterializer = 1;
   let summary = "TVMFFI dialect";
   let description = [{
     The TVMFFI dialect models the TVM runtime FFI (foreign function interface)
