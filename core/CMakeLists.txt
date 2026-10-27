@@ -17,15 +17,37 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(
   COMMAND "${Python3_EXECUTABLE}" -c
-          "import torch; print(torch.utils.cmake_prefix_path)"
+          "import contextlib, sys
+with contextlib.redirect_stdout(sys.stderr):
+    import torch
+    prefix = torch.utils.cmake_prefix_path
+print(prefix)"
   OUTPUT_VARIABLE TRIDENT_TORCH_CMAKE_PREFIX
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE TRIDENT_TORCH_QUERY_RESULT
+  ERROR_VARIABLE TRIDENT_TORCH_QUERY_ERROR)
+if(NOT TRIDENT_TORCH_QUERY_RESULT STREQUAL "0")
+  message(
+    FATAL_ERROR
+      "Failed to query PyTorch CMake prefix:\n${TRIDENT_TORCH_QUERY_ERROR}")
+endif()
 execute_process(
   COMMAND
     "${Python3_EXECUTABLE}" -c
-    "import pathlib, tvm_ffi; print(pathlib.Path(tvm_ffi.__file__).parent / 'share' / 'cmake')"
+    "import contextlib, sys
+with contextlib.redirect_stdout(sys.stderr):
+    import pathlib, tvm_ffi
+    prefix = pathlib.Path(tvm_ffi.__file__).parent / 'share' / 'cmake'
+print(prefix)"
   OUTPUT_VARIABLE TRIDENT_TVM_FFI_CMAKE_PREFIX
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE TRIDENT_TVM_FFI_QUERY_RESULT
+  ERROR_VARIABLE TRIDENT_TVM_FFI_QUERY_ERROR)
+if(NOT TRIDENT_TVM_FFI_QUERY_RESULT STREQUAL "0")
+  message(
+    FATAL_ERROR
+      "Failed to query tvm_ffi CMake prefix:\n${TRIDENT_TVM_FFI_QUERY_ERROR}")
+endif()
 
 find_package(MLIR REQUIRED CONFIG)
 set(Caffe2_DIR
