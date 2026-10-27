@@ -62,7 +62,6 @@ class ImporterTest(unittest.TestCase):
                     list(function.function_type.value.results),
                     [tvm_ffi_d.AnyType.get()],
                 )
-                self.assertIn("emit_tvm_ffi_abi", function.attributes)
                 self.assertTrue(importer.module.operation.verify())
                 operations: list[str] = []
 

@@ -50,12 +50,15 @@ class TridentLoweringPipelinePass final
     pm.addPass(tvm_ffi::createLowerTVMFFIDefer());
     pm.addPass(mlir::createInlinerPass());
     pm.addPass(mlir::createSymbolDCEPass());
-    pm.addPass(mlir::createSCFToControlFlowPass());
     pm.addPass(tvm_ffi::createLowerTensorMetadata());
     // Form packed entry bodies before lowering their native ABI.
     pm.addPass(tvm_ffi::createLowerToPack());
     pm.addPass(createConvertTVMFFIToFunc());
     pm.addPass(mlir::createCanonicalizerPass());
+    // Local calls now target packed ABI functions. Inline while their control
+    // flow still uses SCF regions, before lowering SCF to the LLVM CFG.
+    pm.addPass(mlir::createInlinerPass());
+    pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
     // GPU conversion simplifies regions before applying LLVM patterns. Run it
     // before packed calls and reference checks expand into large LLVM CFGs.

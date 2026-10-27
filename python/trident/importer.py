@@ -736,7 +736,6 @@ class TridentFxImporter:
                 func_name,
                 ir.TypeAttr.get(ir.FunctionType.get(input_types, [any_type])),
                 sym_visibility=ir.StringAttr.get("private"),
-                emit_tvm_ffi_abi=ir.UnitAttr.get(),
             )
             block = function.add_entry_block()
             result_types = make_result_types(payload_types)

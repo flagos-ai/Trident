@@ -191,28 +191,28 @@ binds to tuple extraction and `scf.if`. `tvm_ffi.monad.call` returns a complete
 `tvm_ffi.call` with separate `!tvm_ffi.bool` and `!tvm_ffi.any` results, explicitly
 constructs a tuple borrowing those results. Decomposition automatically releases
 the call payload and local tuple, retaining any exported tuple first. Result attributes apply
-to the call's payload, with an empty success-result entry. Local callee resolution, argument matching and the `emit_tvm_ffi_abi`
-requirement are deferred to lowering for unlowered callees. Registry
+to the call's payload, with an empty success-result entry. Local callee resolution
+and argument matching are deferred to lowering for unlowered callees. Registry
 calls continue to use `tvm_ffi.FunctionCall`.
 
 `decompose-tvm-ffi` preserves the call's two results and converts container
-operands and explicit tuples to CArrays. `TVMFFIToLLVM` requires this decomposition
-and expands local packed calls directly into LLVM control flow. Success returns
+operands and explicit tuples to CArrays. `TVMFFIToFunc` requires this decomposition
+and expands local packed calls with success-only SCF branches. Success returns
 separate `(true, payload)` results; failure returns `(false, None)` without
 reading the output slot or clearing the runtime error. The Any result owns the
 returned payload reference; semantic calls receive automatic Any cleanup, while
 Bool needs none. Local call lowering constructs no Array and performs no
 registry lookup or temporary reference adjustment. Monad lowering and
-`LowerToPack`/`TVMFFIToFunc` contain no packed call expansion, and LLVM conversion
+`LowerToPack` forms packed entries; `TVMFFIToFunc` expands calls before inlining. LLVM conversion
 receives no Result types.
 
 Run `lower-to-pack` after decomposition and cleanup, then
 `convert-tvm-ffi-to-func`. The first pass replaces all typed function bodies with
-same-name packed entries, including functions without `emit_tvm_ffi_abi`.
+same-name packed entries, including functions that have no call sites.
 Parameters must be decomposed indexed Base types or CAny. Count and tag guards
 precede the original CFG; rejection returns successful GuardMatch. Successful
 original returns check their declared payload type before widening to CAny.
-The second pass lowers only packed entries to `__tvm_ffi_<name>` native ABI
+The second pass lowers packed calls and entries to `__tvm_ffi_<name>` native ABI
 functions; it creates no separate typed implementation or wrapper call.
 
 Ownership contracts are implemented by semantic lowering. Decomposition selects

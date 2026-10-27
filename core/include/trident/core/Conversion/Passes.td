@@ -17,8 +17,8 @@ def ConvertDLPackToLLVM : Pass<"convert-dlpack-to-llvm", "mlir::ModuleOp"> {
 }
 
 def ConvertTVMFFIToFunc : Pass<"convert-tvm-ffi-to-func", "mlir::ModuleOp"> {
-  let summary = "Convert packed TVM FFI functions to Func operations";
-  let description = [{Convert packed TVM FFI entries to status-returning Func operations.}];
+  let summary = "Convert local TVM FFI calls and packed functions to Func operations";
+  let description = [{Convert packed TVM FFI entries and calls to status-returning Func operations, preserving success-only output access in SCF regions.}];
   let dependentDialects = [
     "mlir::LLVM::LLVMDialect", "mlir::arith::ArithDialect",
     "mlir::cf::ControlFlowDialect", "mlir::func::FuncDialect",

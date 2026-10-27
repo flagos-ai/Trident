@@ -192,12 +192,10 @@ mlir::LogicalResult PackCallOp::verify() {
   if (mlir::isa_and_nonnull<PackFuncOp, mlir::func::FuncOp>(callee)) {
     return mlir::success();
   }
-  if (mlir::isa_and_nonnull<FuncOp>(callee) &&
-      callee->hasAttr("emit_tvm_ffi_abi")) {
+  if (mlir::isa_and_nonnull<FuncOp>(callee)) {
     return mlir::success();
   }
-  return emitOpError(
-      "callee must be a local packed entry or have emit_tvm_ffi_abi");
+  return emitOpError("callee must be a local packed entry");
 }
 
 mlir::Block *FuncOp::addEntryBlock(mlir::OpBuilder &builder) {
@@ -339,9 +337,6 @@ mlir::LogicalResult CallOp::verify() {
   FuncOp function = mlir::SymbolTable::lookupNearestSymbolFrom<FuncOp>(
       getOperation(), getCalleeAttr());
   if (function) {
-    if (!function.getEmitTvmFfiAbi()) {
-      return emitOpError("callee must have emit_tvm_ffi_abi");
-    }
     if (function.getArgumentTypes().size() != getNumOperands() ||
         !llvm::all_of(llvm::zip(getOperandTypes(), function.getArgumentTypes()),
                       [&](auto pair) -> bool {
@@ -352,15 +347,12 @@ mlir::LogicalResult CallOp::verify() {
     }
   }
   // After function conversion the implementation has one output slot and an
-  // i32 status. Preserve the ABI marker so this boundary remains verifiable.
+  // i32 status.
   mlir::func::FuncOp lowered =
       mlir::SymbolTable::lookupNearestSymbolFrom<mlir::func::FuncOp>(
           getOperation(), getCalleeAttr());
   if (lowered) {
     mlir::FunctionType const signature = lowered.getFunctionType();
-    if (!lowered->hasAttr("emit_tvm_ffi_abi")) {
-      return emitOpError("callee must have emit_tvm_ffi_abi");
-    }
     if (signature.getNumInputs() != getNumOperands() + 1 ||
         !llvm::all_of(
             llvm::zip(getOperandTypes(), signature.getInputs().drop_back()),

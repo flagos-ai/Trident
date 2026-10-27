@@ -1,7 +1,7 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --split-input-file --convert-tvm-ffi-to-func --verify-each | FileCheck %s --implicit-check-not=emit_tvm_ffi_abi
+// RUN: trident-core-opt %s --split-input-file --convert-tvm-ffi-to-func --verify-each | FileCheck %s
 
 // Forward the borrowed view across CFG blocks. Every exit uses the same output slot and original payload type.
 // CHECK-LABEL: func.func @__tvm_ffi_cfg(
@@ -13,7 +13,14 @@
 // CHECK: %[[EMPTY:[a-zA-Z0-9_]+]] = arith.cmpi eq, %[[SIZE]], %[[ZERO:[a-zA-Z0-9_]+]]
 // CHECK: cf.cond_br %[[EMPTY]], ^[[LEFT:bb[0-9]+]](%[[PACK]] : !tvm_ffi.pack.arguments), ^[[RIGHT:bb[0-9]+]](%[[PACK]] : !tvm_ffi.pack.arguments)
 // CHECK: ^[[LEFT]](%[[LEFT_ARGS:[a-zA-Z0-9_]+]]: !tvm_ffi.pack.arguments):
-// CHECK: %[[LEFT_OK:[a-zA-Z0-9_]+]], %[[LEFT_VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.pack.call @target(%[[LEFT_ARGS]])
+// CHECK: %[[LEFT_CALL:[a-zA-Z0-9_]+]] = call @__tvm_ffi_target
+// CHECK: %[[LEFT_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[LEFT_CALL]], %[[LEFT_ZERO_STATUS:[a-zA-Z0-9_]+]]
+// CHECK: %[[LEFT_VALUE:[a-zA-Z0-9_]+]] = scf.if %[[LEFT_SUCCESS]]
+// CHECK: llvm.load
+// CHECK: } else {
+// CHECK-NOT: llvm.load
+// CHECK: tvm_ffi.constant.none
+// CHECK: %[[LEFT_OK:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[LEFT_SUCCESS]]
 // CHECK: %[[LEFT_READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[LEFT_OK]]
 // CHECK: %[[LEFT_STATUS:[a-zA-Z0-9_]+]] = scf.if %[[LEFT_READY]]
 // CHECK: %[[LEFT_TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[LEFT_VALUE]] : !tvm_ffi.c.any -> !tvm_ffi.c.tensor
@@ -22,7 +29,14 @@
 // CHECK: llvm.store %[[LEFT_ABI]], %[[OUT]]
 // CHECK: return %[[LEFT_STATUS]]
 // CHECK: ^[[RIGHT]](%[[RIGHT_ARGS:[a-zA-Z0-9_]+]]: !tvm_ffi.pack.arguments):
-// CHECK: %[[RIGHT_OK:[a-zA-Z0-9_]+]], %[[RIGHT_VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.pack.call @target(%[[RIGHT_ARGS]])
+// CHECK: %[[RIGHT_CALL:[a-zA-Z0-9_]+]] = call @__tvm_ffi_target
+// CHECK: %[[RIGHT_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[RIGHT_CALL]], %[[RIGHT_ZERO_STATUS:[a-zA-Z0-9_]+]]
+// CHECK: %[[RIGHT_VALUE:[a-zA-Z0-9_]+]] = scf.if %[[RIGHT_SUCCESS]]
+// CHECK: llvm.load
+// CHECK: } else {
+// CHECK-NOT: llvm.load
+// CHECK: tvm_ffi.constant.none
+// CHECK: %[[RIGHT_OK:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[RIGHT_SUCCESS]]
 // CHECK: %[[RIGHT_READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[RIGHT_OK]]
 // CHECK: %[[RIGHT_STATUS:[a-zA-Z0-9_]+]] = scf.if %[[RIGHT_READY]]
 // CHECK: %[[RIGHT_TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[RIGHT_VALUE]] : !tvm_ffi.c.any -> !tvm_ffi.c.tensor
@@ -74,7 +88,14 @@ tvm_ffi.pack.func @packed(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.int {
 // The packed result type is checked only on success; failure never writes out.
 // CHECK-LABEL: func.func private @__tvm_ffi_status(
 // CHECK-SAME: %[[CTX:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[COUNT:[a-zA-Z0-9_]+]]: i32, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr
-// CHECK: %[[OK:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.pack.call @target
+// CHECK: %[[CALL:[a-zA-Z0-9_]+]] = call @__tvm_ffi_target
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[CALL]], %[[ZERO_STATUS:[a-zA-Z0-9_]+]]
+// CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = scf.if %[[SUCCESS]]
+// CHECK: llvm.load
+// CHECK: } else {
+// CHECK-NOT: llvm.load
+// CHECK: tvm_ffi.constant.none
+// CHECK: %[[OK:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[SUCCESS]]
 // CHECK: %[[READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[OK]]
 // CHECK: %[[STATUS:[a-zA-Z0-9_]+]] = scf.if %[[READY]] -> (i32) {
 // CHECK: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[VALUE]] : !tvm_ffi.c.any -> !tvm_ffi.c.tensor

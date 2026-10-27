@@ -228,7 +228,6 @@ class BindingsTest(unittest.TestCase):
                 tvm_ffi_d.func(
                     "callee",
                     ir.TypeAttr.get(ir.FunctionType.get([payload], [payload])),
-                    emit_tvm_ffi_abi=True,
                 )
                 caller = func.FuncOp("caller", ([payload], [result, success, value]))
                 with ir.InsertionPoint(caller.add_entry_block()):

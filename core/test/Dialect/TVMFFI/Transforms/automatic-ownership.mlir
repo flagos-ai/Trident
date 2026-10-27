@@ -4,7 +4,7 @@
 // RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --verify-each | FileCheck %s --check-prefix=DEFER
 // RUN: trident-core-opt %s --lower-tvm-ffi-monad --decompose-tvm-ffi --lower-tvm-ffi-defer --verify-each | FileCheck %s --implicit-check-not='tvm_ffi.defer'
 
-tvm_ffi.func @empty() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi}
+tvm_ffi.func @empty() -> !tvm_ffi.none
 
 // DEFER-LABEL: func.func @aliases(
 // DEFER-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor)

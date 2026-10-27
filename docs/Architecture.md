@@ -298,8 +298,7 @@ The lowering pipeline is:
    through borrowed object/DLTensor views into DLPack operations. Then run
    `lower-to-pack` followed by
    `convert-tvm-ffi-to-func`. The first pass replaces every typed `tvm_ffi.func`
-   body with a `tvm_ffi.pack.func` entry of the same name and visibility, including
-   functions without `emit_tvm_ffi_abi`. It checks argument count before reading
+   body with a `tvm_ffi.pack.func` entry of the same name and visibility. It checks argument count before reading
    slots and checks tags before entering the original CFG. Rejection returns a
    successful GuardMatch. Original successful returns retain their declared
    payload checks, while the packed signature returns CAny to admit GuardMatch.
@@ -308,12 +307,12 @@ The lowering pipeline is:
    declarations must specify visibility accepted by `func.func`, which rejects
    public declarations. Output slots are written only on success;
    there is no separate typed implementation or wrapper call.
-5. Run GPU-to-LLVM before expanding packed calls and reference checks, avoiding
-   region simplification over the expanded LLVM CFG. The GPU conversion also
-   applies registered dialect LLVM patterns. Expand remaining local packed calls
-   in `TVMFFIToLLVM`, then convert semantic ABI values
-   and the remaining dialects to LLVM, followed by
-   canonicalization and cast reconciliation. No Result types reach LLVM lowering.
+5. Convert local typed and packed calls in TVMFFIToFunc to direct calls of
+   the generated packed ABI functions. Run the default inliner and symbol DCE
+   before SCF-to-CF so structured branches remain available during inlining.
+   Calls rejected by the inliner retain their packed ABI. Then run GPU-to-LLVM,
+   TVMFFI-to-LLVM and the remaining LLVM conversions, canonicalization and cast
+   reconciliation. Ownership cleanup is materialized before either inliner.
 
 `tvm_ffi.monad.call @callee(...)` returns `Result<T>`, where T exactly matches
 its callee's return type. `lower-tvm-ffi-monad` emits `tvm_ffi.call @callee(...)`
@@ -323,19 +322,17 @@ borrows the call payload and retains it through runtime container construction.
 Decomposition releases both the call's independent reference and its local tuple
 reference at dominance-scope exit, retaining any exported tuple first.
 Result attributes move to the call's payload result, with an empty entry for success.
-Local callee resolution, argument matching and the `emit_tvm_ffi_abi`
-requirement are deferred to lowering for unlowered callees. This local-symbol
-call is distinct from registry
+Local callee resolution and argument matching are deferred to lowering for
+unlowered callees. This local-symbol call is distinct from registry
 `tvm_ffi.FunctionCall`.
 
 `decompose-tvm-ffi` preserves the call's two results while converting container
 operands and explicitly constructed tuples to CArray. `LowerToPack` converts
-typed function bodies to packed entries. `TVMFFIToFunc` lowers packed definitions and
-returns to the native ABI. Neither pass expands local calls. The original typed
-callee's `emit_tvm_ffi_abi` marker remains required for frontend typed calls;
-it no longer controls which functions receive packed entries.
+typed function bodies to packed entries. `TVMFFIToFunc` lowers packed definitions
+to `__tvm_ffi_<name>` ABI functions and converts local calls to direct calls of
+those entries. The pipeline inlines these calls before lowering SCF regions.
 
-`TVMFFIToLLVM` requires decomposed container operands and expands the call through
+`TVMFFIToFunc` requires decomposed container operands and expands the call through
 `__tvm_ffi_<callee>` using packed argument and output slots. It emits a direct
 `func.call` to the packed entry supplied by `TVMFFIToFunc`; it does not look up,
 validate or create entry declarations. Zero status produces separate
@@ -664,7 +661,7 @@ It is outside the tagged C ABI and cannot be a Result/container payload or a
 function return. C and Python bindings expose construction, type checks and
 TypeID registration. `pack.func` requires exactly this one input and one CABI
 payload result; it always exports `__tvm_ffi_<name>` without an ABI marker.
-The converted native `func.func` also needs no `emit_tvm_ffi_abi` marker;
+The converted native `func.func` also needs no ABI marker;
 packed calls resolve the generated ABI symbol directly.
 `pack.size` sign-extends the count to native i64. `pack.get` takes native i64,
 asserts `0 <= index < size` before loading, and returns borrowed Any.

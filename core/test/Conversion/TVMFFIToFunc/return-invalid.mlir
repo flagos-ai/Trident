@@ -7,7 +7,7 @@
 func.func private @__tvm_ffi_collision(i64)
 
 // expected-error@+1 {{redefinition of symbol named '__tvm_ffi_collision'}}
-tvm_ffi.pack.func @collision(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
+tvm_ffi.pack.func @collision(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.none {
   %none = tvm_ffi.constant.none
   %any = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
   %ok = tvm_ffi.constant.bool true
