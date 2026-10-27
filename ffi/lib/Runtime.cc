@@ -16,9 +16,6 @@
 #include <new>
 #include <optional>
 #include <pystate.h>
-#ifdef TRIDENT_PYTHON_GE_3_11
-#include <pytypedefs.h>
-#endif
 #include <stdexcept>
 #include <torch/csrc/Layout.h>
 #include <torch/csrc/MemoryFormat.h>

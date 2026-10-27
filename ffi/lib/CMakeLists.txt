@@ -12,9 +12,6 @@ find_library(
 
 add_library(TridentFFI SHARED Exception.cc Runtime.cc)
 target_include_directories(TridentFFI PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-if(Python3_VERSION VERSION_GREATER_EQUAL "3.11")
-  target_compile_definitions(TridentFFI PRIVATE TRIDENT_PYTHON_GE_3_11)
-endif()
 target_link_libraries(
   TridentFFI
   PUBLIC ${TORCH_LIBRARIES} tvm_ffi::header
