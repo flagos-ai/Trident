@@ -7,7 +7,6 @@ from abc import abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import ClassVar, Final
-
 from typing_extensions import Self
 
 from trident.core import ir

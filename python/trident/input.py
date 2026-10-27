@@ -6,7 +6,6 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, TypeAlias
-
 from typing_extensions import Self
 
 import torch

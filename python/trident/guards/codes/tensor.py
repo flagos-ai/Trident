@@ -8,7 +8,6 @@ import re
 from collections.abc import Hashable
 from functools import reduce
 from typing import Final
-
 from typing_extensions import Self, override
 
 import torch
