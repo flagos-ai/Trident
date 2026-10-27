@@ -16,7 +16,7 @@
 #include <new>
 #include <optional>
 #include <pystate.h>
-#ifdef TRIDENT_PYTHON_HAS_PYTYPEDEFS
+#ifdef TRIDENT_PYTHON_GE_3_11
 #include <pytypedefs.h>
 #endif
 #include <stdexcept>
