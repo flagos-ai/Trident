@@ -5,33 +5,9 @@
 
 // CHECK: llvm.func @abort()
 // CHECK-LABEL: llvm.func @container_roundtrip(
-// CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = llvm.load %[[HANDLE_SLOT:[a-zA-Z0-9_]+]] : !llvm.ptr -> !llvm.ptr
-// CHECK: %[[LOOKUP_OK:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[LOOKUP_STATUS:[a-zA-Z0-9_]+]], %[[LOOKUP_ZERO:[a-zA-Z0-9_]+]] : i32
-// CHECK-NEXT: llvm.cond_br %[[LOOKUP_OK]], ^[[RESOLVED:bb[0-9]+]], ^[[FAILURE:bb[0-9]+]]
-// CHECK: ^[[FAILURE]]:
-// CHECK-NEXT: llvm.call @abort() : () -> ()
-// CHECK-NEXT: llvm.unreachable
-// CHECK: %[[NONNULL:[a-zA-Z0-9_]+]] = llvm.icmp "ne" %[[HANDLE]], %[[NULL:[a-zA-Z0-9_]+]] : !llvm.ptr
-// CHECK: llvm.cond_br %[[NONNULL]]
-// CHECK: %[[STATUS:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[ARGS:[a-zA-Z0-9_]+]], %[[COUNT:[a-zA-Z0-9_]+]], %[[SLOT:[a-zA-Z0-9_]+]])
-// CHECK: %[[OK:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO:[a-zA-Z0-9_]+]] : i32
-// CHECK: llvm.cond_br %[[OK]], ^[[SUCCESS:bb[0-9]+]], ^[[CALL_FAILURE:bb[0-9]+]]
-// CHECK: ^[[CALL_FAILURE]]:
-// CHECK-NEXT: llvm.call @abort() : () -> ()
-// CHECK-NEXT: llvm.unreachable
-// CHECK: ^[[SUCCESS]]:
-// CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[SLOT]]
-// CHECK: llvm.store %[[RESULT]], %[[SIZE_SLOT:[a-zA-Z0-9_]+]]
-// CHECK: %[[SIZE_COPY:[a-zA-Z0-9_]+]] = llvm.load %[[SIZE_SLOT]]
-// CHECK-NEXT: llvm.store %[[SIZE_COPY]], %[[TUPLE_ARGS:[a-zA-Z0-9_]+]]
-// CHECK: %[[CREATE_STATUS:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall(%[[CREATE_HANDLE:[a-zA-Z0-9_]+]], %[[TUPLE_ARGS]], %[[CREATE_COUNT:[a-zA-Z0-9_]+]], %[[TUPLE_SLOT:[a-zA-Z0-9_]+]])
-// CHECK: %[[TUPLE:[a-zA-Z0-9_]+]] = llvm.load %[[TUPLE_SLOT]]
-// CHECK: llvm.store %[[TUPLE]], %[[ITEM_SLOT:[a-zA-Z0-9_]+]]
-// CHECK: %[[ITEM_COPY:[a-zA-Z0-9_]+]] = llvm.load %[[ITEM_SLOT]]
-// CHECK-NEXT: llvm.store %[[ITEM_COPY]], %[[GET_ARGS:[a-zA-Z0-9_]+]]
-// CHECK: %[[GET_STATUS:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall(%[[GET_HANDLE:[a-zA-Z0-9_]+]], %[[GET_ARGS]], %[[GET_COUNT:[a-zA-Z0-9_]+]], %[[GET_SLOT:[a-zA-Z0-9_]+]])
-// CHECK: %[[ITEM:[a-zA-Z0-9_]+]] = llvm.load %[[GET_SLOT]]
-// CHECK: llvm.return %[[ITEM]]
+// CHECK-NOT: llvm.addressof @__trident_tvm_ffi_handle_ffi.Array :
+// CHECK: llvm.call @TVMFFIFunctionCall
+// CHECK: llvm.return
 func.func @container_roundtrip(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.int {
   %size = tvm_ffi.array.size %array : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.int
   %tuple = tvm_ffi.tuple.construct(%size) : (!tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.int>

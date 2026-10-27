@@ -588,6 +588,7 @@ def TVMFFI_TupleUnconstructOp : TVMFFI_Op<"tuple.unconstruct", [
       "::llvm::cast<::trident::tvm_ffi::TupleType>($_self).getTypes()">
 ]> {
   let summary = "Unpack all semantic tuple elements in order";
+  let hasCanonicalizer = 1;
   let arguments = (ins TVMFFI_TupleType:$container);
   let results = (outs Variadic<AnyTVMFFISemanticType>:$elements);
   let assemblyFormat = "$container attr-dict `:` functional-type($container, $elements)";

@@ -45,6 +45,7 @@ class TridentLoweringPipelinePass final
     pm.addPass(tvm_ffi::createLowerKernelLaunch());
     pm.addPass(createConvertTVMFFIToGPU());
     pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
+    pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(tvm_ffi::createDecomposeTVMFFI());
     pm.addPass(tvm_ffi::createLowerTVMFFIDefer());
     pm.addPass(mlir::createInlinerPass());
