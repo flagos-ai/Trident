@@ -3,7 +3,7 @@
 
 // RUN: trident-core-opt %s --split-input-file --verify-each | trident-core-opt --split-input-file --verify-each | FileCheck %s
 
-tvm_ffi.func @callee(!tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi}
+tvm_ffi.func @callee(!tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor
 
 // CHECK-LABEL: func.func @invoke(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor

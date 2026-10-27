@@ -259,7 +259,6 @@ class TridentGraphModule:
             ffi_func: tvm_ffi_d.FuncOp = tvm_ffi_d.FuncOp(
                 tvm_ffi_name,
                 ir.TypeAttr.get(ffi_type),
-                emit_tvm_ffi_abi=ir.UnitAttr.get(self.ctx),
             )
             entry_block: ir.Block = ffi_func.add_entry_block()
 

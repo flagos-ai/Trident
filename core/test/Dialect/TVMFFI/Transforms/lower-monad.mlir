@@ -255,8 +255,8 @@ func.func @invoke_unmarked(%input: !tvm_ffi.c.tensor) -> !tvm_ffi.monad.result<!
 
 // Callee declarations provide the Result payload contracts; packed wrapper
 // definitions and declaration reuse are tested by Pipeline/local-call.mlir.
-tvm_ffi.func @function_identity(!tvm_ffi.c.function) -> !tvm_ffi.c.function attributes {emit_tvm_ffi_abi}
-tvm_ffi.func @identity(!tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi}
+tvm_ffi.func @function_identity(!tvm_ffi.c.function) -> !tvm_ffi.c.function
+tvm_ffi.func @identity(!tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor
 
 // -----
 

@@ -20,7 +20,8 @@ namespace trident::conversion {
 #define GEN_PASS_REGISTRATION_CONVERTTVMFFITOFUNC
 #include "trident/core/Conversion/Passes.h.inc"
 
-/// Register conversion patterns and legality for the packed function boundary.
+/// Register conversion patterns and legality for packed function definitions
+/// and local calls.
 void populateTVMFFIToFuncConversionPatterns(mlir::ConversionTarget &target,
                                             mlir::RewritePatternSet &patterns);
 

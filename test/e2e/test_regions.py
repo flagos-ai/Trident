@@ -23,8 +23,7 @@ class RegionOwnershipTest(unittest.TestCase):
             register_all_passes()
             module = ir.Module.parse("""
                 tvm_ffi.func @for_loop(%input: !tvm_ffi.tensor, %count: !tvm_ffi.int,
-                                      %replace: !tvm_ffi.bool) -> !tvm_ffi.tensor
-                    attributes {emit_tvm_ffi_abi} {
+                                      %replace: !tvm_ffi.bool) -> !tvm_ffi.tensor {
                   %bound = tvm_ffi.get %count : !tvm_ffi.int -> i64
                   %condition = tvm_ffi.get %replace : !tvm_ffi.bool -> i1
                   %zero = arith.constant 0 : i64
@@ -44,7 +43,7 @@ class RegionOwnershipTest(unittest.TestCase):
                   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
                 tvm_ffi.func @while_loop(%input: !tvm_ffi.tensor, %count: !tvm_ffi.int)
-                    -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
+                    -> !tvm_ffi.tensor {
                   %bound = tvm_ffi.get %count : !tvm_ffi.int -> i64
                   %zero = arith.constant 0 : i64
                   %one = arith.constant 1 : i64
@@ -63,7 +62,7 @@ class RegionOwnershipTest(unittest.TestCase):
                   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
                 tvm_ffi.func @discard_loop(%input: !tvm_ffi.tensor, %count: !tvm_ffi.int)
-                    -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
+                    -> !tvm_ffi.none {
                   %bound = tvm_ffi.get %count : !tvm_ffi.int -> i64
                   %zero = arith.constant 0 : i64
                   %one = arith.constant 1 : i64

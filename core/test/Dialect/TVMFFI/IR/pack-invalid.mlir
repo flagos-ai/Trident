@@ -28,4 +28,4 @@ func.func @ordinary(%arg: !tvm_ffi.any) {
   %ok, %value = tvm_ffi.call @typed(%arg) : (!tvm_ffi.any) -> (!tvm_ffi.bool, !tvm_ffi.any)
   return
 }
-tvm_ffi.func @typed(%arg: !tvm_ffi.int) -> !tvm_ffi.int attributes {emit_tvm_ffi_abi}
+tvm_ffi.func @typed(%arg: !tvm_ffi.int) -> !tvm_ffi.int

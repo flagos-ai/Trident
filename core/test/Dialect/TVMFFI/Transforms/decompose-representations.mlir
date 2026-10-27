@@ -37,7 +37,7 @@ func.func @result_payload(%input: !tvm_ffi.monad.result<!tvm_ffi.any>) -> !tvm_f
 // CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[VALUE]] : !tvm_ffi.c.any -> !tvm_ffi.c.any
 // CHECK: tvm_ffi.ObjectIncRef %[[PAYLOAD]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.return %[[OK:[a-zA-Z0-9_]+]], %[[PAYLOAD]]
-tvm_ffi.func @boundary(%value: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.c.tensor, !tvm_ffi.str>) -> !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.str> attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @boundary(%value: !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.c.tensor, !tvm_ffi.str>) -> !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.str> {
   %payload = tvm_ffi.upcast %value : !tvm_ffi.union<!tvm_ffi.tensor, !tvm_ffi.c.tensor, !tvm_ffi.str> -> !tvm_ffi.any
   %ok = tvm_ffi.constant.bool true
   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
@@ -67,12 +67,12 @@ func.func @invoke_empty() -> (!tvm_ffi.bool, !tvm_ffi.any) {
   %ok, %value = tvm_ffi.call @empty() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
   return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
 }
-tvm_ffi.func @identity(%input: !tvm_ffi.c.tensor, %second: !tvm_ffi.int) -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @identity(%input: !tvm_ffi.c.tensor, %second: !tvm_ffi.int) -> !tvm_ffi.c.tensor {
   %any = tvm_ffi.upcast %input : !tvm_ffi.c.tensor -> !tvm_ffi.any
   %ok = tvm_ffi.constant.bool true
   tvm_ffi.return %ok, %any : !tvm_ffi.bool, !tvm_ffi.any
 }
-tvm_ffi.func @empty() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @empty() -> !tvm_ffi.none {
   %none = tvm_ffi.constant.none
   %any = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
   %ok = tvm_ffi.constant.bool true
@@ -88,7 +88,7 @@ func.func @invoke_container(%arg: !tvm_ffi.array<!tvm_ffi.int>) -> (!tvm_ffi.boo
   return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
 }
 // CHECK-LABEL: tvm_ffi.func @container(!tvm_ffi.c.array) -> !tvm_ffi.c.array
-tvm_ffi.func @container(!tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.tuple<!tvm_ffi.int> attributes {emit_tvm_ffi_abi}
+tvm_ffi.func @container(!tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.tuple<!tvm_ffi.int>
 
 // -----
 

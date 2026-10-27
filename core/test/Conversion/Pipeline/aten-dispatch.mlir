@@ -39,7 +39,7 @@
 // CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUTPUT_SLOT]]
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 
-tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
   %memory_format = tvm_ffi.constant.int 0
   %clone_handle = tvm_ffi.FunctionGetGlobal "trident.aten.clone" : !tvm_ffi.function
   %clone = tvm_ffi.FunctionCall %clone_handle : !tvm_ffi.function(%arg0, %memory_format) : (!tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.tensor

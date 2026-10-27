@@ -48,28 +48,24 @@ class LocalCallTest(unittest.TestCase):
         graph._output_spec = torch.utils._pytree.tree_structure(0)
         with graph.ctx:
             module = ir.Module.parse("""
-                tvm_ffi.func @dispatch_0(%value: !tvm_ffi.tensor) -> !tvm_ffi.any
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @dispatch_0(%value: !tvm_ffi.tensor) -> !tvm_ffi.any {
                   %rejected = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
                   %payload = tvm_ffi.upcast %rejected : !tvm_ffi.exception -> !tvm_ffi.any
                   %yes = tvm_ffi.constant.bool true
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @dispatch_1(%value: !tvm_ffi.int) -> !tvm_ffi.any
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @dispatch_1(%value: !tvm_ffi.int) -> !tvm_ffi.any {
                   %payload = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.any
                   %yes = tvm_ffi.constant.bool true
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @dispatch_2() -> !tvm_ffi.int
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @dispatch_2() -> !tvm_ffi.int {
                   %answer = tvm_ffi.constant.int 42
                   %payload = tvm_ffi.upcast %answer : !tvm_ffi.int -> !tvm_ffi.any
                   %yes = tvm_ffi.constant.bool true
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @dispatch_3(%first: !tvm_ffi.int, %second: !tvm_ffi.int) -> !tvm_ffi.int
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @dispatch_3(%first: !tvm_ffi.int, %second: !tvm_ffi.int) -> !tvm_ffi.int {
                   %payload = tvm_ffi.upcast %first : !tvm_ffi.int -> !tvm_ffi.any
                   %yes = tvm_ffi.constant.bool true
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
@@ -92,8 +88,7 @@ class LocalCallTest(unittest.TestCase):
                 llvm.mlir.global internal constant @error_kind("RuntimeError\00")
                 llvm.mlir.global internal constant @error_message("dispatcher failure\00")
                 llvm.func @TVMFFIErrorSetRaisedFromCStr(!llvm.ptr, !llvm.ptr)
-                tvm_ffi.func @dispatch_0(%value: !tvm_ffi.any) -> !tvm_ffi.any
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @dispatch_0(%value: !tvm_ffi.any) -> !tvm_ffi.any {
                   %kind = llvm.mlir.addressof @error_kind : !llvm.ptr
                   %message = llvm.mlir.addressof @error_message : !llvm.ptr
                   llvm.call @TVMFFIErrorSetRaisedFromCStr(%kind, %message) : (!llvm.ptr, !llvm.ptr) -> ()
@@ -131,27 +126,23 @@ class LocalCallTest(unittest.TestCase):
             register_all_passes()
             module = ir.Module.parse("""
                 tvm_ffi.func @finite(%value: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>)
-                    -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>
-                    attributes {emit_tvm_ffi_abi} {
+                    -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> {
                   %payload = tvm_ffi.upcast %value : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> -> !tvm_ffi.any
                   %ok = tvm_ffi.constant.bool true
                   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @string(%value: !tvm_ffi.str) -> !tvm_ffi.str
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @string(%value: !tvm_ffi.str) -> !tvm_ffi.str {
                   %payload = tvm_ffi.upcast %value : !tvm_ffi.str -> !tvm_ffi.any
                   %ok = tvm_ffi.constant.bool true
                   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @failed() -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.float>
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @failed() -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.float> {
                   %none = tvm_ffi.constant.none
                   %payload = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
                   %ok = tvm_ffi.constant.bool false
                   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @invoke_failed() -> !tvm_ffi.bool
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @invoke_failed() -> !tvm_ffi.bool {
                   %ok, %value = tvm_ffi.call @failed() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
                   %payload = tvm_ffi.upcast %ok : !tvm_ffi.bool -> !tvm_ffi.any
                   %yes = tvm_ffi.constant.bool true
@@ -207,8 +198,7 @@ class LocalCallTest(unittest.TestCase):
                   tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
                 }
                 tvm_ffi.func @callee(%ok: !tvm_ffi.bool, %value: !tvm_ffi.tensor,
-                                     %unused: !tvm_ffi.int) -> !tvm_ffi.tensor
-                    attributes {emit_tvm_ffi_abi} {
+                                     %unused: !tvm_ffi.int) -> !tvm_ffi.tensor {
                   %success = tvm_ffi.get %ok : !tvm_ffi.bool -> i1
                   %payload = scf.if %success -> (!tvm_ffi.any) {
                     %value_any = tvm_ffi.upcast %value : !tvm_ffi.tensor -> !tvm_ffi.any
@@ -221,8 +211,7 @@ class LocalCallTest(unittest.TestCase):
                   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
                 tvm_ffi.func @invoke(%ok: !tvm_ffi.bool, %value: !tvm_ffi.tensor,
-                                     %unused: !tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-                    attributes {emit_tvm_ffi_abi} {
+                                     %unused: !tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
                   %call_ok, %call_value = tvm_ffi.call @callee(%ok, %value, %unused) :
                     (!tvm_ffi.bool, !tvm_ffi.tensor, !tvm_ffi.int) -> (!tvm_ffi.bool, !tvm_ffi.any)
                   %result = tvm_ffi.tuple.construct(%call_ok, %call_value) :
@@ -232,8 +221,7 @@ class LocalCallTest(unittest.TestCase):
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
                 tvm_ffi.func @invoke_monad(%ok: !tvm_ffi.bool, %value: !tvm_ffi.tensor,
-                                           %unused: !tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-                    attributes {emit_tvm_ffi_abi} {
+                                           %unused: !tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
                   %call = tvm_ffi.monad.call @callee(%ok, %value, %unused) :
                     (!tvm_ffi.bool, !tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
                   %call_ok, %call_value = tvm_ffi.monad.unpack %call :
@@ -245,14 +233,13 @@ class LocalCallTest(unittest.TestCase):
                   %yes = tvm_ffi.constant.bool true
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @empty() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @empty() -> !tvm_ffi.none {
                   %none = tvm_ffi.constant.none
                   %payload = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
                   %yes = tvm_ffi.constant.bool true
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @invoke_empty() -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-                    attributes {emit_tvm_ffi_abi} {
+                tvm_ffi.func @invoke_empty() -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
                   %call_ok, %call_value = tvm_ffi.call @empty() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
                   %result = tvm_ffi.tuple.construct(%call_ok, %call_value) :
                     (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>

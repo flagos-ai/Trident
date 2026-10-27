@@ -17,7 +17,7 @@
 // LLVM-LABEL: llvm.func @__tvm_ffi_finite_boundary(
 // LLVM-NOT: llvm.call @finite_boundary
 // LLVM: llvm.return
-tvm_ffi.func @finite_boundary(%value: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>) -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @finite_boundary(%value: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>) -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> {
   %payload = tvm_ffi.upcast %value : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> -> !tvm_ffi.any
   %ok = tvm_ffi.constant.bool true
   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any

@@ -47,7 +47,7 @@ func.func @container_roundtrip(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi
 // CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUT]]
 tvm_ffi.func @tuple_return(%x: !tvm_ffi.c.tensor,
     %y: !tvm_ffi.c.tensor, %z: !tvm_ffi.c.tensor) -> !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor>
-    attributes {emit_tvm_ffi_abi} {
+ {
   %tuple = tvm_ffi.tuple.construct(%x, %y, %z) : (!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor) -> !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor>
   %return_value_2 = tvm_ffi.upcast %tuple : !tvm_ffi.tuple<!tvm_ffi.c.tensor, !tvm_ffi.c.tensor, !tvm_ffi.c.tensor> -> !tvm_ffi.any
   %return_flag_2 = tvm_ffi.constant.bool true

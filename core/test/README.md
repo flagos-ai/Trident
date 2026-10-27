@@ -46,7 +46,8 @@ adding a file for each type, arity or operator name.
 | `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Packed entry ABI, output writes, return status, declarations and duplicate-symbol verification |
 | `Transforms/lower-kernel-launch` | Attribute removal, native arguments and Monad success/rejection |
 | `TVMFFIToGPU/kernel-launch`, `invalid` | Guarded launch integration, launch arguments/stream, specializations and unsupported native operands |
-| `TVMFFIToLLVM/call`, `invalid`, `pack` | Packed argument/output slots, success-only reads, zero/repeated calls, borrowed pointer/count forwarding, checked dynamic indexing and undecomposed input rejection |
+| `TVMFFIToFunc/call` | Packed argument/output slots, structured success-only reads and zero/repeated local calls |
+| `TVMFFIToLLVM/invalid`, `pack` | Checked dynamic indexing, borrowed argument access and undecomposed input rejection |
 | `TVMFFIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
 | `TVMFFIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |
 | `TVMFFIToLLVM/runtime-ops` | Cached registry lookup/error/call checks, conditional reference updates and clone/copy operand data flow |
@@ -86,7 +87,7 @@ Pipeline cases are selected by interaction:
 | `checked-continuation` | Nested status-gated calls and payload-independent mutation |
 | `containers` | Array metadata, tuple construction/extraction and packed tuple results |
 | `kernel-launch` | Specialization, tensor/native arguments and runtime stream |
-| `local-call` | Monadic local calls through converted packed entries |
+| `local-call` | Monadic local calls through converted packed entries and inlining before SCF-to-CFG conversion |
 | `tensors` | Dynamic metadata and splat/nonsplat tensor literals through LLVM |
 
 Local passes own scalar boxing, None returns, copy operand order and string casts.

@@ -9,7 +9,7 @@ func.func @undecomposed(%input: !tvm_ffi.array<!tvm_ffi.int>) {
   return
 }
 
-tvm_ffi.func @callee(!tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.none attributes {emit_tvm_ffi_abi}
+tvm_ffi.func @callee(!tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.none
 
 // -----
 

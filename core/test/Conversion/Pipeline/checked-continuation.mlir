@@ -58,7 +58,7 @@
 // LLVM: %[[STATUS:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall
 // LLVM: llvm.return
 
-tvm_ffi.func @checked_continuation(%tensor: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @checked_continuation(%tensor: !tvm_ffi.c.tensor) -> !tvm_ffi.c.tensor {
   %handle, %lookup = func.call @lookup() : () -> (!tvm_ffi.c.function, i1)
   %ready = scf.if %lookup -> (!tvm_ffi.monad.result<!tvm_ffi.c.function>) {
     %pure = tvm_ffi.monad.pure %handle : (!tvm_ffi.c.function) -> !tvm_ffi.monad.result<!tvm_ffi.c.function>

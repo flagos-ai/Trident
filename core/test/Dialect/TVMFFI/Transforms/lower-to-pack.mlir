@@ -21,7 +21,7 @@
 // CHECK: cf.br ^[[NEXT:bb[0-9]+]](%[[VALUE]] : !tvm_ffi.int)
 // CHECK: ^[[NEXT]](%[[ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.int):
 // CHECK: tvm_ffi.upcast %[[ARG]]
-tvm_ffi.func @branch_argument() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @branch_argument() -> !tvm_ffi.int {
   %value = tvm_ffi.constant.int 7
   cf.br ^bb1(%value : !tvm_ffi.int)
 ^bb1(%arg: !tvm_ffi.int):
@@ -41,7 +41,7 @@ tvm_ffi.func @branch_argument() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
 // CHECK: ^[[NO]](%[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi.int):
 // CHECK: tvm_ffi.upcast %[[SECOND]]
 // CHECK: tvm_ffi.return
-tvm_ffi.func @cond_branch_arguments() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @cond_branch_arguments() -> !tvm_ffi.int {
   %cond = arith.constant true
   %true_value = tvm_ffi.constant.int 1
   %false_value = tvm_ffi.constant.int 2
@@ -96,7 +96,7 @@ tvm_ffi.func nested @external_nested(!tvm_ffi.tensor) -> !tvm_ffi.none
 // CHECK: scf.if
 // CHECK: tvm_ffi.downcast %[[VALUE:[a-zA-Z0-9_]+]] : !tvm_ffi.c.any -> !tvm_ffi.none
 // CHECK: tvm_ffi.return
-tvm_ffi.func private @packed_unit() -> !tvm_ffi.none attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func private @packed_unit() -> !tvm_ffi.none {
   %none = tvm_ffi.constant.none
   %any = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.c.any
   %ok = tvm_ffi.constant.bool true
@@ -154,7 +154,7 @@ tvm_ffi.func @forward_block_use() -> !tvm_ffi.none {
 // CHECK: tvm_ffi.exception "GuardMatch"
 // CHECK: ^[[BODY]](%[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.int, %[[FLAG:[a-zA-Z0-9_]+]]: !tvm_ffi.bool):
 // CHECK: tvm_ffi.upcast %[[INPUT]]
-tvm_ffi.func @guarded(%arg0: !tvm_ffi.int, %arg1: !tvm_ffi.bool) -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @guarded(%arg0: !tvm_ffi.int, %arg1: !tvm_ffi.bool) -> !tvm_ffi.int {
   %payload = tvm_ffi.upcast %arg0 : !tvm_ffi.int -> !tvm_ffi.c.any
   %ok = tvm_ffi.constant.bool true
   tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.c.any
@@ -163,7 +163,6 @@ tvm_ffi.func @guarded(%arg0: !tvm_ffi.int, %arg1: !tvm_ffi.bool) -> !tvm_ffi.int
 
 // Functions without the old opt-in marker also become packed entries.
 // CHECK-LABEL: tvm_ffi.pack.func public @no_wrapper(
-// CHECK-NOT: emit_tvm_ffi_abi
 // CHECK: tvm_ffi.constant.int 3
 tvm_ffi.func public @no_wrapper() -> !tvm_ffi.int {
   %value = tvm_ffi.constant.int 3

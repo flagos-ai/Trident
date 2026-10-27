@@ -1,24 +1,7 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --convert-tvm-ffi-to-llvm --verify-each | FileCheck %s
-
-// CHECK-LABEL: func.func @forward(
-// CHECK-SAME: %[[PACK:[a-zA-Z0-9_]+]]: !llvm.struct<(ptr, i32)>)
-// CHECK-DAG: %[[ARGS:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[PACK]][0]
-// CHECK-DAG: %[[OUT:[a-zA-Z0-9_]+]] = llvm.alloca
-// CHECK-DAG: %[[COUNT:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[PACK]][1]
-// CHECK: %[[STATUS:[a-zA-Z0-9_]+]] = call @__tvm_ffi_target(%[[CTX:[a-zA-Z0-9_]+]], %[[ARGS]], %[[COUNT]], %[[OUT]])
-// CHECK: %[[OK:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO:[a-zA-Z0-9_]+]]
-// CHECK: llvm.cond_br %[[OK]], ^[[PASSED:bb[0-9]+]], ^[[JOIN:bb[0-9]+]](%[[NONE:[a-zA-Z0-9_]+]] :
-// CHECK: ^[[PASSED]]:
-// CHECK-NEXT: %[[VALUE:[a-zA-Z0-9_]+]] = llvm.load %[[OUT]]
-// CHECK-NEXT: llvm.br ^[[JOIN]](%[[VALUE]] :
-func.func @forward(%args: !tvm_ffi.pack.arguments) -> (!tvm_ffi.bool, !tvm_ffi.c.any) {
-  %ok, %value = tvm_ffi.pack.call @target(%args) : (!tvm_ffi.pack.arguments) -> (!tvm_ffi.bool, !tvm_ffi.c.any)
-  return %ok, %value : !tvm_ffi.bool, !tvm_ffi.c.any
-}
-func.func private @__tvm_ffi_target(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
+// RUN: trident-core-opt %s --convert-tvm-ffi-to-llvm --reconcile-unrealized-casts --verify-each | FileCheck %s
 
 // CHECK-LABEL: func.func @read(
 // CHECK-SAME: %[[PACK:[a-zA-Z0-9_]+]]: !llvm.struct<(ptr, i32)>, %[[INDEX:[a-zA-Z0-9_]+]]: i64)

@@ -59,7 +59,7 @@ func.func @tensor_size(%tensor: !tvm_ffi.tensor, %index: i64) -> i64 {
 // CHECK: ^[[STORE]](%[[OUTPUT:[a-zA-Z0-9_]+]]: !llvm.struct<(i32, i32, i64)>, %[[STORE_CODE:[a-zA-Z0-9_]+]]: i32):
 // CHECK-NEXT: llvm.store %[[OUTPUT]], %[[OUTPUT_SLOT]]
 // The packed entry stores the checked payload directly into its output slot.
-tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.c.tensor {
   %0 = tvm_ffi.tensor.literal dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32> : !tvm_ffi.c.tensor
 
   // The marked return retains its payload before local cleanup.
@@ -69,7 +69,7 @@ tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.c.tensor attributes {emit_tv
 }
 
 // The packed entry stores the checked payload directly into its output slot.
-tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.c.tensor attributes {emit_tvm_ffi_abi} {
+tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.c.tensor {
   %0 = tvm_ffi.tensor.literal dense<1.250000e+00> : tensor<2x3xf32> : !tvm_ffi.c.tensor
 
   // The marked return retains its payload before local cleanup.
