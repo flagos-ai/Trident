@@ -16,10 +16,7 @@
 #include <new>
 #include <optional>
 #include <pystate.h>
-#if PY_VERSION_HEX < 0x030C0000
-// Python 3.10 does not provide pytypedefs.h. Python.h (included above)
-// supplies the equivalent forward declarations on this version.
-#else
+#ifdef TRIDENT_PYTHON_HAS_PYTYPEDEFS
 #include <pytypedefs.h>
 #endif
 #include <stdexcept>
