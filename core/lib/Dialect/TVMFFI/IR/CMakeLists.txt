@@ -5,6 +5,7 @@ add_mlir_dialect_library(
   Monad/TVMFFITypes.cc
   Opaque/TVMFFITypes.cc
   TVMFFIAttrs.cc
+  TVMFFICanonicalization.cc
   TVMFFIDialect.cc
   TVMFFIInterfaces.cc
   TVMFFIOps.cc

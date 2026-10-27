@@ -282,7 +282,11 @@ The lowering pipeline is:
    `(false, None)`. Binds become tuple extraction and `scf.if`; their typed
    payloads are restored only in successful branches. Function signatures,
    calls and control-flow arguments are converted together.
-3. Run `decompose-tvm-ffi`. Preserve local `tvm_ffi.call` operations and
+3. Run the MLIR canonicalizer after monad lowering. Its TVM FFI tuple pattern
+   forwards elements through a single-use `tuple.construct`/`tuple.unconstruct`
+   pair, so transient Result tuples do not reach runtime Array construction.
+   Tuples that remain observable still retain their normal container lowering.
+   Then run `decompose-tvm-ffi`. Preserve local `tvm_ffi.call` operations and
    convert semantic object types to their Base representations throughout
    signatures, regions and type-bearing attributes, including Array/Tuple to
    `!tvm_ffi.c.array` and Any/Union/Str to `!tvm_ffi.c.any`. Container operations become

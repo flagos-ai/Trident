@@ -36,6 +36,7 @@ adding a file for each type, arity or operator name.
 | `TVMFFI/IR/casts*` | Widening, membership, subsets, identity parsing/folding and incompatible casts |
 | `TVMFFI/IR/result*` | Local calls, variadic Results, bind/yield, unpack inference and packed return shape |
 | `Transforms/lower-monad` | Result construction/unpack, continuations, independent input/output arities, local call attributes and CFG signature conversion |
+| `Transforms/canonicalize-containers` | Single-use Tuple construction/unpacking elimination before container decomposition |
 | `Transforms/decompose-representations` | Opaque/Base mapping, recursive Result/attribute conversion, borrowing casts, local calls and string elements |
 | `Transforms/decompose-containers` | Checked container calls, nested types/attributes and captured values inside nested continuations |
 | `Transforms/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, region transfers, loop-carried references, direct producer exports, CFG type conversion and synchronous captures and rejected legalization |
