@@ -6,7 +6,8 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import ClassVar, Final, Self
+from typing import ClassVar, Final
+from typing_extensions import Self
 
 from trident.core import ir
 from trident.input import InputTable

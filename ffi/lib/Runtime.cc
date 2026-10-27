@@ -16,7 +16,6 @@
 #include <new>
 #include <optional>
 #include <pystate.h>
-#include <pytypedefs.h>
 #include <stdexcept>
 #include <torch/csrc/Layout.h>
 #include <torch/csrc/MemoryFormat.h>
