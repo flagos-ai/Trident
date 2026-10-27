@@ -19,12 +19,15 @@
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/STLExtras.h>
-#include <llvm/ADT/TypeSwitch.h>             // NOLINT(misc-include-cleaner)
+#include <llvm/ADT/TypeSwitch.h> // NOLINT(misc-include-cleaner)
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h> // NOLINT(misc-include-cleaner)
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/BuiltinAttributeInterfaces.h>
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/DialectImplementation.h> // NOLINT(misc-include-cleaner)
+#include <mlir/IR/Location.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Region.h>
@@ -197,6 +200,16 @@ void TVMFFIDialect::initialize() {
 #define GET_OP_LIST
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFI.cpp.inc"
       >();
+}
+
+mlir::Operation *TVMFFIDialect::materializeConstant(mlir::OpBuilder &builder,
+                                                    mlir::Attribute value,
+                                                    mlir::Type type,
+                                                    mlir::Location location) {
+  return mlir::arith::ConstantOp::isBuildableWith(value, type)
+             ? mlir::arith::ConstantOp::create(
+                   builder, location, mlir::cast<mlir::TypedAttr>(value))
+             : nullptr;
 }
 
 bool UpcastOp::areCastCompatible(mlir::TypeRange inputs,

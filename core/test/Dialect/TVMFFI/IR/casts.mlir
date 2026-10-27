@@ -153,3 +153,36 @@ func.func @union(%arg: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>) -> !tvm_ffi.
   %narrow = tvm_ffi.downcast %wide : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>
   return %narrow : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>
 }
+
+// A block argument has no defining UpcastOp; narrowing must keep its assertion.
+// PARSE-LABEL: func.func @narrow_argument(
+// PARSE: tvm_ffi.downcast
+// FOLD-LABEL: func.func @narrow_argument(
+// FOLD-SAME: %[[ARG:[a-zA-Z0-9_]+]]: !tvm_ffi.any)
+// FOLD-NEXT: %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[ARG]] : !tvm_ffi.any -> !tvm_ffi.int
+// FOLD-NEXT: return %[[VALUE]]
+func.func @narrow_argument(%arg: !tvm_ffi.any) -> !tvm_ffi.int {
+  %value = tvm_ffi.downcast %arg : !tvm_ffi.any -> !tvm_ffi.int
+  return %value : !tvm_ffi.int
+}
+
+// A successful widening proves the matching narrowing cannot trap.
+// FOLD-LABEL: func.func @widen_narrow(
+// FOLD-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.int)
+// FOLD-NEXT: return %[[INPUT]]
+func.func @widen_narrow(%input: !tvm_ffi.int) -> !tvm_ffi.int {
+  %wide = tvm_ffi.upcast %input : !tvm_ffi.int -> !tvm_ffi.any
+  %result = tvm_ffi.downcast %wide : !tvm_ffi.any -> !tvm_ffi.int
+  return %result : !tvm_ffi.int
+}
+
+// A different target still requires its runtime assertion, even if unused.
+// FOLD-LABEL: func.func @widen_narrow_mismatch(
+// FOLD: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi.upcast
+// FOLD: tvm_ffi.downcast %[[WIDE]] : !tvm_ffi.any -> !tvm_ffi.float
+// FOLD: return
+func.func @widen_narrow_mismatch(%input: !tvm_ffi.int) {
+  %wide = tvm_ffi.upcast %input : !tvm_ffi.int -> !tvm_ffi.any
+  %result = tvm_ffi.downcast %wide : !tvm_ffi.any -> !tvm_ffi.float
+  return
+}

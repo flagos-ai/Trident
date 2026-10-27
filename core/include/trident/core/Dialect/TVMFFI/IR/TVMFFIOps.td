@@ -71,16 +71,17 @@ def TVMFFI_CallOp : TVMFFI_Op<"call"> {
                        "functional-type($operands, results)";
 }
 
-class TVMFFI_ConstantOp<string mnemonic, Type resultType, Attr valueType>
-    : TVMFFI_Op<mnemonic, [
-        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+class TVMFFI_ConstantOp<string mnemonic, Type resultType, Attr valueType,
+                         list<Trait> traits = []>
+    : TVMFFI_Op<mnemonic, !listconcat(traits, [
+        DeclareOpInterfaceMethods<InferTypeOpInterface>])> {
   let arguments = (ins valueType:$value);
   let results = (outs resultType:$result);
   let assemblyFormat = "$value attr-dict";
 }
 
 def TVMFFI_ConstantBoolOp
-    : TVMFFI_ConstantOp<"constant.bool", TVMFFI_BoolType, I1Attr> {
+    : TVMFFI_ConstantOp<"constant.bool", TVMFFI_BoolType, I1Attr, [Pure]> {
   let summary = "Create a TVM FFI boolean constant";
 }
 
@@ -96,12 +97,12 @@ def TVMFFI_ConstantDeviceOp
 }
 
 def TVMFFI_ConstantFloatOp
-    : TVMFFI_ConstantOp<"constant.float", TVMFFI_FloatType, F64Attr> {
+    : TVMFFI_ConstantOp<"constant.float", TVMFFI_FloatType, F64Attr, [Pure]> {
   let summary = "Create a TVM FFI floating-point constant";
 }
 
 def TVMFFI_ConstantIntOp
-    : TVMFFI_ConstantOp<"constant.int", TVMFFI_IntType, I64Attr> {
+    : TVMFFI_ConstantOp<"constant.int", TVMFFI_IntType, I64Attr, [Pure]> {
   let summary = "Create a TVM FFI integer constant";
 }
 
@@ -266,6 +267,7 @@ def TVMFFI_GetOp : TVMFFI_Op<"get", [Pure,
   let summary = "Extract a native value from a TVM FFI value";
   let arguments = (ins AnyTVMFFIGetOperandType:$operand);
   let results = (outs AnyTVMFFIGetResultType:$result);
+  let hasFolder = 1;
   let hasVerifier = 1;
   let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
 }
@@ -568,6 +570,7 @@ def TVMFFI_ToOp
   let summary = "Convert a native scalar to a TVM FFI semantic value";
   let arguments = (ins AnyTypeOf<[F64, I1, I64]> : $value);
   let results = (outs AnyTypeOf<[TVMFFI_BoolType, TVMFFI_FloatType, TVMFFI_IntType]> : $result);
+  let hasFolder = 1;
   let hasVerifier = 1;
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
 }

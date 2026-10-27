@@ -98,9 +98,9 @@ func.func @nested_containers(%input: !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_f
 // -----
 
 // CHECK-LABEL: func.func @casts(
-// CHECK-SAME: %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.array) -> !tvm_ffi.c.array {
+// CHECK-SAME: %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.array, %[[INPUT:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.any) -> !tvm_ffi.c.array {
 // CHECK: %[[UPCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.upcast %[[ARG0]] : !tvm_ffi.c.array -> !tvm_ffi.c.any {test.keep = "wide"}
-// CHECK: %[[DOWNCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.downcast %[[UPCAST_0]] : !tvm_ffi.c.any -> !tvm_ffi.c.array {test.types = [!tvm_ffi.c.array]}
+// CHECK: %[[DOWNCAST_0:[a-zA-Z0-9_$.-]+]] = tvm_ffi.downcast %[[INPUT]] : !tvm_ffi.c.any -> !tvm_ffi.c.array {test.types = [!tvm_ffi.c.array]}
 // CHECK: return %[[DOWNCAST_0]] : !tvm_ffi.c.array
 // CHECK-LABEL: func.func @nested_containers(
 // CHECK-SAME: %[[ARG0:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.array) -> !tvm_ffi.c.array {
@@ -117,9 +117,9 @@ func.func @nested_containers(%input: !tvm_ffi.monad.result<!tvm_ffi.tuple<!tvm_f
 // CHECK-SAME: %[[ARG3:[a-zA-Z0-9_$.-]+]]: !tvm_ffi.c.any) -> (!tvm_ffi.c.any, !tvm_ffi.c.exception, !tvm_ffi.object, !tvm_ffi.c.any) {
 // CHECK: return %[[ARG0]], %[[ARG1]], %[[ARG2]], %[[ARG3]] : !tvm_ffi.c.any, !tvm_ffi.c.exception, !tvm_ffi.object, !tvm_ffi.c.any
 
-func.func @casts(%array: !tvm_ffi.array<!tvm_ffi.int>) -> !tvm_ffi.array<!tvm_ffi.int> {
+func.func @casts(%array: !tvm_ffi.array<!tvm_ffi.int>, %input: !tvm_ffi.any) -> !tvm_ffi.array<!tvm_ffi.int> {
   %wide = tvm_ffi.upcast %array : !tvm_ffi.array<!tvm_ffi.int> -> !tvm_ffi.any {test.keep = "wide"}
-  %narrow = tvm_ffi.downcast %wide : !tvm_ffi.any -> !tvm_ffi.array<!tvm_ffi.int> {test.types = [!tvm_ffi.tuple<!tvm_ffi.int>]}
+  %narrow = tvm_ffi.downcast %input : !tvm_ffi.any -> !tvm_ffi.array<!tvm_ffi.int> {test.types = [!tvm_ffi.tuple<!tvm_ffi.int>]}
   return %narrow : !tvm_ffi.array<!tvm_ffi.int>
 }
 

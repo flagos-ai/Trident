@@ -26,9 +26,7 @@
 // CHECK: scf.yield %[[INNER]]
 // CHECK-NOT: func.call
 // CHECK: %[[OUTPUT:[a-zA-Z0-9_]+]]:2 = tvm_ffi.tuple.unconstruct %[[OUTER]]
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[OUTPUT]]#0
-// CHECK: %[[FLAG:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[SUCCESS]]
-// CHECK: tvm_ffi.return %[[FLAG]], %[[OUTPUT]]#1
+// CHECK: tvm_ffi.return %[[OUTPUT]]#0, %[[OUTPUT]]#1
 
 // A None payload must still gate a payload-independent mutation.
 // CHECK-LABEL: tvm_ffi.func @none_continuation(
@@ -43,9 +41,7 @@
 // CHECK: } else {
 // CHECK-NOT: tvm_ffi.tensor.copy_
 // CHECK: %[[OUTPUT:[a-zA-Z0-9_]+]]:2 = tvm_ffi.tuple.unconstruct %[[RESULT]]
-// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[OUTPUT]]#0
-// CHECK: %[[FLAG:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[SUCCESS]]
-// CHECK: tvm_ffi.return %[[FLAG]], %[[OUTPUT]]#1
+// CHECK: tvm_ffi.return %[[OUTPUT]]#0, %[[OUTPUT]]#1
 
 // LLVM-LABEL: llvm.func @__tvm_ffi_checked_continuation(
 // LLVM: %[[FIRST:[a-zA-Z0-9_]+]] = llvm.call @checked_call(%[[CALLEE:[a-zA-Z0-9_]+]], %[[TENSOR:[a-zA-Z0-9_]+]])

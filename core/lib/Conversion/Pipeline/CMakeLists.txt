@@ -8,6 +8,7 @@ add_mlir_conversion_library(
   DLPackToLLVM
   MLIRArithToLLVM
   MLIRControlFlowToLLVM
+  MLIRControlFlowToSCF
   MLIRFuncToLLVM
   MLIRGPUToGPURuntimeTransforms
   MLIRPass

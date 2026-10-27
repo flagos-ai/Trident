@@ -137,8 +137,7 @@ func.func @result_and_attributes(%value: !tvm_ffi.monad.result<!tvm_ffi.tensor>)
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi.c.tensor)
 // CHECK: %[[OWNED:[a-zA-Z0-9_]+]] = tvm_ffi.tensor.clone %[[INPUT]]
 // CHECK: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[OWNED]]
-// CHECK: %[[NARROW:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[WIDE]]
-// CHECK: %[[EXPORT:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[NARROW]]
+// CHECK: %[[EXPORT:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[OWNED]]
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[EXPORT]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.ObjectIncRef %[[EXPORT]] : !tvm_ffi.c.any
 // CHECK-NEXT: tvm_ffi.ObjectDecRef %[[OWNED]] : !tvm_ffi.c.tensor

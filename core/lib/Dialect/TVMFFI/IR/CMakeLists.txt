@@ -20,6 +20,7 @@ add_mlir_dialect_library(
   LINK_LIBS
   PUBLIC
   DLPackDialect
+  MLIRArithDialect
   MLIRControlFlowDialect
   MLIRControlFlowInterfaces
   MLIRFuncDialect

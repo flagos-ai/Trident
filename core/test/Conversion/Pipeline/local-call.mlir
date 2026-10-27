@@ -59,7 +59,7 @@ tvm_ffi.func @function_identity(%input: !tvm_ffi.c.function) -> !tvm_ffi.c.funct
 // A dispatcher forwards a borrowed argument pack to typed packed functions. Failed ABI
 // calls propagate; only successful Exception payloads trigger the next attempt.
 // CHECK-LABEL: llvm.func @__tvm_ffi_dispatch(
-// CHECK: llvm.call @__tvm_ffi_identity
+// CHECK-NOT: llvm.call @__tvm_ffi_identity
 // CHECK: llvm.call @TVMFFIObjectDecRef
 // CHECK: llvm.return
 tvm_ffi.pack.func @dispatch(%input: !tvm_ffi.pack.arguments) -> !tvm_ffi.any {

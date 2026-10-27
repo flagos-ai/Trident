@@ -308,8 +308,14 @@ The lowering pipeline is:
    public declarations. Output slots are written only on success;
    there is no separate typed implementation or wrapper call.
 5. Convert local typed and packed calls in TVMFFIToFunc to direct calls of
-   the generated packed ABI functions. Run the default inliner and symbol DCE
-   before SCF-to-CF so structured branches remain available during inlining.
+   the generated packed ABI functions. Lift the packed preflight CFG to SCF
+   before the default inliner and symbol DCE: multi-block callees otherwise
+   cannot inline into single-block SCF branches. DLPack metadata operations
+   support inlining. Run CSE and canonicalization before SCF-to-CF to share
+   identical predicates and propagate conditions established by enclosing
+   branches. Scalar boxing/extraction and matching widen/narrow casts fold,
+   including native constants extracted from TVM FFI scalar constants, so they
+   do not hide constant or repeated conditions from SCF simplification.
    Calls rejected by the inliner retain their packed ABI. Then run GPU-to-LLVM,
    TVMFFI-to-LLVM and the remaining LLVM conversions, canonicalization and cast
    reconciliation. Ownership cleanup is materialized before either inliner.
