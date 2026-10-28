@@ -24,7 +24,6 @@
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
-#include <mlir/Dialect/ControlFlow/Transforms/StructuralTypeConversions.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/Func/Transforms/FuncConversions.h>
 #include <mlir/Dialect/GPU/IR/GPUDialect.h>
@@ -557,8 +556,12 @@ public:
         patterns, typeConverter);
     mlir::populateCallOpTypeConversionPattern(patterns, typeConverter);
     mlir::populateReturnOpTypeConversionPattern(patterns, typeConverter);
-    mlir::cf::populateCFStructuralTypeConversionsAndLegality(typeConverter,
-                                                             patterns, target);
+    mlir::populateBranchOpInterfaceTypeConversionPattern(patterns,
+                                                         typeConverter);
+    target.addDynamicallyLegalOp<mlir::cf::BranchOp, mlir::cf::CondBranchOp,
+                                 mlir::cf::SwitchOp>([&](mlir::Operation *op) {
+      return typeConverter.isLegal(op->getOperands());
+    });
     target
         .addLegalDialect<mlir::BuiltinDialect, mlir::LLVM::LLVMDialect,
                          mlir::arith::ArithDialect,
