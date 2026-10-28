@@ -130,19 +130,16 @@ mlir::LogicalResult BlockPlan::analyze() {
   if (!block->isEntryBlock()) {
     // Every object entering a block establishes one local ownership credit.
     const mlir::Liveness::ValueSetT &liveIn = liveness.get().getLiveIn(block);
-    for (const mlir::Value value : llvm::concat<mlir::Value>(
-             llvm::make_filter_range(
-                 block->getArguments(),
-                 [](const mlir::BlockArgument argument) -> bool {
-                   return isObjectCapableType(argument.getType());
-                 }),
-             llvm::make_filter_range(
-                 regionValues, [&](mlir::Value value) -> bool {
-                   return value.getParentBlock() != block &&
-                          liveIn.contains(value) &&
-                          isObjectCapableType(value.getType());
-                 }))) {
-      ++credits[value];
+    for (const mlir::BlockArgument argument : block->getArguments()) {
+      if (isObjectCapableType(argument.getType())) {
+        ++credits[argument];
+      }
+    }
+    for (const mlir::Value value : regionValues) {
+      if (value.getParentBlock() != block && liveIn.contains(value) &&
+          isObjectCapableType(value.getType())) {
+        ++credits[value];
+      }
     }
   }
 
