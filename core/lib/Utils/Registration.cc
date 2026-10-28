@@ -22,7 +22,6 @@
 #include <mlir/Conversion/Passes.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
-#include <mlir/InitAllPasses.h>
 #include <mlir/Pass/PassRegistry.h>
 
 void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
@@ -40,8 +39,6 @@ void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
 }
 
 void trident::conversion::registerAllPasses() {
-  mlir::registerAllPasses();
-  mlir::registerReconcileUnrealizedCastsPass();
   mlir::registerPass(
       []() { return trident::conversion::createConvertDLPackToLLVM(); });
   mlir::registerPass(

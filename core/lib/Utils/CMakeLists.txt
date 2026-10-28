@@ -9,7 +9,6 @@ add_mlir_library(
   FinalizeTVMFFI
   MLIRRegisterAllDialects
   MLIRRegisterAllExtensions
-  MLIRRegisterAllPasses
   MLIRSCFDialect
   MLIRToLLVMIRTranslationRegistration
   OwnershipDeallocation
