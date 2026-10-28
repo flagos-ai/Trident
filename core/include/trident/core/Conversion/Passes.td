@@ -60,7 +60,9 @@ def TridentLoweringPipeline
   let summary = "Lower TVM FFI and GPU operations to LLVM dialect";
   let description = [{Lower TVM FFI and GPU operations to LLVM dialect.}];
   let dependentDialects = [
-    "mlir::arith::ArithDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
+    "trident::dlpack::DLPackDialect", "mlir::func::FuncDialect",
+    "mlir::gpu::GPUDialect", "mlir::LLVM::LLVMDialect",
+    "mlir::scf::SCFDialect", "trident::tvm_ffi::TVMFFIDialect"
   ];
 }
