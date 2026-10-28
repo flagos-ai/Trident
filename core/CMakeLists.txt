@@ -93,10 +93,31 @@ int main() {
 }
 ]=]
   TRIDENT_MLIR_HAS_PROPERTY_REF)
+check_cxx_source_compiles(
+  [=[
+#include <mlir/Dialect/GPU/IR/GPUDialect.h>
+#include <optional>
+#include <utility>
+int main() {
+  using LaunchOp = decltype(mlir::gpu::LaunchFuncOp::create(
+      std::declval<mlir::OpBuilder &>(), std::declval<mlir::Location>(),
+      std::declval<mlir::SymbolRefAttr>(),
+      std::declval<mlir::gpu::KernelDim3>(),
+      std::declval<mlir::gpu::KernelDim3>(), std::declval<mlir::Value>(),
+      std::declval<mlir::ValueRange>(), std::declval<mlir::Type>(),
+      std::declval<mlir::ValueRange>(), std::declval<mlir::Value>(),
+      std::declval<std::optional<mlir::gpu::KernelDim3>>()));
+  return sizeof(LaunchOp) == 0;
+}
+]=]
+  TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
 set(CMAKE_REQUIRED_INCLUDES "${_trident_saved_required_includes}")
 unset(_trident_saved_required_includes)
 if(TRIDENT_MLIR_HAS_PROPERTY_REF)
   add_compile_definitions(TRIDENT_MLIR_HAS_PROPERTY_REF)
+endif()
+if(TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
+  add_compile_definitions(TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
 endif()
 
 include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})

@@ -200,9 +200,15 @@ public:
         mlir::LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64Type(), 0);
     operands.append(2, nullPointer);
 
+#ifdef TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT
     rewriter.replaceOpWithNewOp<mlir::gpu::LaunchFuncOp>(
         op, op.getKernel(), gridSize, blockSize, dynamicSharedMemorySize,
         operands, nullptr, mlir::ValueRange{}, asyncObject, clusterSize);
+#else
+    rewriter.replaceOpWithNewOp<mlir::gpu::LaunchFuncOp>(
+        op, op.getKernel(), gridSize, blockSize, dynamicSharedMemorySize,
+        operands, asyncObject, clusterSize);
+#endif
 
     return mlir::success();
   }
