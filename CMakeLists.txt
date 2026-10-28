@@ -9,11 +9,31 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(Python_EXECUTABLE ${Python3_EXECUTABLE})
 set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 
-set(_TRIDENT_LLVM_CONFIG
-    ${CMAKE_BINARY_DIR}/install/llvm-project/lib/cmake/llvm/LLVMConfig.cmake)
-if(EXISTS "${_TRIDENT_LLVM_CONFIG}")
-  message(
-    STATUS "Using prebuilt LLVM at ${CMAKE_BINARY_DIR}/install/llvm-project")
+set(LLVM_ROOT "" CACHE PATH "Prefix of a prebuilt LLVM/MLIR installation")
+
+if(LLVM_ROOT)
+  get_filename_component(_TRIDENT_LLVM_ROOT "${LLVM_ROOT}" ABSOLUTE)
+  if(NOT EXISTS "${_TRIDENT_LLVM_ROOT}/lib/cmake/llvm/LLVMConfig.cmake")
+    message(FATAL_ERROR
+      "LLVM_ROOT='${LLVM_ROOT}' does not contain lib/cmake/llvm/LLVMConfig.cmake")
+  endif()
+  if(NOT EXISTS "${_TRIDENT_LLVM_ROOT}/lib/cmake/mlir/MLIRConfig.cmake")
+    message(FATAL_ERROR
+      "LLVM_ROOT='${LLVM_ROOT}' does not contain lib/cmake/mlir/MLIRConfig.cmake")
+  endif()
+else()
+  set(_TRIDENT_LLVM_ROOT "${CMAKE_BINARY_DIR}/install/llvm-project")
+endif()
+
+set(_TRIDENT_LLVM_DIR "${_TRIDENT_LLVM_ROOT}/lib/cmake/llvm")
+set(_TRIDENT_MLIR_DIR "${_TRIDENT_LLVM_ROOT}/lib/cmake/mlir")
+set(_TRIDENT_LLVM_CONFIG "${_TRIDENT_LLVM_DIR}/LLVMConfig.cmake")
+
+if(LLVM_ROOT)
+  message(STATUS "Using prebuilt LLVM/MLIR from LLVM_ROOT=${_TRIDENT_LLVM_ROOT}")
+  add_custom_target(llvm-project)
+elseif(EXISTS "${_TRIDENT_LLVM_CONFIG}" AND EXISTS "${_TRIDENT_MLIR_DIR}/MLIRConfig.cmake")
+  message(STATUS "Using prebuilt LLVM at ${_TRIDENT_LLVM_ROOT}")
   add_custom_target(llvm-project)
 else()
   ExternalProject_Add(
@@ -58,9 +78,9 @@ ExternalProject_Add(
              -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/install/trident
              -DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE}
              -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
-             -DLLVM_DIR=${CMAKE_BINARY_DIR}/install/llvm-project/lib/cmake/llvm
+             "-DLLVM_DIR=${_TRIDENT_LLVM_DIR}"
              -DLLVM_ENABLE_LLD=${LLVM_ENABLE_LLD}
-             -DMLIR_DIR=${CMAKE_BINARY_DIR}/install/llvm-project/lib/cmake/mlir
+             "-DMLIR_DIR=${_TRIDENT_MLIR_DIR}"
              -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
              -DPython3_EXECUTABLE=${Python3_EXECUTABLE}
              -DPython3_FIND_VIRTUALENV=ONLY
