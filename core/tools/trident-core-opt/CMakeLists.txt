@@ -10,7 +10,7 @@ endif()
 
 target_link_libraries(
   trident-core-opt
-  PRIVATE ${_trident_core_opt_cuda_libraries} MLIRMlirOptMain TVMFFIDialect
-          TridentUtilsRegistration ${TORCH_LIBRARIES})
+  PRIVATE ${_trident_core_opt_cuda_libraries} MLIRMlirOptMain MLIRRegisterAllPasses
+          TVMFFIDialect TridentUtilsRegistration ${TORCH_LIBRARIES})
 
 mlir_check_all_link_libraries(trident-core-opt)

@@ -6,9 +6,13 @@ set(TRIDENT_CORE_PYTHON_OUTPUT_ROOT "${CMAKE_BINARY_DIR}/python_packages/core")
 
 add_compile_definitions("MLIR_PYTHON_PACKAGE_PREFIX=trident.core.")
 
-set(TRIDENT_CORE_MLIR_SOURCE_COMPONENTS
-    MLIRPythonExtension.Core MLIRPythonExtension.RegisterEverything
-    MLIRPythonSources)
+# Do not include MLIRPythonExtension.RegisterEverything here. Its module
+# initializer registers every upstream MLIR pass globally, which conflicts
+# with other MLIR-based Python extensions (for example Triton) in the same
+# process. Trident registers its own dialects, passes, and LLVM translation
+# interfaces explicitly.
+set(TRIDENT_CORE_MLIR_SOURCE_COMPONENTS MLIRPythonExtension.Core
+                                        MLIRPythonSources)
 
 declare_mlir_python_sources(TridentCorePythonExtensions)
 
