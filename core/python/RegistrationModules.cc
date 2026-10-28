@@ -6,17 +6,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "trident-c/core/Registration.h"
-#include <mlir/Bindings/Python/IRCore.h>
+#include <mlir-c/IR.h>
+#include <mlir/Bindings/Python/NanobindAdaptors.h>
 #include <mlir/InitAllTranslations.h>
-#include <nanobind/nanobind.h>
 
 namespace nb = nanobind;
-using namespace mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN;
 
-void registerAllDialects(
-    mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
-        context) {
-  tridentCoreRegisterAllDialects(context.get()->get());
+void registerAllDialects(MlirContext context) {
+  tridentCoreRegisterAllDialects(context);
 }
 
 void registerAllPasses() { tridentCoreRegisterAllPasses(); }

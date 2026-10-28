@@ -144,16 +144,21 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.op is None:
-        schemas: Iterator[torch.FunctionSchema] = itertools.starmap(
-            torch._C._get_schema,
-            (
-                name.split(".", 1) if "." in name else (name, "")
-                for name in filter(
-                    lambda name: name.startswith("aten::"),
-                    sorted(torch._C._dispatch_get_all_op_names()),
-                )
-            ),
-        )
+        schemas = []
+        for qualified_name in filter(
+            lambda name: name.startswith("aten::"),
+            sorted(torch._C._dispatch_get_all_op_names()),
+        ):
+            name, overload = (
+                qualified_name.split(".", 1)
+                if "." in qualified_name
+                else (qualified_name, "")
+            )
+            try:
+                schemas.append(torch._C._get_schema(name, overload))
+            except RuntimeError as error:
+                if "Found no matching schema" not in str(error):
+                    raise
     else:
         schemas: Iterator[torch.FunctionSchema] = itertools.starmap(
             lambda base, overload: torch._C._get_schema(f"aten::{base}", overload),

@@ -9,6 +9,7 @@
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
 #include "trident/core/Conversion/FinalizeTVMFFI/FinalizeTVMFFI.h"
 #include "trident/core/Conversion/Pipeline/Pipeline.h"
+#include "trident/core/Conversion/TVMFFIToAscend/TVMFFIToAscend.h"
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
@@ -22,7 +23,7 @@
 #include <mlir/Conversion/Passes.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
-#include <mlir/InitAllPasses.h>
+#include <mlir/Pass/PassRegistry.h>
 
 void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
   // Register base dialects before extensions and external interfaces.
@@ -39,13 +40,23 @@ void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
 }
 
 void trident::conversion::registerAllPasses() {
-  mlir::registerAllPasses();
-  mlir::registerReconcileUnrealizedCastsPass();
-  trident::conversion::registerConvertDLPackToLLVMPass();
-  trident::conversion::registerConvertTVMFFIToFuncPass();
-  trident::conversion::registerConvertTVMFFIToGPUPass();
-  trident::conversion::registerConvertTVMFFIToLLVMPass();
-  trident::conversion::registerFinalizeTVMFFIPass();
-  trident::conversion::registerTridentLoweringPipelinePass();
-  trident::tvm_ffi::registerOwnershipDeallocationPass();
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertDLPackToLLVM(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertTVMFFIToAscend(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertTVMFFIToFunc(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertTVMFFIToGPU(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertTVMFFIToLLVM(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createFinalizeTVMFFI(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createTridentLoweringPipeline(); });
+  mlir::registerPass([]() {
+    return trident::conversion::createTridentAscendLoweringPipeline();
+  });
+  mlir::registerPass(
+      []() { return trident::tvm_ffi::createOwnershipDeallocation(); });
 }

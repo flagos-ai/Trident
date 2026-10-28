@@ -9,6 +9,25 @@
 
 
 
+// CHECK-LABEL: tvm_ffi.ascend_kernel @npu_kernel
+// CHECK-SAME: dense<[1, 2, 3]> : tensor<3xi8>
+// CHECK-SAME: argument_types = ["*fp32", "i64"]
+tvm_ffi.ascend_kernel @npu_kernel dense<[1, 2, 3]> : tensor<3xi8> {
+  argument_types = ["*fp32", "i64"],
+  auto_map_blocks = true,
+  enable_task_queue = true,
+  force_simt_only = false,
+  has_ffts = true,
+  kernel_name = "entry",
+  lock_init_value = 0 : i64,
+  lock_num = 0 : i64,
+  mix_mode = "aiv",
+  physical_block_count = 32 : i64,
+  shared_memory_size = 0 : i64,
+  use_v2_launch = false,
+  workspace_size = 0 : i64
+}
+
 // -----
 
 // CHECK-LABEL: func.func @kernel_specializations(

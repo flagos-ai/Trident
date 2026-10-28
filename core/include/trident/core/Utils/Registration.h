@@ -13,6 +13,8 @@
 namespace trident::conversion {
 
 void registerAllDialects(mlir::DialectRegistry &registry);
+/// Registers Trident-owned passes only. Embedders that need the complete
+/// upstream MLIR pass set must register it separately.
 void registerAllPasses();
 
 } // namespace trident::conversion

@@ -27,10 +27,41 @@
 
 namespace trident::tvm_ffi {
 
+#ifdef TRIDENT_MLIR_HAS_PROPERTY_REF
+using PropertyRef = mlir::PropertyRef;
+#else
+using PropertyRef = mlir::OpaqueProperties;
+#endif
+
 mlir::LogicalResult AsOp::verify() {
   if (auto resultType = getResult().getType();
       !mlir::isa<dlpack::DLTensorType>(resultType)) {
     return emitOpError("unsupported object view type ") << resultType;
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult AscendKernelOp::verify() {
+  auto type = mlir::dyn_cast<mlir::ShapedType>(getBinary().getType());
+  if (!type || !type.hasRank() || type.getRank() != 1 ||
+      !type.getElementType().isInteger(8)) {
+    return emitOpError("binary must be a rank-one i8 elements attribute");
+  }
+  if (type.getNumElements() == 0) {
+    return emitOpError("binary must not be empty");
+  }
+  if (getKernelName().empty()) {
+    return emitOpError("kernel_name must not be empty");
+  }
+  for (mlir::Attribute attribute : getArgumentTypes()) {
+    auto typeName = mlir::dyn_cast<mlir::StringAttr>(attribute);
+    if (!typeName || typeName.getValue().empty()) {
+      return emitOpError("argument_types must contain non-empty strings");
+    }
+  }
+  if (getWorkspaceSize() < 0 || getLockNum() < 0 ||
+      getSharedMemorySize() < 0 || getPhysicalBlockCount() < 0) {
+    return emitOpError("launch sizes must be nonnegative");
   }
   return mlir::success();
 }
@@ -56,7 +87,7 @@ mlir::LogicalResult FuncOp::verify() {
 
 mlir::LogicalResult GetOp::inferReturnTypes(
     mlir::MLIRContext *, std::optional<mlir::Location>,
-    mlir::ValueRange operands, mlir::DictionaryAttr, mlir::PropertyRef,
+    mlir::ValueRange operands, mlir::DictionaryAttr, PropertyRef,
     mlir::RegionRange, llvm::SmallVectorImpl<mlir::Type> &inferredReturnTypes) {
   if (operands.size() != 1) {
     return mlir::failure();
@@ -133,7 +164,7 @@ mlir::LogicalResult TensorLiteralOp::verify() {
 
 mlir::LogicalResult ToOp::inferReturnTypes(
     mlir::MLIRContext *context, std::optional<mlir::Location>,
-    mlir::ValueRange operands, mlir::DictionaryAttr, mlir::PropertyRef,
+    mlir::ValueRange operands, mlir::DictionaryAttr, PropertyRef,
     mlir::RegionRange, llvm::SmallVectorImpl<mlir::Type> &inferredReturnTypes) {
   if (operands.size() != 1) {
     return mlir::failure();

@@ -14,9 +14,13 @@
 // dialects.
 
 #include "trident/core/Utils/Registration.h"
+#include <mlir/Conversion/Passes.h>
+#include <mlir/InitAllPasses.h>
 #include <mlir/Tools/mlir-opt/MlirOptMain.h>
 
 int main(int argc, char **argv) {
+  mlir::registerAllPasses();
+  mlir::registerReconcileUnrealizedCastsPass();
   trident::conversion::registerAllPasses();
 
   mlir::DialectRegistry registry;

@@ -8,9 +8,12 @@
 #include "trident/core/Conversion/Pipeline/Pipeline.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
 #include "trident/core/Conversion/FinalizeTVMFFI/FinalizeTVMFFI.h"
+#include "trident/core/Conversion/TVMFFIToAscend/TVMFFIToAscend.h"
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
+#include "trident/core/Dialect/DLPack/IR/DLPackDialect.h"
+#include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/OwnershipDeallocation.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
@@ -19,6 +22,9 @@
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>     // NOLINT(misc-include-cleaner)
+#include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/GPU/IR/GPUDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/SCF/IR/SCF.h>         // NOLINT(misc-include-cleaner)
 #include <mlir/IR/BuiltinOps.h>
@@ -30,12 +36,13 @@
 namespace trident::conversion {
 
 #define GEN_PASS_DEF_TRIDENTLOWERINGPIPELINE
+#define GEN_PASS_DEF_TRIDENTASCENDLOWERINGPIPELINE
 #include "trident/core/Conversion/Passes.h.inc"
 
 class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
   void runOnOperation() final {
-    mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
+    mlir::OpPassManager pm(mlir::ModuleOp::getOperationName());
     // Pass order follows lowering dependencies: inline before kernel
     // conversion, deallocate semantic objects before ABI conversion, then lower
     // to LLVM.
@@ -56,7 +63,33 @@ class TridentLoweringPipelinePass final
     pm.addPass(mlir::createConvertFuncToLLVMPass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-    if (mlir::failed(pm.run(getOperation()))) {
+    if (mlir::failed(runPipeline(pm, getOperation()))) {
+      signalPassFailure();
+    }
+  }
+};
+
+class TridentAscendLoweringPipelinePass final
+    : public impl::TridentAscendLoweringPipelineBase<
+          TridentAscendLoweringPipelinePass> {
+  void runOnOperation() final {
+    mlir::OpPassManager pm(mlir::ModuleOp::getOperationName());
+    pm.addPass(mlir::createInlinerPass());
+    pm.addPass(createConvertTVMFFIToAscend());
+    pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(createFinalizeTVMFFI());
+    pm.addPass(tvm_ffi::createOwnershipDeallocation());
+    pm.addPass(createConvertTVMFFIToFunc());
+    pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(createConvertTVMFFIToLLVM());
+    pm.addPass(createConvertDLPackToLLVM());
+    pm.addPass(mlir::createArithToLLVMConversionPass());
+    pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+    pm.addPass(mlir::createSymbolDCEPass());
+    pm.addPass(mlir::createConvertFuncToLLVMPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+    if (mlir::failed(runPipeline(pm, getOperation()))) {
       signalPassFailure();
     }
   }
