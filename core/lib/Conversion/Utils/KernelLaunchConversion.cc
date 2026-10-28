@@ -13,6 +13,7 @@
 #include <llvm/ADT/TypeSwitch.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
+#include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 
 namespace trident::conversion::utils {

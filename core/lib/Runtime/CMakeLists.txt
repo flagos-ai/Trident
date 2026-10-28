@@ -9,18 +9,33 @@ if("$ENV{ASCEND_HOME_PATH}" STREQUAL "")
 endif()
 set(TRIDENT_ASCEND_HOME "$ENV{ASCEND_HOME_PATH}")
 
-execute_process(
-  COMMAND
-    "${Python3_EXECUTABLE}" -c
-    "import pathlib, torch_npu; print(pathlib.Path(torch_npu.__file__).parent)"
-  OUTPUT_VARIABLE TRIDENT_TORCH_NPU_ROOT
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  RESULT_VARIABLE TRIDENT_TORCH_NPU_QUERY_RESULT
-  ERROR_VARIABLE TRIDENT_TORCH_NPU_QUERY_ERROR)
-if(NOT TRIDENT_TORCH_NPU_QUERY_RESULT STREQUAL "0")
+set(_trident_bundled_torch_npu "${CMAKE_SOURCE_DIR}/../torch_npu")
+if(EXISTS
+   "${_trident_bundled_torch_npu}/include/torch_npu/csrc/core/npu/NPUWorkspaceAllocator.h"
+   AND EXISTS "${_trident_bundled_torch_npu}/lib/libtorch_npu.so")
+  get_filename_component(TRIDENT_TORCH_NPU_ROOT
+                         "${_trident_bundled_torch_npu}" REALPATH)
+else()
+  execute_process(
+    COMMAND
+      "${Python3_EXECUTABLE}" -c
+      "import pathlib, torch_npu; print(pathlib.Path(torch_npu.__file__).parent)"
+    OUTPUT_VARIABLE TRIDENT_TORCH_NPU_ROOT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE TRIDENT_TORCH_NPU_QUERY_RESULT
+    ERROR_VARIABLE TRIDENT_TORCH_NPU_QUERY_ERROR)
+  if(NOT TRIDENT_TORCH_NPU_QUERY_RESULT STREQUAL "0")
+    message(
+      FATAL_ERROR
+        "FLAGTREE_BACKEND=ascend requires torch_npu:\n${TRIDENT_TORCH_NPU_QUERY_ERROR}")
+  endif()
+endif()
+if(NOT EXISTS
+   "${TRIDENT_TORCH_NPU_ROOT}/include/torch_npu/csrc/core/npu/NPUWorkspaceAllocator.h"
+   OR NOT EXISTS "${TRIDENT_TORCH_NPU_ROOT}/lib/libtorch_npu.so")
   message(
     FATAL_ERROR
-      "FLAGTREE_BACKEND=ascend requires torch_npu:\n${TRIDENT_TORCH_NPU_QUERY_ERROR}")
+      "torch_npu at ${TRIDENT_TORCH_NPU_ROOT} does not provide the required headers and lib/libtorch_npu.so")
 endif()
 
 add_library(TridentAscendRuntime SHARED AscendRuntime.cc)
