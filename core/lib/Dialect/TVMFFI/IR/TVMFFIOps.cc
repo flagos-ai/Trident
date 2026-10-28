@@ -27,6 +27,12 @@
 
 namespace trident::tvm_ffi {
 
+#ifdef TRIDENT_MLIR_HAS_PROPERTY_REF
+using PropertyRef = mlir::PropertyRef;
+#else
+using PropertyRef = mlir::OpaqueProperties;
+#endif
+
 mlir::LogicalResult AsOp::verify() {
   if (auto resultType = getResult().getType();
       !mlir::isa<dlpack::DLTensorType>(resultType)) {
@@ -56,7 +62,7 @@ mlir::LogicalResult FuncOp::verify() {
 
 mlir::LogicalResult GetOp::inferReturnTypes(
     mlir::MLIRContext *, std::optional<mlir::Location>,
-    mlir::ValueRange operands, mlir::DictionaryAttr, mlir::PropertyRef,
+    mlir::ValueRange operands, mlir::DictionaryAttr, PropertyRef,
     mlir::RegionRange, llvm::SmallVectorImpl<mlir::Type> &inferredReturnTypes) {
   if (operands.size() != 1) {
     return mlir::failure();
@@ -133,7 +139,7 @@ mlir::LogicalResult TensorLiteralOp::verify() {
 
 mlir::LogicalResult ToOp::inferReturnTypes(
     mlir::MLIRContext *context, std::optional<mlir::Location>,
-    mlir::ValueRange operands, mlir::DictionaryAttr, mlir::PropertyRef,
+    mlir::ValueRange operands, mlir::DictionaryAttr, PropertyRef,
     mlir::RegionRange, llvm::SmallVectorImpl<mlir::Type> &inferredReturnTypes) {
   if (operands.size() != 1) {
     return mlir::failure();

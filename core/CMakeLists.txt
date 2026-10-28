@@ -81,6 +81,24 @@ include(${MLIR_CMAKE_DIR}/AddMLIRPython.cmake)
 include(MLIRDetectPythonEnv)
 mlir_configure_python_dev_packages()
 
+include(CheckCXXSourceCompiles)
+set(_trident_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+check_cxx_source_compiles(
+  [=[
+#include <mlir/IR/OperationSupport.h>
+int main() {
+  mlir::PropertyRef *property = nullptr;
+  return property != nullptr;
+}
+]=]
+  TRIDENT_MLIR_HAS_PROPERTY_REF)
+set(CMAKE_REQUIRED_INCLUDES "${_trident_saved_required_includes}")
+unset(_trident_saved_required_includes)
+if(TRIDENT_MLIR_HAS_PROPERTY_REF)
+  add_compile_definitions(TRIDENT_MLIR_HAS_PROPERTY_REF)
+endif()
+
 include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
