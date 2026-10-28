@@ -9,16 +9,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 find_package(Python REQUIRED COMPONENTS Interpreter Development)
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 
-execute_process(
-  COMMAND
-    "${Python3_EXECUTABLE}" -c
-    "try:
-    from triton._flagtree_backend import FLAGTREE_BACKEND
-except ImportError:
-    FLAGTREE_BACKEND = ''
-print(FLAGTREE_BACKEND)"
-  OUTPUT_VARIABLE TRIDENT_FLAGTREE_BACKEND
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+set(TRIDENT_FLAGTREE_BACKEND "$ENV{FLAGTREE_BACKEND}")
 set(TRIDENT_ASCEND_BACKEND OFF)
 if(TRIDENT_FLAGTREE_BACKEND STREQUAL "ascend")
   set(TRIDENT_ASCEND_BACKEND ON)
