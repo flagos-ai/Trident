@@ -9,26 +9,22 @@ if("$ENV{ASCEND_HOME_PATH}" STREQUAL "")
 endif()
 set(TRIDENT_ASCEND_HOME "$ENV{ASCEND_HOME_PATH}")
 
-set(_trident_bundled_torch_npu "${CMAKE_SOURCE_DIR}/../torch_npu")
-if(EXISTS
-   "${_trident_bundled_torch_npu}/include/torch_npu/csrc/core/npu/NPUWorkspaceAllocator.h"
-   AND EXISTS "${_trident_bundled_torch_npu}/lib/libtorch_npu.so")
-  get_filename_component(TRIDENT_TORCH_NPU_ROOT
-                         "${_trident_bundled_torch_npu}" REALPATH)
-else()
-  execute_process(
-    COMMAND
-      "${Python3_EXECUTABLE}" -c
-      "import pathlib, torch_npu; print(pathlib.Path(torch_npu.__file__).parent)"
-    OUTPUT_VARIABLE TRIDENT_TORCH_NPU_ROOT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE TRIDENT_TORCH_NPU_QUERY_RESULT
-    ERROR_VARIABLE TRIDENT_TORCH_NPU_QUERY_ERROR)
-  if(NOT TRIDENT_TORCH_NPU_QUERY_RESULT STREQUAL "0")
-    message(
-      FATAL_ERROR
-        "FLAGTREE_BACKEND=ascend requires torch_npu:\n${TRIDENT_TORCH_NPU_QUERY_ERROR}")
-  endif()
+execute_process(
+  COMMAND
+    "${Python3_EXECUTABLE}" -c
+    "import importlib.util, pathlib, sys
+spec = importlib.util.find_spec('torch_npu')
+if spec is None or not spec.submodule_search_locations:
+    sys.exit('torch_npu package not found')
+print(pathlib.Path(next(iter(spec.submodule_search_locations))).resolve())"
+  OUTPUT_VARIABLE TRIDENT_TORCH_NPU_ROOT
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE TRIDENT_TORCH_NPU_QUERY_RESULT
+  ERROR_VARIABLE TRIDENT_TORCH_NPU_QUERY_ERROR)
+if(NOT TRIDENT_TORCH_NPU_QUERY_RESULT STREQUAL "0")
+  message(
+    FATAL_ERROR
+      "FLAGTREE_BACKEND=ascend requires torch_npu:\n${TRIDENT_TORCH_NPU_QUERY_ERROR}")
 endif()
 if(NOT EXISTS
    "${TRIDENT_TORCH_NPU_ROOT}/include/torch_npu/csrc/core/npu/NPUWorkspaceAllocator.h"
@@ -37,6 +33,7 @@ if(NOT EXISTS
     FATAL_ERROR
       "torch_npu at ${TRIDENT_TORCH_NPU_ROOT} does not provide the required headers and lib/libtorch_npu.so")
 endif()
+message(STATUS "Using torch_npu at ${TRIDENT_TORCH_NPU_ROOT}")
 
 add_library(TridentAscendRuntime SHARED AscendRuntime.cc)
 separate_arguments(_trident_torch_cxx_flags NATIVE_COMMAND
