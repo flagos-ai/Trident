@@ -52,7 +52,8 @@
 // X-Macro: (DLDeviceType, aoti_torch_device_type_* function name)
 #define TRIDENT_TVMFFI_DEVICE_PAIR(X)                                          \
   X(kDLCPU, aoti_torch_device_type_cpu)                                        \
-  X(kDLCUDA, aoti_torch_device_type_cuda)
+  X(kDLCUDA, aoti_torch_device_type_cuda)                                      \
+  X(kDLExtDev, aoti_torch_device_type_privateuse1)
 
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;

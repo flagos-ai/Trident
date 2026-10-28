@@ -6,9 +6,25 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-find_package(CUDAToolkit REQUIRED)
 find_package(Python REQUIRED COMPONENTS Interpreter Development)
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+execute_process(
+  COMMAND
+    "${Python3_EXECUTABLE}" -c
+    "try:
+    from triton._flagtree_backend import FLAGTREE_BACKEND
+except ImportError:
+    FLAGTREE_BACKEND = ''
+print(FLAGTREE_BACKEND)"
+  OUTPUT_VARIABLE TRIDENT_FLAGTREE_BACKEND
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+set(TRIDENT_ASCEND_BACKEND OFF)
+if(TRIDENT_FLAGTREE_BACKEND STREQUAL "ascend")
+  set(TRIDENT_ASCEND_BACKEND ON)
+else()
+  find_package(CUDAToolkit REQUIRED)
+endif()
 
 execute_process(
   COMMAND "${Python3_EXECUTABLE}" -c
@@ -120,7 +136,9 @@ if(TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
   add_compile_definitions(TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
 endif()
 
-include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})
+if(NOT TRIDENT_ASCEND_BACKEND)
+  include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})
+endif()
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
 include_directories(SYSTEM ${TORCH_INCLUDE_DIRS})

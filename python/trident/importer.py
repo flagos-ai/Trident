@@ -17,6 +17,7 @@ import sympy
 import torch
 import triton
 import tvm_ffi
+from triton._flagtree_backend import FLAGTREE_BACKEND
 from torch.export.graph_signature import ConstantArgument, InputKind, OutputKind
 
 from trident.core import ir
@@ -207,8 +208,11 @@ class TridentFxImporter:
         # Each imported specialization gets a unique symbol namespace from the
         # graph module.  FX node names are unique within an imported graph, so the
         # pair is sufficient to keep binaries distinct after module merging.
-        cubin = kernel.asm["cubin"]
         binary_name = f"_trident_s{self.specialization_id}_{node.name}"
+        if FLAGTREE_BACKEND == "ascend":
+            return self._import_ascend_binary(kernel, binary_name, loc)
+
+        cubin = kernel.asm["cubin"]
         module_op = self.module.operation
         module_op.attributes["gpu.container_module"] = ir.UnitAttr.get()
         if all(
@@ -228,6 +232,127 @@ class TridentFxImporter:
                     loc=loc,
                 )
         return ir.Attribute.parse(f"@{binary_name}::@{kernel.metadata.name}")
+
+    def _import_ascend_binary(
+        self,
+        kernel: triton.compiler.CompiledKernel,
+        binary_name: str,
+        loc: ir.Location,
+    ) -> ir.Attribute:
+        metadata = kernel.metadata
+        if bool(getattr(metadata, "debug_launch_hidden_arg", False)):
+            raise RuntimeError(
+                "Trident Ascend runtime does not support FlagPrism hidden "
+                "debugger launch arguments"
+            )
+        import os
+
+        if os.getenv("TRITON_DEVICE_PRINT", "false").lower() in ("1", "true"):
+            raise RuntimeError(
+                "Trident Ascend runtime does not support TRITON_DEVICE_PRINT"
+            )
+
+        from triton.backends.ascend.utils import (
+            _is_auto_map_parallel_blocks_enabled,
+            force_disable_ffts,
+            is_ffts_supported,
+        )
+
+        npubin = kernel.asm["npubin"]
+        mix_mode = metadata.mix_mode
+        force_simt_only = bool(metadata.force_simt_only)
+        parallel_mode = getattr(metadata, "parallel_mode", "")
+        use_v2_launch = bool(metadata.compile_on_910_95) and (
+            force_simt_only or "simt" in parallel_mode
+        )
+        arch = metadata.target.arch
+        has_ffts = is_ffts_supported(arch) and not force_disable_ffts()
+        auto_map = getattr(metadata, "enable_auto_blockify", None)
+        if auto_map is None:
+            auto_map = _is_auto_map_parallel_blocks_enabled()
+        utils = triton.runtime.driver.active.utils
+        physical_blocks = (
+            utils.get_aivector_core_num()
+            if mix_mode == "aiv"
+            else utils.get_aicore_num()
+        )
+        def flatten_type(type_name: Any) -> list[str]:
+            if isinstance(type_name, tuple):
+                raise NotImplementedError(
+                    "Trident Ascend runtime does not yet support tuple-valued "
+                    "Triton kernel arguments"
+                )
+            return [] if type_name == "constexpr" else [type_name]
+
+        constant_paths = set(kernel.src.constants)
+        if any(len(path) != 1 for path in constant_paths):
+            raise NotImplementedError(
+                "Trident Ascend runtime does not yet support constants nested "
+                "inside tuple-valued Triton kernel arguments"
+            )
+        constant_indices = {path[0] for path in constant_paths}
+        argument_types = [
+            ir.StringAttr.get(type_name)
+            for index, nested in enumerate(kernel.src.signature.values())
+            if index not in constant_indices
+            for type_name in flatten_type(nested)
+        ]
+        i64 = ir.IntegerType.get_signless(64)
+        binary = ir.DenseElementsAttr.get(
+            torch.frombuffer(bytearray(npubin), dtype=torch.uint8).numpy()
+        )
+        attributes = {
+            "sym_name": ir.StringAttr.get(binary_name),
+            "binary": binary,
+            "kernel_name": ir.StringAttr.get(metadata.kernel_name),
+            "argument_types": ir.ArrayAttr.get(argument_types),
+            "mix_mode": ir.StringAttr.get(mix_mode),
+            "workspace_size": ir.IntegerAttr.get(
+                i64, max(0, int(getattr(metadata, "workspace_size", 0) or 0))
+            ),
+            "lock_num": ir.IntegerAttr.get(
+                i64, max(0, int(getattr(metadata, "lock_num", 0) or 0))
+            ),
+            "lock_init_value": ir.IntegerAttr.get(
+                i64,
+                int(
+                    getattr(
+                        metadata,
+                        "lock_init_value",
+                        getattr(metadata, "lock_init_val", 0),
+                    )
+                    or 0
+                ),
+            ),
+            "has_ffts": ir.BoolAttr.get(has_ffts),
+            "force_simt_only": ir.BoolAttr.get(force_simt_only),
+            "use_v2_launch": ir.BoolAttr.get(use_v2_launch),
+            "enable_task_queue": ir.BoolAttr.get(
+                os.getenv("TRITON_ENABLE_TASKQUEUE", "true").lower()
+                in ("1", "true")
+            ),
+            "auto_map_blocks": ir.BoolAttr.get(bool(auto_map)),
+            "shared_memory_size": ir.IntegerAttr.get(
+                i64,
+                max(
+                    0,
+                    int(getattr(metadata, "shared_mem_dynamic_size", 0) or 0),
+                ),
+            ),
+            "physical_block_count": ir.IntegerAttr.get(
+                i64, max(0, int(physical_blocks))
+            ),
+        }
+        if all(
+            operation.attributes["sym_name"] != attributes["sym_name"]
+            for operation in self.module.body.operations
+            if operation.name == "tvm_ffi.ascend_kernel"
+        ):
+            with ir.InsertionPoint(self.module.body):
+                ir.Operation.create(
+                    "tvm_ffi.ascend_kernel", attributes=attributes, loc=loc
+                )
+        return ir.Attribute.parse(f"@{binary_name}::@{metadata.name}")
 
     def _import_call(self, node: torch.fx.Node) -> ImportedValue:
         target = {torch.sym_max: max, torch.sym_min: min}.get(node.target, node.target)
@@ -295,18 +420,34 @@ class TridentFxImporter:
         arguments = cast(dict[str, Any], node.kwargs["kwargs"])
         output_names: list[str] = node.kwargs.get("tensors_to_clone", [])
         operands: dict[str, tuple[ir.Attribute, ir.Value]] = {}
-        for parameter, (triton_type, descriptor), (compiled_name, compiled_type) in zip(
-            function.params,
-            specialization,
-            kernel.src.signature.items(),
-            strict=True,
+        for index, (
+            parameter,
+            (triton_type, descriptor),
+            (compiled_name, compiled_type),
+        ) in enumerate(
+            zip(
+                function.params,
+                specialization,
+                kernel.src.signature.items(),
+                strict=True,
+            )
         ):
             name = parameter.name
             assert (compiled_name, compiled_type) == (name, triton_type), (
                 f"compiled Triton signature does not match its source parameter order: expected {(name, triton_type)!r}, got {(compiled_name, compiled_type)!r}"
             )
-            specialization_attr = self._triton_specialization(
-                triton_type, descriptor, name
+            if FLAGTREE_BACKEND == "ascend" and isinstance(triton_type, tuple):
+                raise NotImplementedError(
+                    "Trident Ascend runtime does not yet support tuple-valued "
+                    "Triton kernel arguments"
+                )
+            specialization_attr = (
+                ir.Attribute.parse(
+                    "#tvm_ffi.constant_specialization<value = "
+                    f"{self._constant_value_attribute(kernel.src.constants[(index,)], name)}>"
+                )
+                if (index,) in kernel.src.constants
+                else self._triton_specialization(triton_type, descriptor, name)
             )
             if name in arguments:
                 operand = box(self.argument(arguments[name]))

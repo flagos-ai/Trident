@@ -8,6 +8,7 @@
 #include "trident/core/Conversion/Pipeline/Pipeline.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
 #include "trident/core/Conversion/FinalizeTVMFFI/FinalizeTVMFFI.h"
+#include "trident/core/Conversion/TVMFFIToAscend/TVMFFIToAscend.h"
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
@@ -35,6 +36,7 @@
 namespace trident::conversion {
 
 #define GEN_PASS_DEF_TRIDENTLOWERINGPIPELINE
+#define GEN_PASS_DEF_TRIDENTASCENDLOWERINGPIPELINE
 #include "trident/core/Conversion/Passes.h.inc"
 
 class TridentLoweringPipelinePass final
@@ -57,6 +59,32 @@ class TridentLoweringPipelinePass final
     pm.addPass(mlir::createConvertControlFlowToLLVMPass());
     pm.addPass(
         mlir::createGpuToLLVMConversionPass()); // NOLINT(misc-include-cleaner)
+    pm.addPass(mlir::createSymbolDCEPass());
+    pm.addPass(mlir::createConvertFuncToLLVMPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+    if (mlir::failed(runPipeline(pm, getOperation()))) {
+      signalPassFailure();
+    }
+  }
+};
+
+class TridentAscendLoweringPipelinePass final
+    : public impl::TridentAscendLoweringPipelineBase<
+          TridentAscendLoweringPipelinePass> {
+  void runOnOperation() final {
+    mlir::OpPassManager pm(mlir::ModuleOp::getOperationName());
+    pm.addPass(mlir::createInlinerPass());
+    pm.addPass(createConvertTVMFFIToAscend());
+    pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(createFinalizeTVMFFI());
+    pm.addPass(tvm_ffi::createOwnershipDeallocation());
+    pm.addPass(createConvertTVMFFIToFunc());
+    pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(createConvertTVMFFIToLLVM());
+    pm.addPass(createConvertDLPackToLLVM());
+    pm.addPass(mlir::createArithToLLVMConversionPass());
+    pm.addPass(mlir::createConvertControlFlowToLLVMPass());
     pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(mlir::createConvertFuncToLLVMPass());
     pm.addPass(mlir::createCanonicalizerPass());

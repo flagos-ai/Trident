@@ -26,6 +26,19 @@ def ConvertTVMFFIToFunc : Pass<"convert-tvm-ffi-to-func", "mlir::ModuleOp"> {
   ];
 }
 
+def ConvertTVMFFIToAscend
+    : Pass<"convert-tvm-ffi-to-ascend", "mlir::ModuleOp"> {
+  let summary = "Lower TVM FFI kernel launches to the Ascend runtime";
+  let description = [{
+    Lower embedded npubin launches to calls into libTridentAscendRuntime.
+  }];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
+    "trident::dlpack::DLPackDialect", "mlir::func::FuncDialect",
+    "mlir::LLVM::LLVMDialect", "trident::tvm_ffi::TVMFFIDialect"
+  ];
+}
+
 def ConvertTVMFFIToGPU : Pass<"convert-tvm-ffi-to-gpu", "mlir::ModuleOp"> {
   let summary = "Lower TVM FFI kernel launches to GPU dialect ";
   let description = [{Lower TVM FFI kernel launches to GPU dialect.}];
@@ -64,5 +77,19 @@ def TridentLoweringPipeline
     "trident::dlpack::DLPackDialect", "mlir::func::FuncDialect",
     "mlir::gpu::GPUDialect", "mlir::LLVM::LLVMDialect",
     "mlir::scf::SCFDialect", "trident::tvm_ffi::TVMFFIDialect"
+  ];
+}
+
+def TridentAscendLoweringPipeline
+    : Pass<"trident-ascend-lowering-pipeline", "mlir::ModuleOp"> {
+  let summary = "Lower TVM FFI and Ascend launches to LLVM dialect";
+  let description = [{
+    Lower TVM FFI operations and npubin launches without GPU/NVVM lowering.
+  }];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
+    "trident::dlpack::DLPackDialect", "mlir::func::FuncDialect",
+    "mlir::LLVM::LLVMDialect", "mlir::scf::SCFDialect",
+    "trident::tvm_ffi::TVMFFIDialect"
   ];
 }

@@ -13,6 +13,7 @@ from typing import Any, Final, TypeAlias
 import torch
 import tvm_ffi
 import tvm_ffi.utils
+from triton._flagtree_backend import FLAGTREE_BACKEND
 from torch.export._trace import _extract_fake_inputs
 from torch.export.graph_signature import (
     InputKind,
@@ -563,9 +564,14 @@ class TridentGraphModule:
 
         # 2. Lower semantic TVM FFI and GPU IR to LLVM.
         with self.ctx:
-            passmanager.PassManager.parse(
-                "builtin.module(trident-lowering-pipeline)",
-            ).run(combined.operation)
+            pipeline = (
+                "trident-ascend-lowering-pipeline"
+                if FLAGTREE_BACKEND == "ascend"
+                else "trident-lowering-pipeline"
+            )
+            passmanager.PassManager.parse(f"builtin.module({pipeline})").run(
+                combined.operation
+            )
 
         # 3. Build the LLVM dispatcher that tries each sub-function.
         self._build_llvm_dispatcher(combined)

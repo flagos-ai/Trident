@@ -1,10 +1,14 @@
 add_mlir_conversion_library(
   ConversionUtils
   CFunctionDeclUtils.cc
+  KernelLaunchConversion.cc
   String.cc
   TVMFFIUtils.cc
   LINK_LIBS
   PUBLIC
   DLPackDialect
+  MLIRArithDialect
+  MLIRControlFlowDialect
   MLIRLLVMDialect
-  MLIRTransforms)
+  MLIRTransforms
+  TVMFFIDialect)

@@ -41,6 +41,31 @@ mlir::LogicalResult AsOp::verify() {
   return mlir::success();
 }
 
+mlir::LogicalResult AscendKernelOp::verify() {
+  auto type = mlir::dyn_cast<mlir::ShapedType>(getBinary().getType());
+  if (!type || !type.hasRank() || type.getRank() != 1 ||
+      !type.getElementType().isInteger(8)) {
+    return emitOpError("binary must be a rank-one i8 elements attribute");
+  }
+  if (type.getNumElements() == 0) {
+    return emitOpError("binary must not be empty");
+  }
+  if (getKernelName().empty()) {
+    return emitOpError("kernel_name must not be empty");
+  }
+  for (mlir::Attribute attribute : getArgumentTypes()) {
+    auto typeName = mlir::dyn_cast<mlir::StringAttr>(attribute);
+    if (!typeName || typeName.getValue().empty()) {
+      return emitOpError("argument_types must contain non-empty strings");
+    }
+  }
+  if (getWorkspaceSize() < 0 || getLockNum() < 0 ||
+      getSharedMemorySize() < 0 || getPhysicalBlockCount() < 0) {
+    return emitOpError("launch sizes must be nonnegative");
+  }
+  return mlir::success();
+}
+
 mlir::LogicalResult ConstantDTypeOp::verify() {
   if (mlir::ArrayAttr values = getValue();
       values.size() == 3 &&

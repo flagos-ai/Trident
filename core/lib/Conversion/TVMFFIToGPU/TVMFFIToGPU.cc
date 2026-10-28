@@ -8,6 +8,7 @@
 
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/Utils/AOTICAPIDescriptors.h"
+#include "trident/core/Conversion/Utils/KernelLaunchConversion.h"
 #include "trident/core/Conversion/Utils/TVMFFICAPIDescriptors.h"
 #include "trident/core/Dialect/DLPack/IR/DLPackDialect.h"
 #include "trident/core/Dialect/DLPack/IR/DLPackOps.h"
@@ -62,76 +63,9 @@ public:
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Location const loc = op.getLoc();
     mlir::ArrayAttr const specializations = op.getSpecializationsAttr();
-    auto materializeOperand =
-        [&](tvm_ffi::SpecializationAttrInterface specialization,
-            mlir::Value source) -> mlir::Value {
-      mlir::Type const kind = specialization.getTargetType();
-      return source.getType() == kind
-                 ? source
-                 : getTypeConverter()->materializeTargetConversion(
-                       rewriter, loc, kind, source);
-    };
-
-    tvm_ffi::FuncOp function = op->getParentOfType<tvm_ffi::FuncOp>();
-    if (function) {
-      mlir::Value allChecks = mlir::LLVM::ConstantOp::create(
-          rewriter, loc, rewriter.getI1Type(), 1);
-      for (auto [specialization, source] :
-           llvm::zip(specializations
-                         .getAsRange<tvm_ffi::SpecializationAttrInterface>(),
-                     op.getKernelOperands())) {
-        mlir::Value const operand = materializeOperand(specialization, source);
-        if (!operand) {
-          return op.emitOpError(
-              "failed to materialize a native kernel operand");
-        }
-        if (mlir::Value const check =
-                specialization.buildCheck(rewriter, loc, operand)) {
-          allChecks =
-              mlir::arith::AndIOp::create(rewriter, loc, allChecks, check);
-        }
-      }
-
-      mlir::FunctionType const functionType = function.getFunctionType();
-      if (functionType.getNumResults() != 1) {
-        return op.emitOpError(
-            "enclosing function must have one result to report "
-            "specialization failure");
-      }
-      mlir::Type const resultType = functionType.getResult(0);
-      bool const canReportFailure =
-          llvm::TypeSwitch<mlir::Type, bool>(resultType)
-              .Case<tvm_ffi::AnyType>(
-                  [](tvm_ffi::AnyType) -> bool { return true; })
-              .Case<tvm_ffi::UnionType>(
-                  [&](tvm_ffi::UnionType resultUnion) -> bool {
-                    return resultUnion.contains(
-                        tvm_ffi::ExceptionType::get(function.getContext()));
-                  })
-              .Default([](mlir::Type) -> bool { return false; });
-      if (!canReportFailure) {
-        return op.emitOpError(
-            "enclosing function result must be !tvm_ffi.any or contain "
-            "!tvm_ffi.exception");
-      }
-
-      mlir::Block *launchBlock = op->getBlock();
-      mlir::Block *continuation =
-          rewriter.splitBlock(launchBlock, op->getIterator());
-      mlir::Block *failure =
-          rewriter.createBlock(&function.getBody(), function.getBody().end());
-      rewriter.setInsertionPointToEnd(launchBlock);
-      mlir::cf::CondBranchOp::create(rewriter, loc, allChecks, continuation, {},
-                                     failure, {});
-
-      rewriter.setInsertionPointToEnd(failure);
-      mlir::Value const exception = tvm_ffi::ExceptionOp::create(
-          rewriter, loc, tvm_ffi::ExceptionType::get(function.getContext()),
-          "GuardMatch");
-      mlir::Value const failureResult =
-          tvm_ffi::CastOp::create(rewriter, loc, resultType, exception);
-      tvm_ffi::ReturnOp::create(rewriter, loc, failureResult);
-      rewriter.setInsertionPoint(op);
+    if (mlir::failed(utils::buildKernelSpecializationGuard(
+            op, *getTypeConverter(), rewriter))) {
+      return mlir::failure();
     }
     // TODO: Materialized native values can borrow storage from their source
     // objects and must not outlive or cross blocks independently of them.
@@ -144,7 +78,8 @@ public:
       if (mlir::isa<tvm_ffi::ConstantSpecializationAttr>(specialization)) {
         continue;
       }
-      mlir::Value const operand = materializeOperand(specialization, source);
+      mlir::Value const operand = utils::materializeKernelOperand(
+          *getTypeConverter(), rewriter, loc, specialization, source);
       if (!operand) {
         return op.emitOpError("failed to materialize a native kernel operand");
       }
@@ -220,56 +155,7 @@ public:
   void runOnOperation() final {
     mlir::ConversionTarget target(getContext());
     mlir::TypeConverter typeConverter;
-    typeConverter.addConversion(
-        [](mlir::Type type) -> mlir::Type { return type; });
-    typeConverter.addTargetMaterialization([](mlir::OpBuilder &builder,
-                                              mlir::Type resultType,
-                                              mlir::ValueRange inputs,
-                                              mlir::Location loc)
-                                               -> mlir::Value {
-      if (inputs.size() != 1) {
-        return {};
-      }
-      mlir::Value input = inputs.front();
-      if (mlir::isa<tvm_ffi::TensorType>(input.getType())) {
-        if (!mlir::isa<mlir::LLVM::LLVMPointerType>(resultType)) {
-          return {};
-        }
-        mlir::Value const object = tvm_ffi::GetOp::create(
-            builder, loc, tvm_ffi::ObjectType::get(builder.getContext()),
-            input);
-        mlir::Value const tensor = tvm_ffi::AsOp::create(
-            builder, loc, dlpack::DLTensorType::get(builder.getContext()),
-            object);
-        return dlpack::TensorDataOp::create(builder, loc, resultType, tensor);
-      }
-      if (mlir::isa<tvm_ffi::BoolType, tvm_ffi::FloatType, tvm_ffi::IntType>(
-              input.getType())) {
-        input = tvm_ffi::GetOp::create(builder, loc, input);
-      }
-      mlir::Type const inputType = input.getType();
-      if (inputType == resultType) {
-        return input;
-      }
-      if (auto integer = mlir::dyn_cast<mlir::IntegerType>(inputType)) {
-        auto targetInteger = mlir::dyn_cast<mlir::IntegerType>(resultType);
-        if (!targetInteger) {
-          return {};
-        }
-        if (integer.getWidth() > targetInteger.getWidth()) {
-          return mlir::arith::TruncIOp::create(builder, loc, resultType, input);
-        }
-        if (integer.isInteger(1)) {
-          return mlir::arith::ExtUIOp::create(builder, loc, resultType, input);
-        }
-        return mlir::arith::ExtSIOp::create(builder, loc, resultType, input);
-      }
-      if (mlir::isa<mlir::FloatType>(inputType) &&
-          mlir::isa<mlir::FloatType>(resultType)) {
-        return mlir::arith::TruncFOp::create(builder, loc, resultType, input);
-      }
-      return {};
-    });
+    utils::configureKernelLaunchTypeConverter(typeConverter);
 
     target.addIllegalOp<tvm_ffi::KernelLaunchOp>();
     target
