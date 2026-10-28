@@ -64,6 +64,8 @@ add_mlir_python_common_capi_library(
   "${TRIDENT_CORE_PYTHON_OUTPUT_ROOT}/_mlir_libs"
   RELATIVE_INSTALL_ROOT
   ".."
+  EMBED_LIBS
+  MLIRCAPITransforms
   DECLARED_SOURCES
   ${TRIDENT_CORE_MLIR_SOURCE_COMPONENTS})
 
