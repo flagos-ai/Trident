@@ -135,7 +135,7 @@ mlir::LogicalResult BlockPlan::analyze() {
         ++credits[argument];
       }
     }
-    for (const mlir::Value value : regionValues) {
+    for (mlir::Value value : regionValues) {
       if (value.getParentBlock() != block && liveIn.contains(value) &&
           isObjectCapableType(value.getType())) {
         ++credits[value];
