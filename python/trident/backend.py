@@ -110,7 +110,7 @@ class TridentGraphModule:
                 value=ir.IntegerAttr.get(i64_ty, 1),
             ),
             elem_type=ir.TypeAttr.get(
-                llvm.StructType.get_literal([i32_ty, i32_ty, i64_ty], context=self.ctx),
+                llvm.StructType.get_literal([i32_ty, i32_ty, i64_ty]),
             ),
         )
         llvm.store(self._build_tvmffi_any(index, payload), slot)
