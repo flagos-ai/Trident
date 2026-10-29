@@ -22,7 +22,7 @@
 #include <mlir/Conversion/Passes.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
-#include <mlir/InitAllPasses.h>
+#include <mlir/Pass/PassRegistry.h>
 
 void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
   // Register base dialects before extensions and external interfaces.
@@ -39,13 +39,18 @@ void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
 }
 
 void trident::conversion::registerAllPasses() {
-  mlir::registerAllPasses();
-  mlir::registerReconcileUnrealizedCastsPass();
-  trident::conversion::registerConvertDLPackToLLVMPass();
-  trident::conversion::registerConvertTVMFFIToFuncPass();
-  trident::conversion::registerConvertTVMFFIToGPUPass();
-  trident::conversion::registerConvertTVMFFIToLLVMPass();
-  trident::conversion::registerFinalizeTVMFFIPass();
-  trident::conversion::registerTridentLoweringPipelinePass();
-  trident::tvm_ffi::registerOwnershipDeallocationPass();
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertDLPackToLLVM(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertTVMFFIToFunc(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertTVMFFIToGPU(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createConvertTVMFFIToLLVM(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createFinalizeTVMFFI(); });
+  mlir::registerPass(
+      []() { return trident::conversion::createTridentLoweringPipeline(); });
+  mlir::registerPass(
+      []() { return trident::tvm_ffi::createOwnershipDeallocation(); });
 }

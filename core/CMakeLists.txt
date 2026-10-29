@@ -17,15 +17,37 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(
   COMMAND "${Python3_EXECUTABLE}" -c
-          "import torch; print(torch.utils.cmake_prefix_path)"
+          "import contextlib, sys
+with contextlib.redirect_stdout(sys.stderr):
+    import torch
+    prefix = torch.utils.cmake_prefix_path
+print(prefix)"
   OUTPUT_VARIABLE TRIDENT_TORCH_CMAKE_PREFIX
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE TRIDENT_TORCH_QUERY_RESULT
+  ERROR_VARIABLE TRIDENT_TORCH_QUERY_ERROR)
+if(NOT TRIDENT_TORCH_QUERY_RESULT STREQUAL "0")
+  message(
+    FATAL_ERROR
+      "Failed to query PyTorch CMake prefix:\n${TRIDENT_TORCH_QUERY_ERROR}")
+endif()
 execute_process(
   COMMAND
     "${Python3_EXECUTABLE}" -c
-    "import pathlib, tvm_ffi; print(pathlib.Path(tvm_ffi.__file__).parent / 'share' / 'cmake')"
+    "import contextlib, sys
+with contextlib.redirect_stdout(sys.stderr):
+    import pathlib, tvm_ffi
+    prefix = pathlib.Path(tvm_ffi.__file__).parent / 'share' / 'cmake'
+print(prefix)"
   OUTPUT_VARIABLE TRIDENT_TVM_FFI_CMAKE_PREFIX
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE TRIDENT_TVM_FFI_QUERY_RESULT
+  ERROR_VARIABLE TRIDENT_TVM_FFI_QUERY_ERROR)
+if(NOT TRIDENT_TVM_FFI_QUERY_RESULT STREQUAL "0")
+  message(
+    FATAL_ERROR
+      "Failed to query tvm_ffi CMake prefix:\n${TRIDENT_TVM_FFI_QUERY_ERROR}")
+endif()
 
 find_package(MLIR REQUIRED CONFIG)
 set(Caffe2_DIR
@@ -58,6 +80,45 @@ include(${MLIR_CMAKE_DIR}/AddMLIR.cmake)
 include(${MLIR_CMAKE_DIR}/AddMLIRPython.cmake)
 include(MLIRDetectPythonEnv)
 mlir_configure_python_dev_packages()
+
+include(CheckCXXSourceCompiles)
+set(_trident_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+check_cxx_source_compiles(
+  [=[
+#include <mlir/IR/OperationSupport.h>
+int main() {
+  mlir::PropertyRef *property = nullptr;
+  return property != nullptr;
+}
+]=]
+  TRIDENT_MLIR_HAS_PROPERTY_REF)
+check_cxx_source_compiles(
+  [=[
+#include <mlir/Dialect/GPU/IR/GPUDialect.h>
+#include <optional>
+#include <utility>
+int main() {
+  using LaunchOp = decltype(mlir::gpu::LaunchFuncOp::create(
+      std::declval<mlir::OpBuilder &>(), std::declval<mlir::Location>(),
+      std::declval<mlir::SymbolRefAttr>(),
+      std::declval<mlir::gpu::KernelDim3>(),
+      std::declval<mlir::gpu::KernelDim3>(), std::declval<mlir::Value>(),
+      std::declval<mlir::ValueRange>(), std::declval<mlir::Type>(),
+      std::declval<mlir::ValueRange>(), std::declval<mlir::Value>(),
+      std::declval<std::optional<mlir::gpu::KernelDim3>>()));
+  return sizeof(LaunchOp) == 0;
+}
+]=]
+  TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
+set(CMAKE_REQUIRED_INCLUDES "${_trident_saved_required_includes}")
+unset(_trident_saved_required_includes)
+if(TRIDENT_MLIR_HAS_PROPERTY_REF)
+  add_compile_definitions(TRIDENT_MLIR_HAS_PROPERTY_REF)
+endif()
+if(TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
+  add_compile_definitions(TRIDENT_MLIR_GPU_LAUNCH_HAS_ASYNC_DEPS_AND_OBJECT)
+endif()
 
 include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
