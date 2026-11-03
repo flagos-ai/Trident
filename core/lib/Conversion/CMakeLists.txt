@@ -1,6 +1,7 @@
 add_subdirectory(DLPackToLLVM)
 add_subdirectory(FinalizeTVMFFI)
 add_subdirectory(Pipeline)
+add_subdirectory(TVMFFIToAscend)
 add_subdirectory(TVMFFIToFunc)
 add_subdirectory(TVMFFIToGPU)
 add_subdirectory(TVMFFIToLLVM)

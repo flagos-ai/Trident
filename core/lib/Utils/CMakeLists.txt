@@ -9,11 +9,11 @@ add_mlir_library(
   FinalizeTVMFFI
   MLIRRegisterAllDialects
   MLIRRegisterAllExtensions
-  MLIRRegisterAllPasses
   MLIRSCFDialect
   MLIRToLLVMIRTranslationRegistration
   OwnershipDeallocation
   TVMFFIDialect
+  TVMFFIToAscend
   TVMFFIToGPU
   TVMFFIToLLVM
   TridentPipeline)

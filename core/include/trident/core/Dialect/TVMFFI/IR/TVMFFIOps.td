@@ -42,6 +42,35 @@ def TVMFFI_AsOp : TVMFFI_Op<"as", [Pure]> {
   let assemblyFormat = "$object attr-dict `:` type($object) `->` type($result)";
 }
 
+def TVMFFI_AscendKernelOp
+    : TVMFFI_Op<"ascend_kernel", [Symbol]> {
+  let summary = "An embedded Ascend kernel binary and its launch ABI";
+  let description = [{
+    Stores one npubin and the metadata needed by the Ascend runtime.  Launch
+    operations refer to the entry through a nested symbol reference, matching
+    gpu.binary references without introducing GPU/NVVM operations.
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       ElementsAttr:$binary,
+                       StrAttr:$kernel_name,
+                       ArrayAttr:$argument_types,
+                       StrAttr:$mix_mode,
+                       I64Attr:$workspace_size,
+                       I64Attr:$lock_num,
+                       I64Attr:$lock_init_value,
+                       BoolAttr:$has_ffts,
+                       BoolAttr:$force_simt_only,
+                       BoolAttr:$use_v2_launch,
+                       BoolAttr:$enable_task_queue,
+                       BoolAttr:$auto_map_blocks,
+                       I64Attr:$shared_memory_size,
+                       I64Attr:$physical_block_count);
+  let assemblyFormat = [{
+    $sym_name $binary attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def TVMFFI_CallOp : TVMFFI_Op<"call", [TVMFFI_ObjectOwnershipOpInterface]> {
   let summary = "Call a TVM FFI function defined in the current module";
   let arguments = (ins FlatSymbolRefAttr:$callee,

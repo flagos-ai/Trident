@@ -7,12 +7,14 @@ import copy
 import gc
 import inspect
 import operator
+import os
 from collections.abc import Callable, Hashable, Sequence
 from typing import Any, Final, TypeAlias
 
 import torch
 import tvm_ffi
 import tvm_ffi.utils
+from triton._flagtree_backend import FLAGTREE_BACKEND
 from torch.export._trace import _extract_fake_inputs
 from torch.export.graph_signature import (
     InputKind,
@@ -33,11 +35,11 @@ from trident.core import (
 from trident.core.dialects import (
     func,
     llvm,
-    transform,
 )
 from trident.core.dialects import (
     tvm_ffi as tvm_ffi_d,
 )
+from trident.core.dialects.transform import interpreter as transform_interpreter
 from trident.core.execution_engine import ExecutionEngine
 from trident.ffi import Exception
 
@@ -110,7 +112,7 @@ class TridentGraphModule:
                 value=ir.IntegerAttr.get(i64_ty, 1),
             ),
             elem_type=ir.TypeAttr.get(
-                llvm.StructType.get_literal([i32_ty, i32_ty, i64_ty], context=self.ctx),
+                llvm.StructType.get_literal([i32_ty, i32_ty, i64_ty]),
             ),
         )
         llvm.store(self._build_tvmffi_any(index, payload), slot)
@@ -141,7 +143,7 @@ class TridentGraphModule:
                             sub_mod.operation.attributes[attr_name]
                         )
 
-                transform.interpreter.copy_symbols_and_merge_into(
+                transform_interpreter.copy_symbols_and_merge_into(
                     combined.operation,
                     sub_mod.operation,
                 )
@@ -311,6 +313,11 @@ class TridentGraphModule:
             aten_graph=True,
             assume_static_by_default=not self.dynamic,
         )(*trace_args, **kwargs)
+        dump_fx = os.getenv("TRIDENT_DUMP_FX", "0") == "1"
+        if dump_fx:
+            print("")
+            print("[Trident] Dynamo export graph:")
+            print(exported_gm.graph)
         dynamic_shapes = self._retrieve_dynamic_shapes(exported_gm, trace_args, kwargs)
         trace_gm = copy.deepcopy(exported_gm)
 
@@ -321,9 +328,26 @@ class TridentGraphModule:
             dynamic_shapes=dynamic_shapes,
             strict=False,
         )
+        if dump_fx:
+            print("[Trident] torch.export graph:")
+            print(exported_program.graph)
         warmup_result = torch.fx.Interpreter(exported_program.module()).run(
             *pytree.tree_leaves(exported_program.example_inputs)
         )
+        if dump_fx:
+            print(
+                "[Trident] warmup outputs:",
+                [
+                    (
+                        tuple(value.shape),
+                        value.dtype,
+                        value.device,
+                    )
+                    if isinstance(value, torch.Tensor)
+                    else value
+                    for value in pytree.tree_leaves(warmup_result)
+                ],
+            )
 
         self._output_spec = pytree.tree_structure(warmup_result)
 
@@ -563,9 +587,14 @@ class TridentGraphModule:
 
         # 2. Lower semantic TVM FFI and GPU IR to LLVM.
         with self.ctx:
-            passmanager.PassManager.parse(
-                "builtin.module(trident-lowering-pipeline)",
-            ).run(combined.operation)
+            pipeline = (
+                "trident-ascend-lowering-pipeline"
+                if FLAGTREE_BACKEND == "ascend"
+                else "trident-lowering-pipeline"
+            )
+            passmanager.PassManager.parse(f"builtin.module({pipeline})").run(
+                combined.operation
+            )
 
         # 3. Build the LLVM dispatcher that tries each sub-function.
         self._build_llvm_dispatcher(combined)

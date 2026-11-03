@@ -32,6 +32,12 @@
 
 namespace trident::dlpack {
 
+#ifdef TRIDENT_MLIR_HAS_PROPERTY_REF
+using PropertyRef = mlir::PropertyRef;
+#else
+using PropertyRef = mlir::OpaqueProperties;
+#endif
+
 void DLPackDialect::initialize() {
   addTypes<
 #define GET_TYPEDEF_LIST
@@ -45,7 +51,7 @@ void DLPackDialect::initialize() {
 
 mlir::LogicalResult TensorDataOp::inferReturnTypes(
     mlir::MLIRContext *context, std::optional<mlir::Location>, mlir::ValueRange,
-    mlir::DictionaryAttr, mlir::PropertyRef, mlir::RegionRange,
+    mlir::DictionaryAttr, PropertyRef, mlir::RegionRange,
     llvm::SmallVectorImpl<mlir::Type> &inferredReturnTypes) {
   inferredReturnTypes.push_back(mlir::LLVM::LLVMPointerType::get(context));
   return mlir::success();

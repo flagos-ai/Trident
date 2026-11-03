@@ -1,0 +1,17 @@
+add_mlir_conversion_library(
+  TVMFFIToAscend
+  TVMFFIToAscend.cc
+  DEPENDS
+  MLIRConversionPassIncGen
+  LINK_LIBS
+  PUBLIC
+  ConversionUtils
+  DLPackDialect
+  MLIRArithDialect
+  MLIRControlFlowDialect
+  MLIRFuncDialect
+  MLIRIR
+  MLIRLLVMDialect
+  MLIRPass
+  MLIRTransformUtils
+  TVMFFIDialect)
