@@ -589,11 +589,15 @@ class TridentFxImporter:
             if parameter.name in values
         }
         config_kwargs = {} if best_config is None else best_config.all_kwargs()
-        runtime_kwargs = {
+        runtime_kwargs: dict[str, Any] = {
             "debug": binder_args.get("debug", function.debug)
             or triton.knobs.runtime.debug,
-            "instrumentation_mode": triton.knobs.compilation.instrumentation_mode,
         }
+        instrumentation_mode = getattr(
+            triton.knobs.compilation, "instrumentation_mode", None
+        )
+        if instrumentation_mode is not None:
+            runtime_kwargs["instrumentation_mode"] = instrumentation_mode
         bound_args, specialization, options = binder(
             **binder_args, **config_kwargs, **runtime_kwargs
         )
