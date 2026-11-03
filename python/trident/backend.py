@@ -315,6 +315,7 @@ class TridentGraphModule:
         )(*trace_args, **kwargs)
         dump_fx = os.getenv("TRIDENT_DUMP_FX", "0") == "1"
         if dump_fx:
+            print("")
             print("[Trident] Dynamo export graph:")
             print(exported_gm.graph)
         dynamic_shapes = self._retrieve_dynamic_shapes(exported_gm, trace_args, kwargs)
