@@ -34,11 +34,11 @@ from trident.core import (
 from trident.core.dialects import (
     func,
     llvm,
-    transform,
 )
 from trident.core.dialects import (
     tvm_ffi as tvm_ffi_d,
 )
+from trident.core.dialects.transform import interpreter as transform_interpreter
 from trident.core.execution_engine import ExecutionEngine
 from trident.ffi import Exception
 
@@ -142,7 +142,7 @@ class TridentGraphModule:
                             sub_mod.operation.attributes[attr_name]
                         )
 
-                transform.interpreter.copy_symbols_and_merge_into(
+                transform_interpreter.copy_symbols_and_merge_into(
                     combined.operation,
                     sub_mod.operation,
                 )
