@@ -22,6 +22,16 @@ from ..local import Local
 from .base import GuardCode
 
 
+_DLPACK_EXT_DEVICE_TYPE = 12
+
+
+def _dlpack_device_type(device_type: str) -> int:
+    privateuse1 = torch._C._get_privateuse1_backend_name()
+    if device_type in (privateuse1, "privateuseone"):
+        return _DLPACK_EXT_DEVICE_TYPE
+    return tvm_ffi.device(device_type).dlpack_device_type()
+
+
 class DynamoAttributeAbsentCode(GuardCode):
     def __init__(
         self,
@@ -195,7 +205,7 @@ class TensorDeviceCode(GuardCode):
         metadata = tvm_ffi_d.tensor_device(tensor)
         i1 = ir.IntegerType.get_signless(1, context)
         [index, type_code] = metadata
-        device_type = tvm_ffi.device(self.device.type).dlpack_device_type()
+        device_type = _dlpack_device_type(self.device.type)
         return reduce(
             arith.andi,
             [
