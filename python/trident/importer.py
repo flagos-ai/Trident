@@ -610,9 +610,15 @@ class TridentFxImporter:
             kernel_key_cache, specialization, options
         )
         kernel: triton.compiler.CompiledKernel | None = kernel_cache.get(key)
-        assert kernel is not None, (
-            f"failed to get compiled Triton kernel for {node.name}"
-        )
+        if kernel is None:
+            kernel = function.run(
+                grid=(1,),
+                warmup=True,
+                **binder_args,
+                **config_kwargs,
+                **runtime_kwargs,
+            )
+        assert kernel is not None, f"failed to compile Triton kernel for {node.name}"
         grids = node.kwargs["grid"]
         if configs and best_config is not None:
             grid = grids[configs.index(best_config)]
