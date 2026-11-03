@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import gc
 import inspect
 import operator
 import os
-from collections.abc import Callable, Hashable, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
 from typing import Any, Final, TypeAlias
 
 import torch
@@ -52,6 +53,23 @@ RuntimeValue: TypeAlias = Any
 RuntimeArguments: TypeAlias = tuple[RuntimeValue, ...]
 RuntimeKeywords: TypeAlias = dict[str, RuntimeValue]
 RuntimeCallable: TypeAlias = Callable[..., RuntimeValue]
+
+
+@contextlib.contextmanager
+def _enable_ascend_triton_capture() -> Iterator[None]:
+    """Let Dynamo recognize FlagTree Triton kernels on Ascend during export."""
+    if FLAGTREE_BACKEND != "ascend":
+        yield
+        return
+
+    from torch.utils import _triton
+
+    original_has_triton = _triton.has_triton
+    _triton.has_triton = lambda: True
+    try:
+        yield
+    finally:
+        _triton.has_triton = original_has_triton
 
 
 class TridentGraphModule:
@@ -308,11 +326,12 @@ class TridentGraphModule:
         trace_args: RuntimeArguments = tuple(args)
         bound: inspect.BoundArguments = signature.bind(*trace_args, **kwargs)
         bound.apply_defaults()
-        exported_gm, gs = torch._dynamo.export(
-            self.fn,
-            aten_graph=True,
-            assume_static_by_default=not self.dynamic,
-        )(*trace_args, **kwargs)
+        with _enable_ascend_triton_capture():
+            exported_gm, gs = torch._dynamo.export(
+                self.fn,
+                aten_graph=True,
+                assume_static_by_default=not self.dynamic,
+            )(*trace_args, **kwargs)
         dump_fx = os.getenv("TRIDENT_DUMP_FX", "0") == "1"
         if dump_fx:
             print("")
