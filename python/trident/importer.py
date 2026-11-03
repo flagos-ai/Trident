@@ -468,6 +468,11 @@ class TridentFxImporter:
             operands[name] = (specialization_attr, clone)
 
         launch_grid = [native(self.argument(value)) for value in grid]
+        if len(launch_grid) > 3:
+            raise ValueError(
+                f"Triton launch grid must have at most 3 dimensions, got {len(launch_grid)}"
+            )
+        launch_grid.extend(native_constant(1) for _ in range(3 - len(launch_grid)))
         launch_target = self._import_binary(kernel, node, loc)
         tvm_ffi_d.kernel_launch(
             launch_target,
