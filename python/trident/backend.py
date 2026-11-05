@@ -317,7 +317,7 @@ class TridentGraphModule:
                             inputs_results = inputs.results
                         scf.yield_(inputs_results)
                     with ir.InsertionPoint(branch.else_block):
-                        yielded = pure([rejection], result_types=[ffi_result_type])
+                        yielded = [pure(rejection, result_type=ffi_result_type)]
                         scf.yield_(yielded)
                     guards.yield_(branch.results)
                     guards_results = guards.results

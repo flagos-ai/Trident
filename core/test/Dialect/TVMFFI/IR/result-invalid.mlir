@@ -107,7 +107,7 @@ func.func private @invalid_object(!tvm_ffi.monad.result<!tvm_ffi.object>)
 // -----
 
 func.func @missing_payload(%ready: i1) {
-  // expected-error@+1 {{payload count must match Result count}}
+  // expected-error@+1 {{expected SSA operand}}
   %value = tvm_ffi.monad.pure : () -> !tvm_ffi.monad.result<!tvm_ffi.int>
 
   return
@@ -185,9 +185,9 @@ func.func @zero_fail_results() {
 
 // -----
 
-func.func @zero_pure_results() {
-  // expected-error@+1 {{requires at least one Result}}
-  "tvm_ffi.monad.pure"() : () -> ()
+func.func @zero_pure_results(%value: !tvm_ffi.int) {
+  // expected-error@+1 {{requires one result}}
+  "tvm_ffi.monad.pure"(%value) : (!tvm_ffi.int) -> ()
 
   return
 }
@@ -242,5 +242,21 @@ func.func @wrong_payload(%input: !tvm_ffi.monad.result<!tvm_ffi.int>) {
   // expected-error@+2 {{inferred type}}
   // expected-error@+1 {{failed to infer returned types}}
   %success, %value = tvm_ffi.monad.unpack %input : (!tvm_ffi.monad.result<!tvm_ffi.int>) -> (i1, !tvm_ffi.int)
+  return
+}
+
+// -----
+
+func.func @multiple_pure_operands(%value: !tvm_ffi.int) {
+  // expected-error@+1 {{requires a single operand}}
+  %result = "tvm_ffi.monad.pure"(%value, %value) : (!tvm_ffi.int, !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+  return
+}
+
+// -----
+
+func.func @multiple_pure_results(%value: !tvm_ffi.int) {
+  // expected-error@+1 {{requires one result}}
+  %results:2 = "tvm_ffi.monad.pure"(%value) : (!tvm_ffi.int) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>)
   return
 }

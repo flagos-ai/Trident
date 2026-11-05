@@ -404,7 +404,7 @@ class TridentFxImporter:
             )
             stack.bind(result_types, [launched])
             outputs = [operands[name][1] for name in names]
-            return stack.yield_(pure(outputs, result_types=result_types))
+            return stack.yield_([pure(value) for value in outputs or [constant(None)]])
 
     def _build_results(
         self, array: ir.Value, types: Sequence[ir.Type]
@@ -417,8 +417,7 @@ class TridentFxImporter:
                 values.extend(
                     stack.bind(result_types, container_get(array, index, type_))
                 )
-            results = pure(values, result_types=result_types)
-            return stack.yield_(results)
+            return stack.yield_([pure(value) for value in values or [constant(None)]])
 
     def _build_scalar(self, node: torch.fx.Node) -> ImportedValue:
         arguments = node.args
@@ -444,10 +443,7 @@ class TridentFxImporter:
         result_types = [tvm_ffi_d.ResultType.get(value_type(node.meta["val"]))]
         with BindScope(result_types, self.build_arguments(arguments)) as scope:
             payloads = scope.arguments
-            yielded = pure(
-                [self._scalar(node, payloads)],
-                result_types=result_types,
-            )
+            yielded = [pure(self._scalar(node, payloads), result_type=result_types[0])]
             scope.yield_(yielded)
             bound_results = scope.results
         [result] = bound_results
@@ -697,8 +693,7 @@ class TridentFxImporter:
                     values.append(self.argument(argument))
                     continue
                 values.extend(stack.bind(result_types, current))
-            results = pure(values, result_types=result_types)
-            return stack.yield_(results)
+            return stack.yield_([pure(value) for value in values or [constant(None)]])
 
     def import_program(
         self, program: torch.export.ExportedProgram, *, func_name: str
@@ -802,7 +797,7 @@ class TridentFxImporter:
                     tvm_ffi_d.TupleType.get([value.type for value in values]), values
                 )
             )
-            outputs.yield_(pure([payload], result_types=[result_type]))
+            outputs.yield_([pure(payload, result_type=result_type)])
             outputs_results = outputs.results
         success, payload = tvm_ffi_d.monad_unpack(outputs_results[0])
         success = tvm_ffi_d.to(success)
@@ -897,4 +892,11 @@ class TridentFxImporter:
                     value = pytree.tree_unflatten(leaves, structure)
                 self._bind(node, value)
             arguments = stack.bind(result_types, self.build_arguments(outputs))
-            return stack.yield_(pure(arguments, result_types=result_types))
+            return stack.yield_(
+                [
+                    pure(value, result_type=result_type)
+                    for value, result_type in zip(
+                        arguments or [constant(None)], result_types, strict=True
+                    )
+                ]
+            )

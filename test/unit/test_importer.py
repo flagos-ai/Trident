@@ -99,9 +99,7 @@ class ImporterTest(unittest.TestCase):
                     ) as scope:
                         payloads = scope.arguments
                         self.assertEqual(len(payloads), input_count)
-                        values = (
-                            pure([constant(7)] * output_count) if output_count else []
-                        )
+                        values = [pure(constant(7)) for _ in range(output_count)]
                         scope.yield_(values)
                         bound_results = scope.results
 
@@ -143,7 +141,7 @@ class ImporterTest(unittest.TestCase):
                     with ScopeStack() as stack:
                         for _ in range(count):
                             [value] = stack.bind(types, results)
-                            results = pure([value])
+                            results = [pure(value)]
                         results = stack.yield_(results)
                     self.assertEqual(ir.InsertionPoint.current.block, block)
                     func.return_(results)
@@ -154,10 +152,12 @@ class ImporterTest(unittest.TestCase):
             with ir.InsertionPoint(module.body):
                 with (
                     self.assertRaisesRegex(RuntimeError, "stop"),
-                    BindScope(make_result_types([]), pure([])) as outer,
+                    BindScope(make_result_types([]), [pure(constant(None))]) as outer,
                 ):
-                    with BindScope(make_result_types([]), pure([])) as inner:
-                        inner.yield_(pure([]))
+                    with BindScope(
+                        make_result_types([]), [pure(constant(None))]
+                    ) as inner:
+                        inner.yield_([pure(constant(None))])
                     outer.yield_(inner.results)
                     raise RuntimeError("stop")
                 self.assertEqual(ir.InsertionPoint.current.block, module.body)
@@ -181,9 +181,7 @@ class ImporterTest(unittest.TestCase):
                     self.fail("invalid inputs entered the bind body")
                 self.assertEqual(len(module.body.operations), count)
                 none = constant(None)
-                results = pure(
-                    [none, none, value, none], result_types=[unit, unit, payload, unit]
-                )
+                results = [pure(value) for value in (none, none, value, none)]
                 with BindScope([payload], results) as scope:
                     payloads = scope.arguments
                     first, second, argument, last = payloads
@@ -191,7 +189,7 @@ class ImporterTest(unittest.TestCase):
                         [first.type, second.type, last.type], [unit.payload_type] * 3
                     )
                     self.assertEqual(argument.type, integer)
-                    scope.yield_(pure([argument], result_types=[payload]))
+                    scope.yield_([pure(argument, result_type=payload)])
             self.assertTrue(module.operation.verify())
             parsed = ir.Module.parse(f"{module}")
             parsed_bind = next(
@@ -225,14 +223,14 @@ class ImporterTest(unittest.TestCase):
                 with BindScope([unit], first) as scope:
                     extracted = table.extract(("values", 0))
                     with BindScope([unit], extracted) as nested:
-                        nested.yield_(pure([]))
+                        nested.yield_([pure(constant(None))])
                         nested_results = nested.results
 
                     scope.yield_(nested_results)
 
                 extracted = table.extract(("values", 0))
                 with BindScope([unit], extracted) as scope:
-                    scope.yield_(pure([]))
+                    scope.yield_([pure(constant(None))])
 
                 func.return_([])
 
@@ -260,10 +258,8 @@ class ImporterTest(unittest.TestCase):
                     with ir.InsertionPoint(child):
                         values = table.extract(("values", 0))
                         with BindScope([unit], values) as scope:
-                            scope.yield_(pure([]))
-
+                            scope.yield_([pure(constant(None))])
                         scf.yield_([])
-
                 func.return_([])
 
             self.assertEqual(self._extraction_count(module), 2)
@@ -283,7 +279,7 @@ class ImporterTest(unittest.TestCase):
                 element = tvm_ffi_d.array_get(created, native(constant(0)))
                 self.assertEqual(element.type, integer.type)
                 with BindScope(
-                    [tvm_ffi_d.ResultType.get(array_type)], pure([created])
+                    [tvm_ffi_d.ResultType.get(array_type)], [pure(created)]
                 ) as bound:
                     bound_arguments = bound.arguments
                     [array] = bound_arguments
@@ -308,8 +304,8 @@ class ImporterTest(unittest.TestCase):
                                 self.assertEqual(
                                     element.type.payload_type, integer.type
                                 )
-                                widened.yield_(pure([value]))
-                    bound.yield_(pure([array]))
+                                widened.yield_([pure(value)])
+                    bound.yield_([pure(array)])
             self.assertTrue(importer.module.operation.verify())
 
     def test_container_inference(self) -> None:
@@ -409,7 +405,7 @@ class ImporterTest(unittest.TestCase):
                                 bound_arguments[-1].type, tvm_ffi_d.NoneType
                             )
                             bound.yield_(
-                                pure([constant(None)], result_types=[none_result])
+                                [pure(constant(None), result_type=none_result)]
                             )
                     self.assertTrue(importer.module.operation.verify())
                     calls = collect(importer.module.operation)
@@ -476,7 +472,7 @@ class ImporterTest(unittest.TestCase):
                 function = func.FuncOp("semantic", ([tensor, string], []))
                 with ir.InsertionPoint(function.add_entry_block()):
                     checked_call("test.identity", [function.arguments[0]], tensor)
-                    pure([tvm_ffi_d.exception("GuardMatch")])
+                    pure(tvm_ffi_d.exception("GuardMatch"))
                     importer.build_arguments(
                         [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
                     )
@@ -539,46 +535,50 @@ class ImporterTest(unittest.TestCase):
             union = tvm_ffi_d.UnionType.get([boxed, tvm_ffi_d.NoneType.get()])
             with ir.InsertionPoint(module.body):
                 value = constant(7)
-                inferred = pure([value])
-                self.assertEqual(inferred[0].type.payload_type, boxed)
-                self.assertEqual(make_result_types(iter([integer])), [inferred[0].type])
+                inferred = pure(value)
+                self.assertEqual(inferred.type.payload_type, boxed)
+                self.assertEqual(make_result_types(iter([integer])), [inferred.type])
                 with self.assertRaisesRegex(ValueError, "C ABI"):
                     make_result_types([ir.IntegerType.get_signless(64)])
                 with self.assertRaisesRegex(ValueError, "C ABI"):
-                    pure([native(value)])
+                    pure(native(value))
                 string = constant("text")
-                [string_result] = pure([string])
+                string_result = pure(string)
                 self.assertIsInstance(string.type, tvm_ffi_d.StrType)
                 self.assertEqual(string_result.type.payload_type, string.type)
                 self.assertEqual(make_result_types([string.type]), [string_result.type])
-                empty = pure([])
-                self.assertIsInstance(empty[0].type.payload_type, tvm_ffi_d.NoneType)
+                empty = pure(constant(None))
+                self.assertIsInstance(empty.type.payload_type, tvm_ffi_d.NoneType)
                 for target in (boxed, tvm_ffi_d.AnyType.get(), union):
                     with self.subTest(target=target):
                         result_types = make_result_types([target])
-                        [result] = pure([value], result_types=result_types)
+                        result = pure(value, result_type=result_types[0])
                         operation = result.owner.opview
-                        self.assertEqual(operation.values[0].type, target)
-                        widened = operation.values[0]
+                        self.assertEqual(operation.value.type, target)
+                        widened = operation.value
                         self.assertIsInstance(widened.owner.opview, tvm_ffi_d.UpcastOp)
                         narrowed = tvm_ffi_d.downcast(boxed, widened)
                         self.assertEqual(narrowed.type, boxed)
                         self.assertIsInstance(
                             narrowed.owner.opview, tvm_ffi_d.DowncastOp
                         )
-                with self.assertRaisesRegex(AssertionError, "payload count"):
-                    pure([value, value], result_types=make_result_types([integer]))
+                for invalid in ([], [value], [value, value]):
+                    with (
+                        self.subTest(invalid=invalid),
+                        self.assertRaisesRegex(AssertionError, "one MLIR value"),
+                    ):
+                        pure(invalid)
                 with self.assertRaisesRegex(AssertionError, "payload type"):
                     pure(
-                        [value],
-                        result_types=make_result_types([tvm_ffi_d.FloatType.get()]),
+                        value,
+                        result_type=tvm_ffi_d.ResultType.get(tvm_ffi_d.FloatType.get()),
                     )
                 with (
                     self.assertRaisesRegex(RuntimeError, "construction failed"),
-                    BindScope(make_result_types([integer]), inferred) as bound,
+                    BindScope(make_result_types([integer]), [inferred]) as bound,
                 ):
                     bound_arguments = bound.arguments
-                    bound.yield_(pure(bound_arguments))
+                    bound.yield_([pure(value) for value in bound_arguments])
                     raise RuntimeError("construction failed")
                 self.assertEqual(ir.InsertionPoint.current.block, module.body)
             self.assertTrue(module.operation.verify())
@@ -597,8 +597,12 @@ class ImporterTest(unittest.TestCase):
                     for child in (conditional.then_block, conditional.else_block):
                         with ir.InsertionPoint(child):
                             with ScopeStack() as inner:
-                                values = inner.bind(types, pure(payloads))
-                                results = inner.yield_(pure(values))
+                                values = inner.bind(
+                                    types, [pure(value) for value in payloads]
+                                )
+                                results = inner.yield_(
+                                    [pure(value) for value in values]
+                                )
                                 self.assertEqual(ir.InsertionPoint.current.block, child)
                                 # Draining an empty stack forwards without another terminator.
                                 self.assertEqual(inner.yield_(results), results)
@@ -625,7 +629,7 @@ class ImporterTest(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "stop"),
                     ScopeStack() as stack,
                 ):
-                    scope = stack.push(BindScope(types, pure([constant(1)])))
+                    scope = stack.push(BindScope(types, [pure(constant(1))]))
                     raise RuntimeError("stop")
                 self.assertEqual(ir.InsertionPoint.current.block, module.body)
                 self.assertEqual(len(scope.block.operations), 0)

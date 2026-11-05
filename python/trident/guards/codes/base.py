@@ -41,12 +41,12 @@ class GuardCode:
     def build_result(self, tree: InputTable, context: ir.Context) -> list[ir.Value]:
         types = [tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())]
         if self.source is None or not self.requires_input:
-            return pure([self.build(tree, context)], result_types=types)
+            return [pure(self.build(tree, context))]
         with BindScope(types, tree.extract(self.source.subscripts)) as scope:
             payloads = scope.arguments
             [value] = payloads
             scoped = tree.with_value(self.source.subscripts, value)
-            scope.yield_(pure([self.build(scoped, context)], result_types=types))
+            scope.yield_([pure(self.build(scoped, context))])
             bound_results = scope.results
 
         return [*bound_results]

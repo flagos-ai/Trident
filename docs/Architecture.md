@@ -60,12 +60,14 @@ and retaining monadic Result values.
 `ir.py` shares scalar arithmetic builders, constants, metadata and Result
 construction with the guard frontend. Numeric constants use
 `tvm_ffi.constant.bool/int/float` directly. `make_result_types` wraps CABI
-payload types and supplies the None default for empty sequences. `pure` infers
-CABI Result types from semantic payloads unless the caller declares a boundary
+payload types and supplies the None default for empty sequences.
+`pure(value, result_type=...)` accepts one semantic payload and returns one Result
+value. It infers the CABI Result type unless the caller declares a boundary
 type, and widens semantic values at Any/Union boundaries. Neither Result nor
 container construction implicitly accepts native scalar types or values.
 Bind arguments retain their CABI types; consumers extract native scalars only
-within a local builder or at an interface requiring them. Empty successful sequences produce one explicit None payload. Shared `checked_call` and
+within a local builder or at an interface requiring them. No-data success uses
+`pure(constant(None))` explicitly. Shared `checked_call` and
 `container_get` builders construct registry calls and typed container extraction
 without depending on the graph importer. The shared `BINARY_ARITHMETIC` operation
 mappings also define the supported FX scalar operations; the importer only normalizes symbolic min/max
@@ -277,14 +279,21 @@ The lowering pipeline is:
 1. Run `lower-kernel-launch` to remove specialization attributes and construct
    guarded native launches with Monad success/rejection Results. Then run
    `convert-tvm-ffi-to-gpu` for stream lookup and GPU launches.
-2. Run `lower-tvm-ffi-monad`. Every `Result<T>` becomes a semantic
+2. Run the canonicalizer before `lower-tvm-ffi-monad`. Each bind input produced
+   directly by `monad.pure` is removed together with its body argument, whose
+   uses are replaced by the payload. Unknown inputs remain checked. With no
+   inputs left, the body replaces the bind, preserving effect order and yielded
+   Results unless bind/yield attributes would be lost. A false Bool payload is
+   still successful.
+   Then run `lower-tvm-ffi-monad`. Every `Result<T>` becomes a semantic
    `tuple<bool, any>`. Pure values become `(true, payload)` and failures become
    `(false, None)`. Binds become tuple extraction and `scf.if`; their typed
    payloads are restored only in successful branches. Function signatures,
    calls and control-flow arguments are converted together.
-3. Run the MLIR canonicalizer after monad lowering. Its TVM FFI tuple pattern
-   forwards elements through a single-use `tuple.construct`/`tuple.unconstruct`
-   pair, so transient Result tuples do not reach runtime Array construction.
+3. Run the MLIR canonicalizer after monad lowering. The `tuple.unconstruct`
+   folder forwards elements directly from `tuple.construct`, even with shared users.
+   Unused pure constructs are removed automatically, so transient Result tuples
+   do not reach runtime Array construction.
    Tuples that remain observable still retain their normal container lowering.
    Then run `decompose-tvm-ffi`. Preserve local `tvm_ffi.call` operations and
    convert semantic object types to their Base representations throughout
@@ -465,8 +474,9 @@ status without inspecting output payloads.
 
 Lowered Results are runtime Array tuples containing a boxed boolean and payload.
 Failure tuples contain None. Both the Python `pure` helper and low-level
-`MonadPureOp` borrow their inputs: tuple construction retains each occurrence,
-including repeated payloads. No transfer mode or ownership attribute is needed.
+`MonadPureOp` borrow one payload per call: tuple construction retains it,
+including when separate calls wrap the same payload. No transfer mode or
+ownership attribute is needed.
 
 `decompose-tvm-ffi` uses conversion legality rather than a parent-operation
 whitelist. Synchronous nested regions may borrow captured semantic references;

@@ -232,7 +232,7 @@ def checked_call(
     """Return an asserting invocation wrapped as a successful Result."""
     handle = tvm_ffi_d.FunctionGetGlobalOp(name).result
     call = tvm_ffi_d.FunctionCallOp(result, handle, arguments)
-    return pure([call.result])
+    return [pure(call.result)]
 
 
 def constant(value: Any) -> ir.Value:
@@ -290,7 +290,7 @@ def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Valu
         value = tvm_ffi_d.tuple_construct(type_, elements)
     else:
         value = tvm_ffi_d.array_create(type_, elements)
-    return pure([value])
+    return [pure(value)]
 
 
 def container_get(
@@ -318,7 +318,7 @@ def container_get(
     ) and not isinstance(payload, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType))
     if payload != target and not widening:
         value = tvm_ffi_d.downcast(target, value)
-    return pure([value], result_types=make_result_types([target]))
+    return [pure(value, result_type=tvm_ffi_d.ResultType.get(target))]
 
 
 def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
@@ -378,32 +378,18 @@ def native(value: ir.Value) -> ir.Value:
     return tvm_ffi_d.get(value)
 
 
-def pure(
-    values: Sequence[ir.Value], *, result_types: Sequence[ir.Type] | None = None
-) -> list[ir.Value]:
-    """Wrap borrowed payloads in successful Results with independent references."""
-    if result_types is None:
-        result_types = make_result_types(value.type for value in values)
-    assert result_types and all(
-        isinstance(type_, tvm_ffi_d.ResultType) for type_ in result_types
-    )
-    assert len(result_types) == (len(values) or 1), (
-        "payload count must match Result count"
-    )
-    if not values:
-        assert isinstance(result_types[0].payload_type, tvm_ffi_d.NoneType)
-        values = [constant(None)]
-    payloads: list[ir.Value] = []
-    for value, result in zip(values, result_types, strict=True):
-        target = result.payload_type
-        assert value.type == target or isinstance(
-            target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
-        ), "payload type must match Result type"
-        value = tvm_ffi_d.upcast(target, value)
-        payloads.append(value)
-    operation = tvm_ffi_d.MonadPureOp(result_types, payloads)
-
-    return [*operation.outputs]
+def pure(value: ir.Value, *, result_type: ir.Type | None = None) -> ir.Value:
+    """Wrap one borrowed payload in a successful Result."""
+    assert isinstance(value, ir.Value), "pure requires one MLIR value"
+    if result_type is None:
+        result_type = tvm_ffi_d.ResultType.get(value.type)
+    assert isinstance(result_type, tvm_ffi_d.ResultType)
+    target = result_type.payload_type
+    assert value.type == target or isinstance(
+        target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+    ), "payload type must match Result type"
+    payload = tvm_ffi_d.upcast(target, value)
+    return tvm_ffi_d.MonadPureOp(result_type, payload).output
 
 
 def select(condition: ir.Value, lhs: ir.Value, rhs: ir.Value) -> ir.Value:

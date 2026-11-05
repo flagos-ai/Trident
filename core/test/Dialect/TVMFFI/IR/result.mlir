@@ -32,8 +32,9 @@ func.func @results(%value: i64, %ready: i1) -> !tvm_ffi.monad.result<!tvm_ffi.in
   %input:2 = scf.if %ready -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>) {
     %input_pure_none = tvm_ffi.constant.none
     %value_boxed = tvm_ffi.to %value : i64 -> !tvm_ffi.int
-    %input_pure:2 = tvm_ffi.monad.pure %value_boxed, %input_pure_none : (!tvm_ffi.int, !tvm_ffi.none) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>)
-    scf.yield %input_pure#0, %input_pure#1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>
+    %input_pure_0 = tvm_ffi.monad.pure %value_boxed : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+    %input_pure_1 = tvm_ffi.monad.pure %input_pure_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+    scf.yield %input_pure_0, %input_pure_1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>
   } else {
     %input_fail:2 = tvm_ffi.monad.fail : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>
     scf.yield %input_fail#0, %input_fail#1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>

@@ -252,7 +252,7 @@ class BindingsTest(unittest.TestCase):
         with context, ir.Location.unknown(context):
             module = ir.Module.create()
             with ir.InsertionPoint(module.body):
-                [result] = pure([constant(7)])
+                result = pure(constant(7))
                 unpacked = tvm_ffi_d.MonadUnpackOp(result)
                 self.assertEqual(unpacked.success.type, ir.IntegerType.get_signless(1))
                 self.assertEqual(unpacked.value.type, tvm_ffi_d.AnyType.get())

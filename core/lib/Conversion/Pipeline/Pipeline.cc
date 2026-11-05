@@ -45,6 +45,8 @@ class TridentLoweringPipelinePass final
     // Materialize lexical cleanup before inlining can merge its block scopes.
     pm.addPass(tvm_ffi::createLowerKernelLaunch());
     pm.addPass(createConvertTVMFFIToGPU());
+    // Simplify continuations while Result success and payloads are explicit.
+    pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(tvm_ffi::createDecomposeTVMFFI());

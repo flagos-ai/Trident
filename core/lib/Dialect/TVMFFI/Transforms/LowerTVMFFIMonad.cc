@@ -63,11 +63,8 @@ public:
   mlir::LogicalResult
   matchAndRewrite(MonadPureOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    llvm::SmallVector<mlir::Value> results;
-    for (mlir::Value const payload : adaptor.getValues()) {
-      results.push_back(makeTuple(rewriter, op.getLoc(), true, payload));
-    }
-    rewriter.replaceOp(op, results);
+    rewriter.replaceOp(
+        op, makeTuple(rewriter, op.getLoc(), true, adaptor.getValue()));
     return mlir::success();
   }
 };

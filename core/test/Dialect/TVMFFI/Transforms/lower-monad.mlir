@@ -56,8 +56,9 @@ func.func @empty() {
 // any number of Results.
 func.func @no_inputs(%value: !tvm_ffi.int) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>) {
   %output:2 = tvm_ffi.monad.bind : () -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>) {
-    %pure:2 = tvm_ffi.monad.pure %value, %value : (!tvm_ffi.int, !tvm_ffi.int) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>)
-    tvm_ffi.monad.yield %pure#0, %pure#1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>
+    %pure_0 = tvm_ffi.monad.pure %value : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+    %pure_1 = tvm_ffi.monad.pure %value : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+    tvm_ffi.monad.yield %pure_0, %pure_1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>
   }
   return %output#0, %output#1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.int>
 }
@@ -136,8 +137,10 @@ func.func @aggregate(%value: i64, %ready: i1) -> !tvm_ffi.monad.result<!tvm_ffi.
 // CHECK: %[[TUPLE_2:[a-zA-Z0-9_$.-]+]] = tvm_ffi.tuple.construct(%[[CONSTANT_2]], %[[UPCAST_2]]) : (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 // CHECK: return %[[TUPLE_0]], %[[TUPLE_1]], %[[TUPLE_2]] : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
 func.func @construct_multiple(%value: !tvm_ffi.int, %none: !tvm_ffi.none, %function: !tvm_ffi.c.function) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.c.function>) {
-  %results:3 = tvm_ffi.monad.pure %value, %none, %function : (!tvm_ffi.int, !tvm_ffi.none, !tvm_ffi.c.function) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.c.function>)
-  return %results#0, %results#1, %results#2 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.c.function>
+  %results_0 = tvm_ffi.monad.pure %value : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+  %results_1 = tvm_ffi.monad.pure %none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+  %results_2 = tvm_ffi.monad.pure %function : (!tvm_ffi.c.function) -> !tvm_ffi.monad.result<!tvm_ffi.c.function>
+  return %results_0, %results_1, %results_2 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>, !tvm_ffi.monad.result<!tvm_ffi.c.function>
 }
 
 // CHECK-LABEL: func.func @failures() -> (!tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>, !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>) {
@@ -184,8 +187,9 @@ func.func private @helper(%tensor: !tvm_ffi.monad.result<!tvm_ffi.c.tensor>, %sc
     %value = tvm_ffi.get %value_boxed : !tvm_ffi.int -> i64
     %sum = arith.addi %value, %capture : i64
     %sum_boxed = tvm_ffi.to %sum : i64 -> !tvm_ffi.int
-    %pure:2 = tvm_ffi.monad.pure %payload, %sum_boxed : (!tvm_ffi.c.tensor, !tvm_ffi.int) -> (!tvm_ffi.monad.result<!tvm_ffi.c.tensor>, !tvm_ffi.monad.result<!tvm_ffi.int>)
-    tvm_ffi.monad.yield %pure#0, %pure#1 : !tvm_ffi.monad.result<!tvm_ffi.c.tensor>, !tvm_ffi.monad.result<!tvm_ffi.int>
+    %pure_0 = tvm_ffi.monad.pure %payload : (!tvm_ffi.c.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.c.tensor>
+    %pure_1 = tvm_ffi.monad.pure %sum_boxed : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+    tvm_ffi.monad.yield %pure_0, %pure_1 : !tvm_ffi.monad.result<!tvm_ffi.c.tensor>, !tvm_ffi.monad.result<!tvm_ffi.int>
   }
   return %output#0, %output#1 : !tvm_ffi.monad.result<!tvm_ffi.c.tensor>, !tvm_ffi.monad.result<!tvm_ffi.int>
 }
@@ -213,8 +217,9 @@ func.func @nested_mixed(%input: !tvm_ffi.monad.result<!tvm_ffi.int>, %unit: !tvm
   ^bb_unit(%unit_payload: !tvm_ffi.none):
       %result_none = tvm_ffi.constant.none
       %payload_reboxed = tvm_ffi.to %payload : i64 -> !tvm_ffi.int
-      %result:2 = tvm_ffi.monad.pure %payload_reboxed, %result_none : (!tvm_ffi.int, !tvm_ffi.none) -> (!tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>)
-      tvm_ffi.monad.yield %result#0, %result#1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>
+      %result_0 = tvm_ffi.monad.pure %payload_reboxed : (!tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.int>
+      %result_1 = tvm_ffi.monad.pure %result_none : (!tvm_ffi.none) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+      tvm_ffi.monad.yield %result_0, %result_1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>
     }
     tvm_ffi.monad.yield %inner#0, %inner#1 : !tvm_ffi.monad.result<!tvm_ffi.int>, !tvm_ffi.monad.result<!tvm_ffi.none>
   }

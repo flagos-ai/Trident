@@ -397,7 +397,8 @@ func.func @nested_opaque(%condition: i1, %tuple: !tvm_ffi.tuple<!tvm_ffi.tensor>
 // CHECK-DAG: tvm_ffi.ObjectDecRef %[[FIRST]] : !tvm_ffi.c.array
 // CHECK-NEXT: return
 func.func @pure_borrows(%input: !tvm_ffi.tensor) {
-  %results:2 = tvm_ffi.monad.pure %input, %input : (!tvm_ffi.tensor, !tvm_ffi.tensor) -> (!tvm_ffi.monad.result<!tvm_ffi.tensor>, !tvm_ffi.monad.result<!tvm_ffi.tensor>)
+  %results_0 = tvm_ffi.monad.pure %input : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
+  %results_1 = tvm_ffi.monad.pure %input : (!tvm_ffi.tensor) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
   return
 }
 

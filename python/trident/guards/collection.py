@@ -46,7 +46,7 @@ class Guards:
         type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
         code = next(codes, None)
         if code is None:
-            return pure([constant(True)], result_types=[type_])
+            return [pure(constant(True))]
         with BindScope(
             [type_], code.build_result(builder.build(arguments), context)
         ) as scope:
@@ -57,7 +57,7 @@ class Guards:
                 yielded = self._build_checks(codes, builder, arguments, context)
                 scf.yield_(yielded)
             with ir.InsertionPoint(branch.else_block):
-                yielded = pure([constant(False)], result_types=[type_])
+                yielded = [pure(constant(False))]
                 scf.yield_(yielded)
             scope.yield_(branch.results)
             bound_results = scope.results

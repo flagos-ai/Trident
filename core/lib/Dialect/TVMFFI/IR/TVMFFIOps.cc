@@ -106,6 +106,18 @@ mlir::OpFoldResult ToOp::fold(FoldAdaptor) {
                                                         : mlir::OpFoldResult{};
 }
 
+mlir::LogicalResult
+TupleUnconstructOp::fold(FoldAdaptor,
+                         llvm::SmallVectorImpl<mlir::OpFoldResult> &results) {
+  TupleConstructOp construct = getContainer().getDefiningOp<TupleConstructOp>();
+  // Empty projections are removed by DCE, not an in-place fold.
+  if (!construct || getElements().empty()) {
+    return mlir::failure();
+  }
+  llvm::append_range(results, construct.getElements());
+  return mlir::success();
+}
+
 mlir::OpFoldResult UpcastOp::fold(FoldAdaptor) {
   return getValue().getType() == getType() ? getValue() : mlir::OpFoldResult{};
 }

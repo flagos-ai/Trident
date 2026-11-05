@@ -25,6 +25,7 @@ from trident.ir import (
     BindScope,
     ScopeStack,
     array_type,
+    constant,
     container_get,
     make_result_types,
     pure,
@@ -97,9 +98,7 @@ class InputTable:
         node = self.node(path)
         assert node is not None, f"input cannot be resolved: {path}"
         if node.value is not None:
-            return pure(
-                [node.value], result_types=[tvm_ffi_d.ResultType.get(node.type)]
-            )
+            return [pure(node.value, result_type=tvm_ffi_d.ResultType.get(node.type))]
         else:
             assert len(path) > 1, f"input cannot be resolved: {path}"
             types = [tvm_ffi_d.ResultType.get(node.type)]
@@ -127,7 +126,12 @@ class InputTable:
                 else:
                     scope = stack.push(BindScope(types, self.extract(path)))
                     values.extend(scope.arguments)
-            results = pure(values, result_types=types)
+            results = [
+                pure(value, result_type=result_type)
+                for value, result_type in zip(
+                    values or [constant(None)], types, strict=True
+                )
+            ]
             return stack.yield_(results)
 
     def input_paths(self) -> list[tuple[int | str, ...]]:

@@ -116,9 +116,10 @@ termination and matching Result types.
 returning a complete Result without consuming a callback. `build_arguments`
 constructs nested list/tuple arguments in order and returns Results, leaving
 operator execution and subsequent graph traversal to its caller. Keep pure
-argument prefixes iterative. `pure` borrows semantic payloads and constructs independent
-Results, including repeated payload occurrences. It infers CABI types and
-widens Any/Union payloads at declared boundaries. `make_result_types` accepts
+argument prefixes iterative. `pure(value, result_type=...)` borrows one semantic
+payload and returns one independent Result. Wrap multiple payloads with separate
+calls. Infer the Result type from the value except at declared Any/Union
+boundaries, where `result_type` requests widening. `make_result_types` accepts
 CABI types directly; native scalar payloads and container elements are rejected.
 Use `constant` for all scalar constants and the shared arithmetic and metadata
 builders for frontend computations. Every ordinary builder returns TVM FFI
@@ -163,7 +164,7 @@ explicitly bind their construction Results rather than passing continuation
 callbacks. Bind accepts independent input and output counts, including zero.
 An empty input list executes the body unconditionally; an empty output list is
 for effects only and ends with an empty `monad.yield`. The Python `BindScope` builder
-supports the same counts; `pure([])` still constructs the existing None Result.
+supports the same counts; `pure(constant(None))` explicitly constructs a None Result.
 
 FFI functions declare exactly one C ABI payload type. `tvm_ffi.return` takes
 a boxed success boolean and an Any payload. Pack multiple values into a semantic
@@ -184,6 +185,11 @@ types: for example, `tvm_ffi_d.TensorType.get()` and
 signless width. Build unions with `UnionType.get(types, context=...)`; invalid,
 duplicate or cross-context members raise `ValueError`. Type printing is for IR
 text and diagnostics, not type dispatch.
+
+Run the canonicalizer before monad lowering. It substitutes `pure` payloads for
+bind arguments, leaving unknown inputs checked. Zero-input bodies replace their
+binds unless bind/yield attributes would be lost. Effect order and yielded
+Results are preserved; a false Bool payload is still successful.
 
 `lower-tvm-ffi-monad` converts Results to semantic `tuple<bool, any>` and
 binds to tuple extraction and `scf.if`. `tvm_ffi.monad.call` returns a complete

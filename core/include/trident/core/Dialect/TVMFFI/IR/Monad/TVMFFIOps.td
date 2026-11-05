@@ -24,6 +24,7 @@ def TVMFFI_MonadBindOp : TVMFFI_Op<"monad.bind", [SingleBlock, RecursiveMemoryEf
     /// Return the entry block, or null when the body is empty.
     ::mlir::Block *getEntryBlock();
   }];
+  let hasCanonicalizeMethod = 1;
   let hasVerifier = 1;
 }
 
@@ -46,16 +47,18 @@ def TVMFFI_MonadFailOp : TVMFFI_Op<"monad.fail", [Pure]> {
   let hasVerifier = 1;
 }
 
-def TVMFFI_MonadPureOp : TVMFFI_Op<"monad.pure", [Pure]> {
-  let summary = "Wrap payloads in successful Results";
+def TVMFFI_MonadPureOp : TVMFFI_Op<"monad.pure", [Pure,
+    TypesMatchWith<"payload type must match Result type", "output", "value",
+      "::llvm::cast<::trident::tvm_ffi::ResultType>($_self).getPayloadType()">
+]> {
+  let summary = "Wrap one payload in a successful Result";
   let description = [{
-    Borrows each payload occurrence. Lowering constructs independently owned
-    Result containers whose runtime storage retains the payloads.
+    Borrows the payload. Lowering constructs an independently owned Result
+    container whose runtime storage retains the payload.
   }];
-  let arguments = (ins Variadic<AnyType>:$values);
-  let results = (outs Variadic<TVMFFI_ResultType>:$outputs);
-  let assemblyFormat = "$values attr-dict `:` functional-type($values, $outputs)";
-  let hasVerifier = 1;
+  let arguments = (ins AnyType:$value);
+  let results = (outs TVMFFI_ResultType:$output);
+  let assemblyFormat = "$value attr-dict `:` functional-type(operands, results)";
 }
 
 def TVMFFI_MonadUnpackOp : TVMFFI_Op<"monad.unpack", [Pure,

@@ -298,7 +298,7 @@ class GuardExpressionVisitor:
                 value = reduce(
                     BINARY_ARITHMETIC[operator.and_], comparisons, constant(True)
                 )
-            results = pure([value], result_types=types)
+            results = [pure(value, result_type=types[0])]
             return stack.yield_(results)
 
     def _build_operands(self, operands: Sequence[ast.expr]) -> list[ir.Value]:
@@ -313,7 +313,12 @@ class GuardExpressionVisitor:
                 else:
                     scope = stack.push(BindScope(types, self.build(operand)))
                     values.extend(scope.arguments)
-            results = pure(values, result_types=types)
+            results = [
+                pure(value, result_type=result_type)
+                for value, result_type in zip(
+                    values or [constant(None)], types, strict=True
+                )
+            ]
             return stack.yield_(results)
 
     def _compare(self, operation: ast.cmpop, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
@@ -338,7 +343,7 @@ class GuardExpressionVisitor:
             # Entry guards validate untrusted tuple arity before the static
             # schema may be used; static type arity cannot validate the input.
             return checked_call("ffi.ArraySize", [value], tvm_ffi_d.IntType.get())
-        return pure([tvm_ffi_d.array_size(value)])
+        return [pure(tvm_ffi_d.array_size(value))]
 
     def _direct_fallback(self, node: ast.expr) -> bool:
         if isinstance(node, ast.Attribute):
@@ -461,7 +466,7 @@ class GuardExpressionVisitor:
         analysis = self._analyze(node)
         types = make_result_types([analysis.type])
         if analysis.pure:
-            return pure([self.value(node)], result_types=types)
+            return [pure(self.value(node), result_type=types[0])]
         source = Local.from_expression(node)
         if source is not None:
             assert self.tree is not None
@@ -473,11 +478,13 @@ class GuardExpressionVisitor:
                 payloads = scope.arguments
                 if analysis.fallback is not None:
                     *_, fallback = payloads
-                    results = pure([fallback], result_types=types)
+                    results = [pure(fallback, result_type=types[0])]
                 elif analysis.array_size:
                     results = self._container_size(payloads[0])
                 else:
-                    results = pure([self._evaluate(node, payloads)], result_types=types)
+                    results = [
+                        pure(self._evaluate(node, payloads), result_type=types[0])
+                    ]
                 scope.yield_(results)
                 bound_results = scope.results
             return [*bound_results]

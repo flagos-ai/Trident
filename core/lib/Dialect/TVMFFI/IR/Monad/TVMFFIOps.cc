@@ -14,6 +14,7 @@
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/OperationSupport.h>
+#include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Region.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/TypeRange.h>
@@ -46,6 +47,31 @@ mlir::Block *MonadBindOp::getEntryBlock() {
   return body.empty() ? nullptr : &body.front();
 }
 
+mlir::LogicalResult MonadBindOp::canonicalize(MonadBindOp op,
+                                              mlir::PatternRewriter &rewriter) {
+  mlir::Block &body = *op.getEntryBlock();
+  // Replacing block arguments and moving the body require a region rewrite.
+  for (auto [index, input] : llvm::enumerate(op.getInputs())) {
+    if (MonadPureOp pure = input.getDefiningOp<MonadPureOp>()) {
+      rewriter.replaceAllUsesWith(body.getArgument(index), pure.getValue());
+      rewriter.modifyOpInPlace(op, [&body, index, op] {
+        op->eraseOperand(index);
+        body.eraseArgument(index);
+      });
+      return mlir::success();
+    }
+  }
+  MonadYieldOp yield = mlir::cast<MonadYieldOp>(body.getTerminator());
+  if (!op.getInputs().empty() || !op->getAttrs().empty() ||
+      !yield->getAttrs().empty()) {
+    return mlir::failure();
+  }
+  rewriter.inlineBlockBefore(&body, op);
+  rewriter.replaceOp(op, yield.getValues());
+  rewriter.eraseOp(yield);
+  return mlir::success();
+}
+
 mlir::LogicalResult MonadBindOp::verify() {
   mlir::Block *entry = getEntryBlock();
   if (!getBody().hasOneBlock() || !entry || entry->empty()) {
@@ -76,19 +102,6 @@ mlir::LogicalResult MonadCallOp::verify() {
 mlir::LogicalResult MonadFailOp::verify() {
   return getOutputs().empty() ? emitOpError("requires at least one Result")
                               : mlir::success();
-}
-
-mlir::LogicalResult MonadPureOp::verify() {
-  llvm::SmallVector<mlir::Type> const payloads = getPayloadTypes(getOutputs());
-  if (getOutputs().empty()) {
-    return emitOpError("requires at least one Result");
-  } else if (getValues().size() != payloads.size()) {
-    return emitOpError("payload count must match Result count");
-  } else if (!llvm::equal(getValues().getTypes(), payloads)) {
-    return emitOpError("payload type must match Result type");
-  } else {
-    return mlir::success();
-  }
 }
 
 bool MonadUnpackOp::isCompatibleReturnTypes(mlir::TypeRange lhs,

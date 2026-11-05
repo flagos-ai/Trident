@@ -575,7 +575,7 @@ def TVMFFI_ToOp
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
 }
 
-def TVMFFI_TupleConstructOp : TVMFFI_Op<"tuple.construct", [
+def TVMFFI_TupleConstructOp : TVMFFI_Op<"tuple.construct", [Pure,
     RangedTypesMatchWith<"elements must match the tuple types", "result", "elements",
       "::llvm::cast<::trident::tvm_ffi::TupleType>($_self).getTypes()">
 ]> {
@@ -585,12 +585,12 @@ def TVMFFI_TupleConstructOp : TVMFFI_Op<"tuple.construct", [
   let assemblyFormat = "`(` $elements `)` attr-dict `:` functional-type($elements, $result)";
 }
 
-def TVMFFI_TupleUnconstructOp : TVMFFI_Op<"tuple.unconstruct", [
+def TVMFFI_TupleUnconstructOp : TVMFFI_Op<"tuple.unconstruct", [Pure,
     RangedTypesMatchWith<"results must match the tuple types", "container", "elements",
       "::llvm::cast<::trident::tvm_ffi::TupleType>($_self).getTypes()">
 ]> {
   let summary = "Unpack all semantic tuple elements in order";
-  let hasCanonicalizer = 1;
+  let hasFolder = 1;
   let arguments = (ins TVMFFI_TupleType:$container);
   let results = (outs Variadic<AnyTVMFFISemanticType>:$elements);
   let assemblyFormat = "$container attr-dict `:` functional-type($container, $elements)";

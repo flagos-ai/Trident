@@ -116,8 +116,9 @@ public:
         operands);
     mlir::Value const none = tvm_ffi::ConstantNoneOp::create(rewriter, loc);
     tvm_ffi::MonadPureOp result = tvm_ffi::MonadPureOp::create(
-        rewriter, loc, op->getResultTypes(), mlir::ValueRange{none});
-    mlir::scf::YieldOp::create(rewriter, loc, result.getResults());
+        rewriter, loc, op.getResult().getType(), none);
+    mlir::scf::YieldOp::create(rewriter, loc,
+                               mlir::ValueRange{result.getOutput()});
     rewriter.replaceOp(op, branch.getResults());
     return mlir::success();
   }
