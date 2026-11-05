@@ -6,14 +6,13 @@ add_mlir_library(
   PUBLIC
   DLPackDialect
   DLPackToLLVM
-  FinalizeTVMFFI
   MLIRRegisterAllDialects
   MLIRRegisterAllExtensions
   MLIRRegisterAllPasses
   MLIRSCFDialect
   MLIRToLLVMIRTranslationRegistration
-  OwnershipDeallocation
   TVMFFIDialect
   TVMFFIToGPU
   TVMFFIToLLVM
+  TVMFFITransforms
   TridentPipeline)

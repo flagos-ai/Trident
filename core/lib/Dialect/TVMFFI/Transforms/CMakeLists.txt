@@ -1,13 +1,26 @@
 add_mlir_library(
-  OwnershipDeallocation
-  OwnershipDeallocation.cc
+  TVMFFITransforms
+  DecomposeTVMFFI.cc
+  LowerKernelLaunch.cc
+  LowerTVMFFIDefer.cc
+  LowerTVMFFIMonad.cc
+  LowerTensorMetadata.cc
+  LowerToPack.cc
   DEPENDS
   MLIRTVMFFITransformsPassIncGen
   LINK_LIBS
   PUBLIC
-  MLIRAnalysis
+  DLPackDialect
+  MLIRArithDialect
   MLIRControlFlowDialect
   MLIRControlFlowInterfaces
+  MLIRControlFlowTransforms
+  MLIRFuncDialect
+  MLIRFuncTransforms
   MLIRIR
   MLIRPass
+  MLIRSCFDialect
+  MLIRSCFTransforms
+  MLIRTransformUtils
+  MLIRTransforms
   TVMFFIDialect)

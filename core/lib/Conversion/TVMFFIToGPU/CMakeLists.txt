@@ -9,4 +9,5 @@ add_mlir_conversion_library(
   MLIRControlFlowDialect
   MLIRGPUDialect
   MLIRPass
+  MLIRSCFDialect
   TVMFFIDialect)

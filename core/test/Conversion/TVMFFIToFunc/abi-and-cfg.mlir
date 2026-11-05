@@ -1,182 +1,120 @@
-//===----------------------------------------------------------------------===//
-//
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
-//
-//===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s -split-input-file -convert-tvm-ffi-to-func | FileCheck %s --check-prefixes=INTERMEDIATE,FUNC
+// RUN: trident-core-opt %s --split-input-file --convert-tvm-ffi-to-func --verify-each | FileCheck %s
 
-// Guard failures are represented as nested SCF regions.  The final pipeline
-// lowers those regions to CFG before converting to LLVM.
-// INTERMEDIATE-LABEL: func.func @__tvm_ffi_guarded(
-// INTERMEDIATE-SAME: [[CONTEXT:%[a-zA-Z0-9_]+]]: !llvm.ptr, [[ARGS:%[a-zA-Z0-9_]+]]: !llvm.ptr, [[NARGS:%[a-zA-Z0-9_]+]]: i32, [[RESULT:%[a-zA-Z0-9_]+]]: !llvm.ptr)
-// INTERMEDIATE: [[GUARD_TRUE:%[a-zA-Z0-9_]+]] = arith.constant true
-// INTERMEDIATE-NEXT: [[GUARD_INT_SLOT:%[a-zA-Z0-9_]+]] = llvm.getelementptr [[ARGS]][0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: [[GUARD_INT_ANY:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_INT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: [[GUARD_INT:%[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[GUARD_INT_ANY]] : !llvm.struct<(i32, i32, i64)> to !tvm_ffi.int
-// INTERMEDIATE-NEXT: [[GUARD_INT_TYPE:%[a-zA-Z0-9_]+]] = llvm.extractvalue [[GUARD_INT_ANY]][0] : !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: [[GUARD_INT_KIND:%[a-zA-Z0-9_]+]] = llvm.mlir.constant(1 : i32) : i32
-// INTERMEDIATE-NEXT: [[GUARD_INT_VALID:%[a-zA-Z0-9_]+]] = llvm.icmp "eq" [[GUARD_INT_TYPE]], [[GUARD_INT_KIND]] : i32
-// INTERMEDIATE-NEXT: [[GUARD_AFTER_INT:%[a-zA-Z0-9_]+]] = arith.andi [[GUARD_TRUE]], [[GUARD_INT_VALID]] : i1
-// INTERMEDIATE-NEXT: [[GUARD_BOOL_SLOT:%[a-zA-Z0-9_]+]] = llvm.getelementptr [[ARGS]][1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: [[GUARD_BOOL_ANY:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_BOOL_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: [[GUARD_BOOL:%[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[GUARD_BOOL_ANY]] : !llvm.struct<(i32, i32, i64)> to !tvm_ffi.bool
-// INTERMEDIATE-NEXT: [[GUARD_BOOL_TYPE:%[a-zA-Z0-9_]+]] = llvm.extractvalue [[GUARD_BOOL_ANY]][0] : !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: [[GUARD_BOOL_KIND:%[a-zA-Z0-9_]+]] = llvm.mlir.constant(2 : i32) : i32
-// INTERMEDIATE-NEXT: [[GUARD_BOOL_VALID:%[a-zA-Z0-9_]+]] = llvm.icmp "eq" [[GUARD_BOOL_TYPE]], [[GUARD_BOOL_KIND]] : i32
-// INTERMEDIATE-NEXT: [[ALL_GUARDS_VALID:%[a-zA-Z0-9_]+]] = arith.andi [[GUARD_AFTER_INT]], [[GUARD_BOOL_VALID]] : i1
-// INTERMEDIATE-NEXT: scf.if [[ALL_GUARDS_VALID]] {
-// INTERMEDIATE: [[GUARDED_RESULT:%[a-zA-Z0-9_]+]] = func.call @guarded([[GUARD_INT]], [[GUARD_BOOL]]) : (!tvm_ffi.int, !tvm_ffi.bool) -> !tvm_ffi.int
-// INTERMEDIATE-NEXT: [[GUARDED_ABI_RESULT:%[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast [[GUARDED_RESULT]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: llvm.store [[GUARDED_ABI_RESULT]], [[RESULT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
-// The exception constructor is reached through the cached module-level handle.
-// This path emits LLVM directly and is never seen by the ownership pass, so it
-// borrows the handle: no reference counting around the call at all.
-// INTERMEDIATE: [[GUARD_EXCEPTION_HANDLE_ADDR:%[a-zA-Z0-9_]+]] = llvm.mlir.addressof @__trident_tvm_ffi_handle_trident.ffi.Exception : !llvm.ptr
-// INTERMEDIATE-NEXT: [[GUARD_EXCEPTION_HANDLE:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_EXCEPTION_HANDLE_ADDR]] : !llvm.ptr -> !llvm.ptr
-// INTERMEDIATE-NOT: llvm.call @TVMFFIObjectIncRef
-// INTERMEDIATE: [[GUARD_EXCEPTION_STATUS:%[a-zA-Z0-9_]+]] = llvm.call @TVMFFIFunctionCall([[GUARD_EXCEPTION_HANDLE]], [[GUARD_EXCEPTION_ARGS:%[a-zA-Z0-9_]+]], [[GUARD_EXCEPTION_NARGS:%[a-zA-Z0-9_]+]], [[GUARD_FAILURE_RESULT_SLOT:%[a-zA-Z0-9_]+]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
-// INTERMEDIATE-NOT: llvm.call @TVMFFIObjectDecRef
-// INTERMEDIATE-NEXT: [[GUARD_FAILURE_RESULT:%[a-zA-Z0-9_]+]] = llvm.load [[GUARD_FAILURE_RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// INTERMEDIATE-NEXT: llvm.store [[GUARD_FAILURE_RESULT]], [[RESULT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
-// INTERMEDIATE-NEXT: }
-// INTERMEDIATE-NEXT: [[GUARD_STATUS:%[a-zA-Z0-9_]+]] = llvm.mlir.constant(0 : i32) : i32
-// INTERMEDIATE-NEXT: return [[GUARD_STATUS]] : i32
-tvm_ffi.func @guarded(%arg0: !tvm_ffi.int, %arg1: !tvm_ffi.bool) -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
-  tvm_ffi.return %arg0 : !tvm_ffi.int
+// Forward the borrowed view across CFG blocks. Every exit uses the same output slot and original payload type.
+// CHECK-LABEL: func.func @__tvm_ffi_cfg(
+// CHECK-SAME: %[[CTX:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[COUNT:[a-zA-Z0-9_]+]]: i32, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr
+// CHECK: %[[VIEW0:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[ARGS]], %[[UNDEF:[a-zA-Z0-9_]+]][0]
+// CHECK: %[[VIEW:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[COUNT]], %[[VIEW0]][1]
+// CHECK: %[[PACK:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[VIEW]]
+// CHECK: %[[SIZE:[a-zA-Z0-9_]+]] = tvm_ffi.pack.size %[[PACK]]
+// CHECK: %[[EMPTY:[a-zA-Z0-9_]+]] = arith.cmpi eq, %[[SIZE]], %[[ZERO:[a-zA-Z0-9_]+]]
+// CHECK: cf.cond_br %[[EMPTY]], ^[[LEFT:bb[0-9]+]](%[[PACK]] : !tvm_ffi.pack.arguments), ^[[RIGHT:bb[0-9]+]](%[[PACK]] : !tvm_ffi.pack.arguments)
+// CHECK: ^[[LEFT]](%[[LEFT_ARGS:[a-zA-Z0-9_]+]]: !tvm_ffi.pack.arguments):
+// CHECK: %[[LEFT_CALL:[a-zA-Z0-9_]+]] = call @__tvm_ffi_target
+// CHECK: %[[LEFT_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[LEFT_CALL]], %[[LEFT_ZERO_STATUS:[a-zA-Z0-9_]+]]
+// CHECK: %[[LEFT_VALUE:[a-zA-Z0-9_]+]] = scf.if %[[LEFT_SUCCESS]]
+// CHECK: llvm.load
+// CHECK: } else {
+// CHECK-NOT: llvm.load
+// CHECK: tvm_ffi.constant.none
+// CHECK: %[[LEFT_OK:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[LEFT_SUCCESS]]
+// CHECK: %[[LEFT_READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[LEFT_OK]]
+// CHECK: %[[LEFT_STATUS:[a-zA-Z0-9_]+]] = scf.if %[[LEFT_READY]]
+// CHECK: %[[LEFT_TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[LEFT_VALUE]] : !tvm_ffi.c.any -> !tvm_ffi.c.tensor
+// CHECK: %[[LEFT_ANY:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[LEFT_TYPED]]
+// CHECK: %[[LEFT_ABI:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[LEFT_ANY]]
+// CHECK: llvm.store %[[LEFT_ABI]], %[[OUT]]
+// CHECK: return %[[LEFT_STATUS]]
+// CHECK: ^[[RIGHT]](%[[RIGHT_ARGS:[a-zA-Z0-9_]+]]: !tvm_ffi.pack.arguments):
+// CHECK: %[[RIGHT_CALL:[a-zA-Z0-9_]+]] = call @__tvm_ffi_target
+// CHECK: %[[RIGHT_SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[RIGHT_CALL]], %[[RIGHT_ZERO_STATUS:[a-zA-Z0-9_]+]]
+// CHECK: %[[RIGHT_VALUE:[a-zA-Z0-9_]+]] = scf.if %[[RIGHT_SUCCESS]]
+// CHECK: llvm.load
+// CHECK: } else {
+// CHECK-NOT: llvm.load
+// CHECK: tvm_ffi.constant.none
+// CHECK: %[[RIGHT_OK:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[RIGHT_SUCCESS]]
+// CHECK: %[[RIGHT_READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[RIGHT_OK]]
+// CHECK: %[[RIGHT_STATUS:[a-zA-Z0-9_]+]] = scf.if %[[RIGHT_READY]]
+// CHECK: %[[RIGHT_TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[RIGHT_VALUE]] : !tvm_ffi.c.any -> !tvm_ffi.c.tensor
+// CHECK: %[[RIGHT_ANY:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[RIGHT_TYPED]]
+// CHECK: %[[RIGHT_ABI:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[RIGHT_ANY]]
+// CHECK: llvm.store %[[RIGHT_ABI]], %[[OUT]]
+// CHECK: return %[[RIGHT_STATUS]]
+// CHECK-NOT: func.func @__tvm_ffi_cfg
+tvm_ffi.pack.func @cfg(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.c.tensor {
+  %size = tvm_ffi.pack.size %args : !tvm_ffi.pack.arguments
+  %zero = arith.constant 0 : i64
+  %empty = arith.cmpi eq, %size, %zero : i64
+  cf.cond_br %empty, ^left(%args : !tvm_ffi.pack.arguments), ^right(%args : !tvm_ffi.pack.arguments)
+^left(%left_args: !tvm_ffi.pack.arguments):
+  %left_ok, %left_value = tvm_ffi.pack.call @target(%left_args) : (!tvm_ffi.pack.arguments) -> (!tvm_ffi.bool, !tvm_ffi.c.any)
+  tvm_ffi.return %left_ok, %left_value : !tvm_ffi.bool, !tvm_ffi.c.any
+^right(%right_args: !tvm_ffi.pack.arguments):
+  %right_ok, %right_value = tvm_ffi.pack.call @target(%right_args) : (!tvm_ffi.pack.arguments) -> (!tvm_ffi.bool, !tvm_ffi.c.any)
+  tvm_ffi.return %right_ok, %right_value : !tvm_ffi.bool, !tvm_ffi.c.any
+}
+
+tvm_ffi.pack.func private @target(!tvm_ffi.pack.arguments) -> !tvm_ffi.c.tensor
+
+// -----
+
+// CHECK-LABEL: func.func @__tvm_ffi_packed(
+// CHECK-SAME: %[[CTX:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[COUNT:[a-zA-Z0-9_]+]]: i32, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr)
+// CHECK: %[[VIEW0:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[ARGS]], %[[UNDEF:[a-zA-Z0-9_]+]][0]
+// CHECK: %[[VIEW:[a-zA-Z0-9_]+]] = llvm.insertvalue %[[COUNT]], %[[VIEW0]][1]
+// CHECK: %[[PACK:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[VIEW]]
+// CHECK: %[[SIZE:[a-zA-Z0-9_]+]] = tvm_ffi.pack.size %[[PACK]]
+// CHECK: %[[READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[OK:[a-zA-Z0-9_]+]]
+// CHECK: %[[STATUS:[a-zA-Z0-9_]+]] = scf.if %[[READY]]
+// CHECK: llvm.store %[[VALUE:[a-zA-Z0-9_]+]], %[[OUT]]
+// CHECK: } else {
+// CHECK-NOT: llvm.store
+// CHECK: scf.yield
+// CHECK: return %[[STATUS]] : i32
+tvm_ffi.pack.func @packed(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.int {
+  %size = tvm_ffi.pack.size %args : !tvm_ffi.pack.arguments
+  %boxed = tvm_ffi.to %size : i64 -> !tvm_ffi.int
+  %value = tvm_ffi.upcast %boxed : !tvm_ffi.int -> !tvm_ffi.c.any
+  %ok = tvm_ffi.constant.bool true
+  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
 // -----
 
-// TVMFFIToFunc preserves CFG block argument types and forwards values directly.
-// The unified LLVM conversion later converts both the branch and block.
-// INTERMEDIATE-LABEL: func.func @branch_argument(
-// INTERMEDIATE: [[BRANCH_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 7
-// INTERMEDIATE-NEXT: cf.br [[BRANCH_DEST:\^bb[0-9]+]]([[BRANCH_VALUE]] : !tvm_ffi.int)
-// INTERMEDIATE: [[BRANCH_DEST]]([[BRANCH_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE-NEXT: return [[BRANCH_BLOCK_ARG]] : !tvm_ffi.int
-tvm_ffi.func @branch_argument() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
-  %value = tvm_ffi.constant.int 7
-  cf.br ^bb1(%value : !tvm_ffi.int)
-
-^bb1(%arg: !tvm_ffi.int):
-  tvm_ffi.return %arg : !tvm_ffi.int
+// The packed result type is checked only on success; failure never writes out.
+// CHECK-LABEL: func.func private @__tvm_ffi_status(
+// CHECK-SAME: %[[CTX:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[ARGS:[a-zA-Z0-9_]+]]: !llvm.ptr, %[[COUNT:[a-zA-Z0-9_]+]]: i32, %[[OUT:[a-zA-Z0-9_]+]]: !llvm.ptr
+// CHECK: %[[CALL:[a-zA-Z0-9_]+]] = call @__tvm_ffi_target
+// CHECK: %[[SUCCESS:[a-zA-Z0-9_]+]] = llvm.icmp "eq" %[[CALL]], %[[ZERO_STATUS:[a-zA-Z0-9_]+]]
+// CHECK: %[[VALUE:[a-zA-Z0-9_]+]] = scf.if %[[SUCCESS]]
+// CHECK: llvm.load
+// CHECK: } else {
+// CHECK-NOT: llvm.load
+// CHECK: tvm_ffi.constant.none
+// CHECK: %[[OK:[a-zA-Z0-9_]+]] = tvm_ffi.to %[[SUCCESS]]
+// CHECK: %[[READY:[a-zA-Z0-9_]+]] = tvm_ffi.get %[[OK]]
+// CHECK: %[[STATUS:[a-zA-Z0-9_]+]] = scf.if %[[READY]] -> (i32) {
+// CHECK: %[[TYPED:[a-zA-Z0-9_]+]] = tvm_ffi.downcast %[[VALUE]] : !tvm_ffi.c.any -> !tvm_ffi.c.tensor
+// CHECK: %[[ANY:[a-zA-Z0-9_]+]] = tvm_ffi.upcast %[[TYPED]]
+// CHECK: %[[ABI:[a-zA-Z0-9_]+]] = builtin.unrealized_conversion_cast %[[ANY]]
+// CHECK: llvm.store %[[ABI]], %[[OUT]]
+// CHECK: %[[ZERO:[a-zA-Z0-9_]+]] = arith.constant 0 : i32
+// CHECK: scf.yield %[[ZERO]]
+// CHECK: } else {
+// CHECK-NOT: tvm_ffi.downcast
+// CHECK-NOT: llvm.load
+// CHECK-NOT: llvm.store
+// CHECK: %[[ERROR:[a-zA-Z0-9_-]+]] = arith.constant -1 : i32
+// CHECK: scf.yield %[[ERROR]]
+// CHECK: return %[[STATUS]]
+tvm_ffi.pack.func private @status(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.c.tensor {
+  %ok, %value = tvm_ffi.pack.call @target(%args) : (!tvm_ffi.pack.arguments) -> (!tvm_ffi.bool, !tvm_ffi.c.any)
+  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.c.any
 }
 
-// -----
-
-// Both edges of a conditional branch carry their own destination operands.
-// INTERMEDIATE-LABEL: func.func @cond_branch_arguments(
-// INTERMEDIATE: [[COND:%[a-zA-Z0-9_]+]] = arith.constant true
-// INTERMEDIATE-NEXT: [[TRUE_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 1
-// INTERMEDIATE-NEXT: [[FALSE_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 2
-// INTERMEDIATE-NEXT: cf.cond_br [[COND]] weights([90, 10]), [[TRUE_DEST:\^bb[0-9]+]]([[TRUE_VALUE]] : !tvm_ffi.int), [[FALSE_DEST:\^bb[0-9]+]]([[FALSE_VALUE]] : !tvm_ffi.int)
-// INTERMEDIATE: [[TRUE_DEST]]([[TRUE_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE-NEXT: return [[TRUE_BLOCK_ARG]] : !tvm_ffi.int
-// INTERMEDIATE: [[FALSE_DEST]]([[FALSE_BLOCK_ARG:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE-NEXT: return [[FALSE_BLOCK_ARG]] : !tvm_ffi.int
-tvm_ffi.func @cond_branch_arguments() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
-  %cond = arith.constant true
-  %true_value = tvm_ffi.constant.int 1
-  %false_value = tvm_ffi.constant.int 2
-  cf.cond_br %cond, ^true(%true_value : !tvm_ffi.int),
-                         ^false(%false_value : !tvm_ffi.int) {branch_weights = array<i32: 90, 10>}
-
-^true(%true_arg: !tvm_ffi.int):
-  tvm_ffi.return %true_arg : !tvm_ffi.int
-
-^false(%false_arg: !tvm_ffi.int):
-  tvm_ffi.return %false_arg : !tvm_ffi.int
-}
-
-// -----
-
-// Values defined in a textually later block must be remapped before an earlier
-// cleanup block is cloned.
-// INTERMEDIATE-LABEL: func.func @forward_block_use(
-// INTERMEDIATE: tvm_ffi.ObjectDecRef [[ARRAY:%[a-zA-Z0-9_]+]] : !tvm_ffi.array
-// INTERMEDIATE: [[ARRAY:%[a-zA-Z0-9_]+]], [[CALL_SUCCESS:%[a-zA-Z0-9_]+]] = tvm_ffi.FunctionCall
-tvm_ffi.func @forward_block_use() {
-  cf.br ^definition
-
-^cleanup:
-  tvm_ffi.ObjectDecRef %array : !tvm_ffi.array
-  tvm_ffi.return
-
-^definition:
-  %one = tvm_ffi.constant.int 1
-  %function, %get_success = tvm_ffi.FunctionGetGlobal "ffi.Array"
-      : !tvm_ffi.function, i1
-  %array, %call_success = tvm_ffi.FunctionCall %function(%one)
-      : (!tvm_ffi.int) -> !tvm_ffi.array, i1
-  cf.br ^cleanup
-}
-
-// -----
-
-// INTERMEDIATE-LABEL: func.func @make_int() -> !tvm_ffi.int
-// INTERMEDIATE: return %[[SCALAR_RESULT:[a-zA-Z0-9_]+]] : !tvm_ffi.int
-// INTERMEDIATE-LABEL: func.func @__tvm_ffi_make_int(
-// INTERMEDIATE: [[SCALAR_ABI_RESULT:%[a-zA-Z0-9_]+]] = func.call @make_int() : () -> !tvm_ffi.int
-// INTERMEDIATE: builtin.unrealized_conversion_cast [[SCALAR_ABI_RESULT]] : !tvm_ffi.int to !llvm.struct<(i32, i32, i64)>
-// A single scalar result is cast to its converted (TVMFFIAny)
-// type and stored directly into %arg3.
-tvm_ffi.func @make_int() -> !tvm_ffi.int attributes {emit_tvm_ffi_abi} {
-  %0 = tvm_ffi.constant.int 42
-  tvm_ffi.return %0 : !tvm_ffi.int
-}
-
-// -----
-
-// INTERMEDIATE-LABEL: func.func @multi_return_three_tensors(
-// INTERMEDIATE-SAME: %[[X:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Y:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, %[[Z:[a-zA-Z0-9_]+]]: !tvm_ffi.tensor
-// INTERMEDIATE: return %[[X]], %[[Y]], %[[Z]] : !tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor
-// INTERMEDIATE-LABEL: func.func @__tvm_ffi_multi_return_three_tensors(
-// INTERMEDIATE: func.call @multi_return_three_tensors
-// Multi-results are packed into an FFI Array and stored into the result slot.
-// The input tensors are borrowed from the caller, so only the temporary
-// ffi.Array function handle is released here; no element DecRef is emitted.
-tvm_ffi.func @multi_return_three_tensors(%arg0: !tvm_ffi.tensor, %arg1: !tvm_ffi.tensor, %arg2: !tvm_ffi.tensor) -> (!tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor) attributes {emit_tvm_ffi_abi} {
-  tvm_ffi.return %arg0, %arg1, %arg2 : !tvm_ffi.tensor, !tvm_ffi.tensor, !tvm_ffi.tensor
-}
-
-// -----
-
-// A wrapper is opt-in. Without the attribute, only the original function
-// converted to func.func is generated.
-// FUNC-LABEL: func.func @no_wrapper
-// FUNC-NOT: func.func @__tvm_ffi_no_wrapper
-// FUNC: [[NO_WRAPPER_VALUE:%[a-zA-Z0-9_]+]] = tvm_ffi.constant.int 3
-// FUNC-NEXT: return [[NO_WRAPPER_VALUE]] : !tvm_ffi.int
-tvm_ffi.func @no_wrapper() -> !tvm_ffi.int {
-  %value = tvm_ffi.constant.int 3
-  tvm_ffi.return %value : !tvm_ffi.int
-}
-
-// -----
-
-// Switch destinations and forwarded operands are lowered by the standard CF
-// interface using the shared LLVM type converter.
-// INTERMEDIATE-LABEL: func.func @switch_argument(
-// INTERMEDIATE-SAME: [[SWITCH_TENSOR:%[a-zA-Z0-9_]+]]: !tvm_ffi.tensor, [[DEFAULT_VALUE:%[a-zA-Z0-9_]+]]: !tvm_ffi.int, [[CASE_VALUE:%[a-zA-Z0-9_]+]]: !tvm_ffi.int) -> !tvm_ffi.int {
-// INTERMEDIATE: [[SELECTOR:%[a-zA-Z0-9_]+]], [[DEVICE_INDEX:%[a-zA-Z0-9_]+]] = tvm_ffi.tensor.device [[SWITCH_TENSOR]] : !tvm_ffi.tensor
-// INTERMEDIATE-NEXT: cf.switch [[SELECTOR]] : i32, [
-// INTERMEDIATE-NEXT: default: [[SWITCH_MERGE:\^bb[0-9]+]]([[DEFAULT_VALUE]] : !tvm_ffi.int),
-// INTERMEDIATE-NEXT: 1: [[SWITCH_MERGE]]([[CASE_VALUE]] : !tvm_ffi.int)
-// INTERMEDIATE-NEXT: ]
-// INTERMEDIATE: [[SWITCH_MERGE]]([[SWITCH_RESULT:%[a-zA-Z0-9_]+]]: !tvm_ffi.int):
-// INTERMEDIATE-NEXT: return [[SWITCH_RESULT]] : !tvm_ffi.int
-tvm_ffi.func @switch_argument(
-    %tensor: !tvm_ffi.tensor,
-    %default_value: !tvm_ffi.int,
-    %case_value: !tvm_ffi.int) -> !tvm_ffi.int {
-  %selector, %device_index = tvm_ffi.tensor.device %tensor : !tvm_ffi.tensor
-  cf.switch %selector : i32, [
-    default: ^merge(%default_value : !tvm_ffi.int),
-    1: ^merge(%case_value : !tvm_ffi.int)
-  ]
-
-^merge(%value: !tvm_ffi.int):
-  tvm_ffi.return %value : !tvm_ffi.int
-}
+// CHECK-LABEL: func.func private @__tvm_ffi_target(!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
+tvm_ffi.pack.func private @target(!tvm_ffi.pack.arguments) -> !tvm_ffi.c.tensor

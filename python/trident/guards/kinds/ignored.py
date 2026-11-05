@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..codes.base import GuardBuilder
+from ..codes.base import GuardCode
 from ..local import Local
 from .base import Guard
 
@@ -22,7 +22,7 @@ class IgnoredGuard(Guard):
         cls,
         texts: list[str],
         source: Local | None,
-    ) -> list[GuardBuilder]:
+    ) -> list[GuardCode]:
         return []
 
     @classmethod

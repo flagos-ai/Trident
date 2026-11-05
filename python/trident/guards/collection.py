@@ -3,17 +3,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Hashable, Iterable
+from collections.abc import Hashable, Iterable, Iterator, Sequence
 from typing import Final
 
 import torch._guards
 from torch._guards import GuardSource
 
 from trident.core import ir
-from trident.core.dialects import cf
-from trident.input import InputTable
+from trident.core.dialects import scf
+from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.input import InputTableBuilder
+from trident.ir import BindScope, constant, native, pure
 
-from .codes import GuardBuilder
+from .codes import GuardCode
 from .kinds import Guard
 
 _CAPTURE_GUARD_SOURCES: Final[frozenset[GuardSource]] = frozenset(
@@ -32,30 +34,53 @@ class Guards:
     """Build a short-circuiting IR chain from a Torch ``GuardsSet``."""
 
     def __init__(self, guards: Iterable[torch._guards.Guard]) -> None:
-        self.guards: Final[list[torch._guards.Guard]] = list(guards)
+        self.guards: Final[list[torch._guards.Guard]] = [*guards]
+
+    def _build_checks(
+        self,
+        codes: Iterator[GuardCode],
+        builder: InputTableBuilder,
+        arguments: Sequence[ir.Value],
+        context: ir.Context,
+    ) -> list[ir.Value]:
+        type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+        code = next(codes, None)
+        if code is None:
+            return [pure(constant(True))]
+        with BindScope(
+            [type_], code.build_result(builder.build(arguments), context)
+        ) as scope:
+            payloads = scope.arguments
+            [predicate] = payloads
+            branch = scf.IfOp(native(predicate), [type_], has_else=True)
+            with ir.InsertionPoint(branch.then_block):
+                yielded = self._build_checks(codes, builder, arguments, context)
+                scf.yield_(yielded)
+            with ir.InsertionPoint(branch.else_block):
+                yielded = [pure(constant(False))]
+                scf.yield_(yielded)
+            scope.yield_(branch.results)
+            bound_results = scope.results
+        return [*bound_results]
 
     def build(
         self,
-        table_factory: Callable[[], InputTable],
+        builder: InputTableBuilder,
+        arguments: Sequence[ir.Value],
         context: ir.Context,
-        entry_block: ir.Block,
-    ) -> tuple[ir.Block, ir.Block]:
-        codes: list[GuardBuilder] = []
+    ) -> list[ir.Value]:
+        # Captured globals and defaults are resolved by export, not wrapper inputs.
+        unique: dict[Hashable, GuardCode] = {}
         for guard in self.guards:
-            # Export has already resolved captured globals/defaults into the
-            # graph. They are not wrapper ABI arguments, so there is no runtime
-            # value from which Trident could build a semantic check.
             if guard.source not in _CAPTURE_GUARD_SOURCES:
                 parsed = Guard.parse(guard)
                 assert parsed is not None, (
                     "unsupported Dynamo guard: "
-                    f"{guard.create_fn_name()} {guard.name!r} "
-                    f"{guard.code_list!r}"
+                    f"{guard.create_fn_name()} {guard.name!r} {guard.code_list!r}"
                 )
-                codes.extend(parsed.codes)
-
-        unique: dict[Hashable, GuardBuilder] = {code.key: code for code in codes}
-        ordered: list[GuardBuilder] = sorted(
+                for code in parsed.codes:
+                    unique[code.key] = code
+        ordered: list[GuardCode] = sorted(
             unique.values(),
             key=lambda code: (
                 # Lower priorities run first; depth orders checks within each
@@ -65,24 +90,4 @@ class Guards:
             ),
         )
 
-        failure_block = ir.Block.create_after(entry_block)
-        success_block = ir.Block.create_after(failure_block)
-        current_block = entry_block
-        for code in ordered:
-            with ir.InsertionPoint(current_block):
-                table = table_factory()
-                result = code.build(table, context)
-            next_block = ir.Block.create_after(current_block)
-            with ir.InsertionPoint(current_block):
-                cf.CondBranchOp(
-                    result,
-                    [],
-                    [],
-                    next_block,
-                    failure_block,
-                )
-            current_block = next_block
-
-        with ir.InsertionPoint(current_block):
-            cf.BranchOp([], success_block)
-        return success_block, failure_block
+        return self._build_checks(iter(ordered), builder, arguments, context)
