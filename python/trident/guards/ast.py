@@ -207,10 +207,7 @@ class GuardExpressionVisitor:
         elif isinstance(node, ast.Constant):
             analysis = _ExpressionAnalysis(value_type(node.value))
         elif self._direct_fallback(node):
-            source, _, _ = ASTVisitor.metadata(node)
-            analysis = _ExpressionAnalysis(
-                tvm_ffi_d.BoolType.get(), fallback=True
-            )
+            analysis = _ExpressionAnalysis(tvm_ffi_d.BoolType.get(), fallback=True)
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             analysis = _ExpressionAnalysis(value_type(getattr(torch, node.attr)))
         elif isinstance(node, ast.Call) and ASTVisitor.device(node) is not None:
@@ -509,9 +506,10 @@ class GuardExpressionVisitor:
         if self._direct_fallback(node):
             fallback = analysis.fallback
             assert fallback is not None
-            if not fallback:
+            source, _, _ = ASTVisitor.metadata(node)
+            if source is None:
                 warnings.warn(
-                    f"Unsupported Tensor._base guard forces a specialization miss: {self.text!r} in {self.context}",
+                    f"Ignoring unobservable Tensor._base guard: {self.text!r} in {self.context}",
                     RuntimeWarning,
                     stacklevel=2,
                 )
