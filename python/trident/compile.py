@@ -35,9 +35,5 @@ def jit(
     fn: Callable[P, R] | None = None, *, dynamic: bool = True
 ) -> TridentGraphModule | Callable[[Callable[P, R]], TridentGraphModule]:
     if fn is None:
-
-        def decorator(decorated_fn: Callable[P, R]) -> TridentGraphModule:
-            return TridentGraphModule(decorated_fn, dynamic=dynamic)
-
-        return decorator
+        return lambda decorated_fn: TridentGraphModule(decorated_fn, dynamic=dynamic)
     return TridentGraphModule(fn, dynamic=dynamic)

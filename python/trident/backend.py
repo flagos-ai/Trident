@@ -8,7 +8,7 @@ import gc
 import inspect
 import operator
 from collections.abc import Callable, Hashable, Sequence
-from typing import Any, Final, TypeAlias
+from typing import Any, Final
 
 import torch
 import tvm_ffi
@@ -31,8 +31,7 @@ from trident.core import (
     register_all_passes,
 )
 from trident.core.dialects import (
-    func,
-    llvm,
+    scf,
     transform,
 )
 from trident.core.dialects import (
@@ -44,12 +43,34 @@ from trident.ffi import Exception
 from .guards import parse_guards
 from .importer import TridentFxImporter
 from .input import InputTableBuilder
-from .ir import array, box
+from .ir import BINARY_ARITHMETIC, BindScope, native, pure
 
-RuntimeValue: TypeAlias = Any
-RuntimeArguments: TypeAlias = tuple[RuntimeValue, ...]
-RuntimeKeywords: TypeAlias = dict[str, RuntimeValue]
-RuntimeCallable: TypeAlias = Callable[..., RuntimeValue]
+
+def _convert_input(value: Any) -> Any:
+    if isinstance(value, torch.device):
+        return tvm_ffi.device(f"{value}")
+    elif isinstance(value, torch.dtype):
+        return tvm_ffi.convert(value)
+    else:
+        return value
+
+
+def _convert_output(value: Any) -> Any:
+    return torch.from_dlpack(value) if isinstance(value, tvm_ffi.Tensor) else value
+
+
+def _map_containers(value: Any, convert: Callable[[Any], Any]) -> Any:
+    """Convert leaves while preserving Python containers and unpacking FFI Arrays."""
+    if isinstance(value, (tvm_ffi.Array, list)):
+        return [_map_containers(element, convert) for element in value]
+    elif isinstance(value, tuple):
+        return tuple(_map_containers(element, convert) for element in value)
+    elif isinstance(value, dict):
+        return {
+            key: _map_containers(element, convert) for key, element in value.items()
+        }
+    else:
+        return convert(value)
 
 
 class TridentGraphModule:
@@ -57,12 +78,12 @@ class TridentGraphModule:
 
     Maintains a list of sub-modules, one per unique guard specialization
     encountered at call time.  On each ``compile()`` call the class builds
-    a fresh combined module that contains every sub-module plus an LLVM-level
+    a fresh combined module that contains every sub-module plus a TVM FFI
     dispatcher.  The dispatcher tries each sub-module's compiled function in
-    order - the first one that returns 0 (guard match) wins.
+    order - the first successful non-Exception payload wins.
     """
 
-    def __call__(self, *args: RuntimeValue, **kwargs: RuntimeValue) -> RuntimeValue:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         result = self.executor(*args, **kwargs)
         if isinstance(result, Exception):
             # The dispatcher returned an Exception ObjectRef
@@ -73,237 +94,96 @@ class TridentGraphModule:
 
     def __init__(
         self,
-        fn: RuntimeCallable,
+        fn: Callable[..., Any],
         *,
         dynamic: bool = True,
     ) -> None:
         super().__init__()
-        self.fn: Final[RuntimeCallable] = fn
+        self.fn: Final[Callable[..., Any]] = fn
         self.dynamic: Final[bool] = dynamic
         self.ctx: Final[ir.Context] = ir.Context()
         register_all_dialects(self.ctx)
         register_all_passes()
         self._sub_modules: list[ir.Module] = []
-        self.executor: RuntimeCallable = self.stub_compile()
-
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
+        self.executor: Callable[..., Any] = self.stub_compile()
 
     def __name__(self) -> str:
         return self.fn.__name__
 
-    def _alloca_tvmffi_any(
+    def _register_shape(
         self,
-        index: int,
-        payload: ir.Value,
-    ) -> ir.Value:
-        """Allocate a TVMFFIAny slot, fill it, and return the pointer.
-
-        Initializes the slot with a complete ABI struct.
-        """
-        i32_ty: ir.Type = ir.IntegerType.get_signless(32)
-        i64_ty: ir.Type = ir.IntegerType.get_signless(64)
-        slot: ir.Value = llvm.alloca(
-            res=llvm.PointerType.get(),
-            array_size=llvm.mlir_constant(
-                value=ir.IntegerAttr.get(i64_ty, 1),
-            ),
-            elem_type=ir.TypeAttr.get(
-                llvm.StructType.get_literal([i32_ty, i32_ty, i64_ty], context=self.ctx),
-            ),
-        )
-        llvm.store(self._build_tvmffi_any(index, payload), slot)
-        return slot
-
-    def _build_combined_module(self) -> ir.Module:
-        """Merge all sub-modules into a single ``ir.Module``.
-
-        Uses ``copy_symbols_and_merge_into`` which clones each sub-module
-        internally, avoiding hangs caused by repeated merging of the same
-        module objects.
-        """
-        # Derive module location from the function being compiled so
-        # that the combined module has a meaningful source anchor.
-        fn_file: str = inspect.getfile(self.fn)
-        _, fn_line = inspect.getsourcelines(self.fn)
-        combined: ir.Module = ir.Module.create(
-            loc=ir.Location.file(fn_file, fn_line, col=0, context=self.ctx)
-        )
-        for sub_mod in self._sub_modules:
-            with self.ctx, sub_mod.operation.location:
-                for attr_name in sub_mod.operation.attributes:
-                    if (
-                        attr_name not in combined.operation.attributes
-                        and not attr_name.startswith("sym_name")
-                    ):
-                        combined.operation.attributes[attr_name] = (
-                            sub_mod.operation.attributes[attr_name]
+        value: Any,
+        fake_value: Any,
+        shape_env: Any,
+        dimensions: dict[Hashable, torch.export.Dim],
+        dynamic_shapes: torch.export.ShapesCollection,
+    ) -> None:
+        if isinstance(value, torch.Tensor):
+            assert isinstance(fake_value, torch.Tensor), (
+                "Dynamo placeholder for a Tensor input does not contain "
+                "FakeTensor metadata"
+            )
+            assert value.dim() == fake_value.dim(), (
+                f"Dynamo FakeTensor has rank {fake_value.dim()}, but its input "
+                f"has rank {value.dim()}"
+            )
+            shape: dict[int, torch.export.Dim] = {}
+            for index, size in enumerate(fake_value.shape):
+                if isinstance(size, torch.SymInt):
+                    expression = size.node.expr
+                    symbols = expression.free_symbols
+                    concrete_size = value.shape[index]
+                    if not symbols:
+                        assert expression.is_Integer is True, (
+                            f"Dynamo dimension {expression} is neither static nor symbolic"
                         )
+                        assert operator.index(round(expression)) == concrete_size, (
+                            f"Dynamo dimension {expression} does not match input size "
+                            f"{concrete_size}"
+                        )
+                    else:
+                        assert len(symbols) == 1, (
+                            f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
+                        )
+                        [symbol] = symbols
+                        coefficient = expression.coeff(symbol)
+                        offset = expression.subs(symbol, 0)
+                        assert (
+                            coefficient.is_Integer is True
+                            and coefficient > 0
+                            and offset.is_Integer is True
+                            and expression == coefficient * symbol + offset
+                        ), (
+                            f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
+                        )
+                        dimension = dimensions.get(symbol)
+                        if dimension is None:
+                            value_range = shape_env.var_to_range.get(symbol)
+                            options: dict[str, int] = {}
+                            if value_range is not None:
+                                if value_range.lower.is_Integer is True:
+                                    options["min"] = operator.index(
+                                        round(value_range.lower)
+                                    )
+                                if value_range.upper.is_Integer is True:
+                                    options["max"] = operator.index(
+                                        round(value_range.upper)
+                                    )
+                            dimension = torch.export.Dim.AUTO(**options)
+                            dimensions[symbol] = dimension
+                        if coefficient != 1:
+                            dimension = operator.index(round(coefficient)) * dimension
+                        if offset != 0:
+                            dimension = dimension + operator.index(round(offset))
+                        shape[index] = dimension
+            dynamic_shapes[value] = shape
 
-                transform.interpreter.copy_symbols_and_merge_into(
-                    combined.operation,
-                    sub_mod.operation,
-                )
-        return combined
-
-    # ------------------------------------------------------------------ #
-    # Internal: LLVM dispatcher
-    # ------------------------------------------------------------------ #
-
-    def _build_llvm_dispatcher(self, module: ir.Module) -> None:
-        """Try packed specializations in order, releasing guard failures.
-
-        An Exception result requests the next specialization; a nonzero packed
-        call status propagates the runtime error without inspecting its result.
-        """
-        with self.ctx, module.operation.location, ir.InsertionPoint(module.body):
-            i32 = ir.IntegerType.get_signless(32)
-            i64 = ir.IntegerType.get_signless(64)
-            pointer = llvm.PointerType.get()
-            any_type = llvm.StructType.get_literal([i32, i32, i64])
-            name_type = llvm.StructType.get_literal([pointer, i64])
-            packed_type = ir.Type.parse(
-                "!llvm.func<i32 (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr)>"
-            )
-            symbols = ir.SymbolTable(module.operation)
-            declarations = {
-                "TVMFFIFunctionCall": packed_type,
-                "TVMFFIFunctionGetGlobal": ir.Type.parse(
-                    "!llvm.func<i32 (!llvm.ptr, !llvm.ptr)>"
-                ),
-                "TVMFFIObjectDecRef": ir.Type.parse("!llvm.func<i32 (!llvm.ptr)>"),
-            }
-            for name, type_ in declarations.items():
-                if name not in symbols:
-                    llvm.func(name, ir.TypeAttr.get(type_))
-            dispatcher = llvm.func(
-                f"__tvm_ffi_{self.fn.__name__}", ir.TypeAttr.get(packed_type)
-            )
-            entry = ir.Block.create_at_start(
-                dispatcher.body, [pointer, pointer, i32, pointer]
-            )
-            in_ptr, out_ptr, num_args, ret_ptr = entry.arguments
-            error = ir.Block.create_after(entry)
-            done = ir.Block.create_after(error)
-            exit_ = ir.Block.create_after(done, i32)
-
-            def call(name: str, arguments: Sequence[ir.Value]) -> ir.Value:
-                return llvm.call(i32, arguments, [], [], callee=name)
-
-            def field(slot: ir.Value, index: int, type_: ir.Type) -> ir.Value:
-                return llvm.extractvalue(type_, llvm.load(any_type, slot), [index])
-
-            def string(name: str, value: str) -> ir.Value:
-                with ir.InsertionPoint(module.body):
-                    llvm.mlir_global(
-                        ir.TypeAttr.get(
-                            ir.Type.parse(f"!llvm.array<{len(value)} x i8>")
-                        ),
-                        name,
-                        ir.Attribute.parse("#llvm.linkage<internal>"),
-                        constant=True,
-                        value=ir.StringAttr.get(value),
-                    )
-                return llvm.mlir_addressof(pointer, name)
-
-            with ir.InsertionPoint(entry):
-                zero = llvm.mlir_constant(ir.IntegerAttr.get(i32, 0))
-                one = llvm.mlir_constant(ir.IntegerAttr.get(i32, 1))
-                zero_i64 = llvm.mlir_constant(ir.IntegerAttr.get(i64, 0))
-                one_i64 = llvm.mlir_constant(ir.IntegerAttr.get(i64, 1))
-                null = llvm.mlir_zero(pointer)
-                handles = {}
-                for name in ("trident.ffi.Exception", "trident.ffi.GetExceptionIndex"):
-                    name_ptr = string(f"__trident_const_{name}", name)
-                    name_value = llvm.mlir_undef(name_type)
-                    name_value = llvm.insertvalue(name_value, name_ptr, [0])
-                    name_value = llvm.insertvalue(
-                        name_value,
-                        llvm.mlir_constant(ir.IntegerAttr.get(i64, len(name))),
-                        [1],
-                    )
-                    name_slot = llvm.alloca(pointer, one_i64, name_type)
-                    llvm.store(name_value, name_slot)
-                    handle_slot = llvm.alloca(pointer, one_i64, pointer)
-                    call("TVMFFIFunctionGetGlobal", [name_slot, handle_slot])
-                    handles[name] = llvm.load(pointer, handle_slot)
-                index_slot = self._alloca_tvmffi_any(0, zero_i64)
-                call(
-                    "TVMFFIFunctionCall",
-                    [handles["trident.ffi.GetExceptionIndex"], null, zero, index_slot],
-                )
-                exception_index = llvm.trunc(
-                    i32,
-                    field(index_slot, 2, i64),
-                    ir.Attribute.parse("#llvm.overflow<none>"),
-                )
-                result_slot = self._alloca_tvmffi_any(0, zero_i64)
-                kind = string(
-                    "__trident_const_GuardMatchException", "GuardMatchException\0"
-                )
-                arguments = self._alloca_tvmffi_any(8, llvm.ptrtoint(i64, kind))
-                call(
-                    "TVMFFIFunctionCall",
-                    [handles["trident.ffi.Exception"], arguments, one, result_slot],
-                )
-
-            previous = entry
-            for index in range(len(self._sub_modules)):
-                attempt = ir.Block.create_after(previous)
-                check = ir.Block.create_after(attempt)
-                with ir.InsertionPoint(previous):
-                    failed = llvm.icmp(
-                        llvm.ICmpPredicate.eq,
-                        field(result_slot, 0, i32),
-                        exception_index,
-                    )
-                    llvm.cond_br(failed, [], [], attempt, done)
-                with ir.InsertionPoint(attempt):
-                    call(
-                        "TVMFFIObjectDecRef",
-                        [llvm.inttoptr(pointer, field(result_slot, 2, i64))],
-                    )
-                    status = call(
-                        f"__tvm_ffi_{self.fn.__name__}_{index}",
-                        [in_ptr, out_ptr, num_args, result_slot],
-                    )
-                    success = llvm.icmp(llvm.ICmpPredicate.eq, status, zero)
-                    llvm.cond_br(success, [], [], check, error)
-                previous = check
-            with ir.InsertionPoint(previous):
-                llvm.br([], done)
-            with ir.InsertionPoint(error):
-                llvm.br([llvm.mlir_constant(ir.IntegerAttr.get(i32, -1))], exit_)
-            with ir.InsertionPoint(done):
-                llvm.store(llvm.load(any_type, result_slot), ret_ptr)
-                llvm.br([zero], exit_)
-            with ir.InsertionPoint(exit_):
-                for handle in handles.values():
-                    call("TVMFFIObjectDecRef", [handle])
-                llvm.return_(arg=exit_.arguments[0])
-
-    # ------------------------------------------------------------------ #
-    # Internal: sub-module construction
-    # ------------------------------------------------------------------ #
-
-    def _build_sub_module(
-        self,
-        args: list[RuntimeValue],
-        kwargs: RuntimeKeywords,
-    ) -> RuntimeValue:
-        """Export -> import -> wrap a single sub-module for *args*.
-
-        Each sub-module's ``func.func`` is named ``main_{index}`` and its
-        ``tvm_ffi.func`` is named ``{self.fn.__name__}_{index}`` to avoid symbol
-        collisions in the merged module.
-        """
-
-        # Step 1: Export  ---------------------------------------------------
+    def compile(self, *args: Any, **kwargs: Any) -> Any:
+        """Export, import and wrap one specialization, then rebuild its dispatcher."""
         index = len(self._sub_modules)
 
         signature: inspect.Signature = inspect.signature(self.fn)
-        trace_args: RuntimeArguments = tuple(args)
+        trace_args: tuple[Any, ...] = tuple(args)
         bound: inspect.BoundArguments = signature.bind(*trace_args, **kwargs)
         bound.apply_defaults()
         exported_gm, gs = torch._dynamo.export(
@@ -311,7 +191,21 @@ class TridentGraphModule:
             aten_graph=True,
             assume_static_by_default=not self.dynamic,
         )(*trace_args, **kwargs)
-        dynamic_shapes = self._retrieve_dynamic_shapes(exported_gm, trace_args, kwargs)
+        fake_args, fake_kwargs, fake_mode = _extract_fake_inputs(
+            exported_gm, trace_args, kwargs
+        )
+        shape_env = fake_mode.shape_env
+        assert shape_env is not None, "Dynamo FakeTensorMode does not have a ShapeEnv"
+        dimensions: dict[Hashable, torch.export.Dim] = {}
+        dynamic_shapes = torch.export.ShapesCollection()
+
+        pytree.tree_map(
+            lambda value, fake_value: self._register_shape(
+                value, fake_value, shape_env, dimensions, dynamic_shapes
+            ),
+            (trace_args, kwargs),
+            (fake_args, fake_kwargs),
+        )
         trace_gm = copy.deepcopy(exported_gm)
 
         exported_program: torch.export.ExportedProgram = torch.export.export(
@@ -332,7 +226,7 @@ class TridentGraphModule:
             context=self.ctx, specialization_id=index
         )
         main_func_name: Final[str] = f"main_{index}"
-        main_func: func.FuncOp = importer.import_program(
+        main_func: tvm_ffi_d.FuncOp = importer.import_program(
             exported_program, func_name=main_func_name
         )
         with self.ctx:
@@ -342,7 +236,7 @@ class TridentGraphModule:
         torch._dynamo.reset()
 
         # Step 3: Wrap with tvm_ffi.func.
-        flat_types: Sequence[ir.Type] = main_func.type.inputs
+        flat_types: Sequence[ir.Type] = main_func.function_type.value.inputs
 
         with self.ctx:
             input_builder = InputTableBuilder.get(
@@ -355,222 +249,123 @@ class TridentGraphModule:
 
         with self.ctx:
             abi_result_type = tvm_ffi_d.AnyType.get(context=self.ctx)
+            ffi_result_type = tvm_ffi_d.ResultType.get(abi_result_type)
             ffi_type: ir.FunctionType = ir.FunctionType.get(
                 param_types, [abi_result_type]
             )
 
         tvm_ffi_name: Final[str] = f"{self.fn.__name__}_{index}"
         with ir.InsertionPoint(module.body), main_func.operation.location:
-            ffi_func: tvm_ffi_d.FuncOp = tvm_ffi_d.func(
+            ffi_func: tvm_ffi_d.FuncOp = tvm_ffi_d.FuncOp(
                 tvm_ffi_name,
                 ir.TypeAttr.get(ffi_type),
-                emit_tvm_ffi_abi=ir.UnitAttr.get(self.ctx),
             )
-            entry_block: ir.Block = ir.Block.create_at_start(ffi_func.body, param_types)
+            entry_block: ir.Block = ffi_func.add_entry_block()
+
             with ir.InsertionPoint(entry_block):
-                success_block, failure_block = parse_guards(gs).build(
-                    lambda: input_builder.build(entry_block.arguments),
-                    self.ctx,
-                    entry_block,
-                )
-                # main_* is an ordinary func.func. Only the surrounding
-                # tvm_ffi.func is exposed through the TVM FFI ABI. Guards are
-                # already represented as CFG blocks, so ownership analysis can
-                # see their short-circuit edges directly.
-                with ir.InsertionPoint(success_block):
-                    main_table = input_builder.build(entry_block.arguments)
-                    input_specs = exported_program.graph_signature.input_specs
-                    flat_inputs = main_table.flatten_inputs()
-                    assert len(flat_inputs) == len(input_specs), (
-                        "unexpected number of reconstructed exported inputs: "
-                        f"got {len(flat_inputs)}, expected {len(input_specs)}"
+                exception = tvm_ffi_d.exception("GuardMatch")
+                rejection = tvm_ffi_d.upcast(abi_result_type, exception)
+                with BindScope(
+                    [ffi_result_type],
+                    parse_guards(gs).build(
+                        input_builder, entry_block.arguments, self.ctx
+                    ),
+                ) as guards:
+                    guards_arguments = guards.arguments
+                    [predicate] = guards_arguments
+                    branch = scf.IfOp(
+                        native(predicate), [ffi_result_type], has_else=True
                     )
-                    main_inputs = [
-                        value
-                        for input_spec, value in zip(input_specs, flat_inputs)
-                        if input_spec.kind == InputKind.USER_INPUT
-                        and isinstance(
-                            input_spec.arg,
-                            (
-                                TensorArgument,
-                                SymBoolArgument,
-                                SymFloatArgument,
-                                SymIntArgument,
-                            ),
-                        )
-                    ]
-                    assert len(main_inputs) == len(flat_types), (
-                        "unexpected number of reconstructed MLIR inputs: "
-                        f"got {len(main_inputs)}, expected {len(flat_types)}"
-                    )
-                    main_args = main_inputs
-                    call_result: ir.Value | Sequence[ir.Value] = func.call(
-                        main_func.type.results,
-                        main_func_name,
-                        main_args,
-                    )
-                    result = (
-                        call_result
-                        if isinstance(call_result, ir.Value)
-                        else array(list(call_result))
-                    )
-                    tvm_ffi_d.return_([tvm_ffi_d.cast(abi_result_type, box(result))])
 
-                with ir.InsertionPoint(failure_block):
-                    exception = tvm_ffi_d.exception("GuardMatch")
-                    error_value = tvm_ffi_d.cast(abi_result_type, exception)
-                    tvm_ffi_d.return_([error_value])
-
+                    with ir.InsertionPoint(branch.then_block):
+                        with BindScope(
+                            [ffi_result_type],
+                            input_builder.build(entry_block.arguments).extract_many(),
+                        ) as inputs:
+                            inputs_arguments = inputs.arguments
+                            input_specs = exported_program.graph_signature.input_specs
+                            input_values = inputs_arguments[: len(input_specs)]
+                            assert len(input_values) == len(input_specs), (
+                                "unexpected number of reconstructed exported inputs"
+                            )
+                            main_inputs = [
+                                value
+                                for spec, value in zip(
+                                    input_specs, input_values, strict=True
+                                )
+                                if spec.kind == InputKind.USER_INPUT
+                                and isinstance(
+                                    spec.arg,
+                                    (
+                                        TensorArgument,
+                                        SymBoolArgument,
+                                        SymFloatArgument,
+                                        SymIntArgument,
+                                    ),
+                                )
+                            ]
+                            assert len(main_inputs) == len(flat_types), (
+                                "unexpected number of reconstructed MLIR inputs"
+                            )
+                            graph_call = tvm_ffi_d.monad_call(
+                                ffi_result_type,
+                                ir.FlatSymbolRefAttr.get(main_func_name),
+                                main_inputs,
+                            )
+                            yielded = [graph_call]
+                            inputs.yield_(yielded)
+                            inputs_results = inputs.results
+                        scf.yield_(inputs_results)
+                    with ir.InsertionPoint(branch.else_block):
+                        yielded = [pure(rejection, result_type=ffi_result_type)]
+                        scf.yield_(yielded)
+                    guards.yield_(branch.results)
+                    guards_results = guards.results
+                success, payload = tvm_ffi_d.monad_unpack(guards_results[0])
+                tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
         self._sub_modules.append(module)
         self.executor = self.stub_compile()
         gc.collect()
         return warmup_result
 
-    # ------------------------------------------------------------------ #
-    # Internal: TVMFFIAny helpers
-    # ------------------------------------------------------------------ #
-
-    def _build_tvmffi_any(self, index: int, payload: ir.Value) -> ir.Value:
-        """Build the ABI struct containing a type index, padding and payload."""
-        i32 = ir.IntegerType.get_signless(32)
-        i64 = ir.IntegerType.get_signless(64)
-        result = llvm.mlir_undef(llvm.StructType.get_literal([i32, i32, i64]))
-        fields = (
-            llvm.mlir_constant(ir.IntegerAttr.get(i32, index)),
-            llvm.mlir_constant(ir.IntegerAttr.get(i32, 0)),
-            payload,
-        )
-        for position, value in enumerate(fields):
-            result = llvm.insertvalue(result, value, [position])
-        return result
-
-    # ------------------------------------------------------------------ #
-    # Internal: dynamic-shape helpers
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _retrieve_dynamic_shapes(
-        exported_gm: torch.fx.GraphModule,
-        args: Sequence[RuntimeValue],
-        kwargs: RuntimeKeywords,
-    ) -> torch.export.ShapesCollection:
-        """Recover a ``torch.export`` shape specification from Dynamo metadata."""
-        fake_args, fake_kwargs, fake_mode = _extract_fake_inputs(
-            exported_gm, tuple(args), kwargs
-        )
-        shape_env = fake_mode.shape_env
-        assert shape_env is not None, "Dynamo FakeTensorMode does not have a ShapeEnv"
-
-        dimensions: dict[Hashable, torch.export.Dim] = {}
-        dynamic_shapes = torch.export.ShapesCollection()
-
-        def dimension(symbol: Hashable) -> torch.export.Dim:
-            result = dimensions.get(symbol)
-            if result is not None:
-                return result
-
-            value_range = shape_env.var_to_range.get(symbol)
-            options: dict[str, int] = {}
-            if value_range is not None:
-                if value_range.lower.is_Integer is True:
-                    options["min"] = operator.index(round(value_range.lower))
-                if value_range.upper.is_Integer is True:
-                    options["max"] = operator.index(round(value_range.upper))
-            result = torch.export.Dim.AUTO(**options)
-            dimensions[symbol] = result
-            return result
-
-        def register_shape(value: Any, fake_value: Any) -> None:
-            if isinstance(value, torch.Tensor):
-                assert isinstance(fake_value, torch.Tensor), (
-                    "Dynamo placeholder for a Tensor input does not contain "
-                    "FakeTensor metadata"
-                )
-                assert value.dim() == fake_value.dim(), (
-                    f"Dynamo FakeTensor has rank {fake_value.dim()}, but its input "
-                    f"has rank {value.dim()}"
-                )
-                dynamic_shapes[value] = {
-                    index: dimension_spec
-                    for index, size in enumerate(fake_value.shape)
-                    if isinstance(size, torch.SymInt)
-                    if (dimension_spec := symbolic_dimension(size, value.shape[index]))
-                    is not None
-                }
-
-        def symbolic_dimension(
-            value: torch.SymInt, concrete_size: int
-        ) -> torch.export.Dim | None:
-            expression = value.node.expr
-            symbols = expression.free_symbols
-            if not symbols:
-                assert expression.is_Integer is True, (
-                    f"Dynamo dimension {expression} is neither static nor symbolic"
-                )
-                assert operator.index(round(expression)) == concrete_size, (
-                    f"Dynamo dimension {expression} does not match input size "
-                    f"{concrete_size}"
-                )
-                return None
-            assert len(symbols) == 1, (
-                f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
-            )
-
-            [symbol] = symbols
-            coefficient = expression.coeff(symbol)
-            offset = expression.subs(symbol, 0)
-            assert (
-                coefficient.is_Integer is True
-                and coefficient > 0
-                and offset.is_Integer is True
-                and expression == coefficient * symbol + offset
-            ), f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
-
-            result = dimension(symbol)
-            if coefficient != 1:
-                result = operator.index(round(coefficient)) * result
-            if offset != 0:
-                result = result + operator.index(round(offset))
-            return result
-
-        pytree.tree_map(
-            register_shape,
-            (tuple(args), kwargs),
-            (fake_args, fake_kwargs),
-        )
-        return dynamic_shapes
-
-    def compile(self, *args: RuntimeValue, **kwargs: RuntimeValue) -> RuntimeValue:
-        """Build a new sub-module for *args* and rebuild the combined
-        module + dispatcher.  Called automatically from ``__call__`` when a
-        ``GuardMatchException`` is raised."""
-        return self._build_sub_module([*args], {**kwargs})
-
-    # ------------------------------------------------------------------ #
-    # Internal: orchestration
-    # ------------------------------------------------------------------ #
-
-    def stub_compile(self) -> RuntimeCallable:
-        """Build the combined module, lower it, add the LLVM dispatcher,
+    def stub_compile(self) -> Callable[..., Any]:
+        """Build the combined module and semantic dispatcher, lower it,
         JIT-compile, and return a callable executor.
 
         Called initially from ``__init__`` (with zero sub-modules) and
         after every ``compile()`` to pick up newly added specializations.
         """
-        # 1. Merge all sub-modules into one (each is cloned to avoid
-        #    repeated-merging hangs).
-        combined: ir.Module = self._build_combined_module()
+        # Merge cloned sub-modules so repeated compilation preserves the originals.
+        fn_file: str = inspect.getfile(self.fn)
+        _, fn_line = inspect.getsourcelines(self.fn)
+        combined: ir.Module = ir.Module.create(
+            loc=ir.Location.file(fn_file, fn_line, col=0, context=self.ctx)
+        )
+        for sub_mod in self._sub_modules:
+            with self.ctx, sub_mod.operation.location:
+                for attr_name in sub_mod.operation.attributes:
+                    if (
+                        attr_name not in combined.operation.attributes
+                        and not attr_name.startswith("sym_name")
+                    ):
+                        combined.operation.attributes[attr_name] = (
+                            sub_mod.operation.attributes[attr_name]
+                        )
 
-        # 2. Lower semantic TVM FFI and GPU IR to LLVM.
+                transform.interpreter.copy_symbols_and_merge_into(
+                    combined.operation,
+                    sub_mod.operation,
+                )
+
+        self._build_dispatcher(combined)
+
+        # Lower all functions, including the dispatcher, together.
         with self.ctx:
             passmanager.PassManager.parse(
                 "builtin.module(trident-lowering-pipeline)",
             ).run(combined.operation)
 
-        # 3. Build the LLVM dispatcher that tries each sub-function.
-        self._build_llvm_dispatcher(combined)
-
-        # 4. JIT-compile and wrap.
+        # Keep the execution engine alive through the FFI callable.
         engine: ExecutionEngine = ExecutionEngine(
             combined,
             opt_level=3,
@@ -590,63 +385,22 @@ class TridentGraphModule:
             keep_alive_object=engine,
         )
 
-        def invoke(*values: RuntimeValue) -> RuntimeValue:
-            result = normalize(
-                fn(
-                    *(
-                        normalize(
-                            value,
-                            lambda element: (
-                                tvm_ffi.device(f"{element}")
-                                if isinstance(element, torch.device)
-                                else tvm_ffi.convert(element)
-                                if isinstance(element, torch.dtype)
-                                else element
-                            ),
-                        )
-                        for value in values
-                    )
-                ),
-                lambda value: (
-                    torch.from_dlpack(value)
-                    if isinstance(value, tvm_ffi.Tensor)
-                    else value
-                ),
+        def invoke(*values: Any) -> Any:
+            result = _map_containers(
+                fn(*(_map_containers(value, _convert_input) for value in values)),
+                _convert_output,
             )
 
             if isinstance(result, Exception):
                 return result
-            leaves = [result] if self._output_spec.num_leaves == 1 else list(result)
+            count = self._output_spec.num_leaves
+            leaves = [] if count == 0 else [result] if count == 1 else list(result)
             return pytree.tree_unflatten(leaves, self._output_spec)
-
-        def normalize(
-            value: RuntimeValue,
-            convert: Callable[[RuntimeValue], RuntimeValue],
-        ) -> RuntimeValue:
-            if isinstance(value, tvm_ffi.Array):
-                return [normalize(element, convert) for element in value]
-            if isinstance(value, tuple):
-                return tuple(normalize(element, convert) for element in value)
-            if isinstance(value, list):
-                return [normalize(element, convert) for element in value]
-            if isinstance(value, dict):
-                return {
-                    key: normalize(element, convert) for key, element in value.items()
-                }
-            return convert(value)
 
         signature = inspect.signature(self.fn)
         ffi_signature = signature.replace(
             parameters=[
-                parameter.replace(
-                    default=(
-                        tvm_ffi.device(f"{parameter.default}")
-                        if isinstance(parameter.default, torch.device)
-                        else tvm_ffi.convert(parameter.default)
-                    )
-                )
-                if isinstance(parameter.default, (torch.device, torch.dtype))
-                else parameter
+                parameter.replace(default=_convert_input(parameter.default))
                 for parameter in signature.parameters.values()
             ]
         )
@@ -654,6 +408,44 @@ class TridentGraphModule:
             invoke, ffi_signature
         )
 
-    # ------------------------------------------------------------------ #
-    # Internal: module merging
-    # ------------------------------------------------------------------ #
+    def _build_dispatcher(self, combined: ir.Module) -> None:
+        """Try specializations in order, retrying only successful Exception payloads."""
+        with self.ctx, combined.operation.location, ir.InsertionPoint(combined.body):
+            any_type = tvm_ffi_d.AnyType.get()
+            bool_type = tvm_ffi_d.BoolType.get()
+            parameter_types = [tvm_ffi_d.PackArgumentsType.get()]
+            dispatcher = tvm_ffi_d.PackFuncOp(
+                self.fn.__name__,
+                ir.TypeAttr.get(ir.FunctionType.get(parameter_types, [any_type])),
+            )
+            entry = dispatcher.add_entry_block()
+
+            def attempt(index: int) -> tuple[ir.Value, ir.Value]:
+                if index == len(self._sub_modules):
+                    rejection = tvm_ffi_d.exception("GuardMatch")
+                    return (
+                        tvm_ffi_d.constant_bool(True),
+                        tvm_ffi_d.upcast(any_type, rejection),
+                    )
+                [arguments] = entry.arguments
+                success, payload = tvm_ffi_d.pack_call(
+                    ir.FlatSymbolRefAttr.get(f"{self.fn.__name__}_{index}"),
+                    arguments,
+                    results=[bool_type, any_type],
+                )
+                rejected = tvm_ffi_d.to(
+                    tvm_ffi_d.isa(
+                        payload, ir.TypeAttr.get(tvm_ffi_d.ExceptionType.get())
+                    )
+                )
+                retry = BINARY_ARITHMETIC[operator.and_](success, rejected)
+                outcome = scf.IfOp(native(retry), [bool_type, any_type], has_else=True)
+                with ir.InsertionPoint(outcome.then_block):
+                    scf.yield_(attempt(index + 1))
+                with ir.InsertionPoint(outcome.else_block):
+                    scf.yield_([success, payload])
+                return tuple(outcome.results)
+
+            with ir.InsertionPoint(entry):
+                success, payload = attempt(0)
+                tvm_ffi_d.return_(success, payload)

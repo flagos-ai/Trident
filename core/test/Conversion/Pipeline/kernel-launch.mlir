@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s --convert-tvm-ffi-to-gpu --convert-tvm-ffi-to-func --convert-tvm-ffi-to-llvm --convert-dlpack-to-llvm -split-input-file | FileCheck %s
+// RUN: trident-core-opt %s --lower-kernel-launch --convert-tvm-ffi-to-gpu --lower-tvm-ffi-monad --decompose-tvm-ffi --lower-tvm-ffi-defer --lower-to-pack --convert-tvm-ffi-to-func --convert-scf-to-cf --convert-tvm-ffi-to-llvm --convert-dlpack-to-llvm -split-input-file | FileCheck %s
 
 // CHECK-LABEL: module attributes {gpu.container_module}
 // CHECK: gpu.binary @kernel
@@ -22,6 +22,12 @@
 // CHECK: %[[DLTENSOR:[a-zA-Z0-9_]+]] = llvm.load %[[DLTENSOR_PTR]] : !llvm.ptr -> !llvm.struct<(ptr, struct<(i32, i32)>, i32, struct<(i8, i8, i16)>, ptr, ptr, i64)>
 // CHECK: %[[DATA_PTR:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[DLTENSOR]][0] : !llvm.struct<(ptr, struct<(i32, i32)>, i32, struct<(i8, i8, i16)>, ptr, ptr, i64)>
 // CHECK: %[[SCALAR_I64:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[SCALAR_ARG]][2] : !llvm.struct<(i32, i32, i64)>
+// CHECK: %[[LAUNCH_OBJECT:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[TENS_ARG]][2]
+// CHECK: %[[LAUNCH_PTR:[a-zA-Z0-9_]+]] = llvm.inttoptr %[[LAUNCH_OBJECT]]
+// CHECK: %[[LAUNCH_DLTENSOR_PTR:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[LAUNCH_PTR]][24]
+// CHECK: %[[LAUNCH_DLTENSOR:[a-zA-Z0-9_]+]] = llvm.load %[[LAUNCH_DLTENSOR_PTR]]
+// CHECK: %[[LAUNCH_DATA:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[LAUNCH_DLTENSOR]][0]
+// CHECK: %[[LAUNCH_SCALAR:[a-zA-Z0-9_]+]] = llvm.extractvalue %[[SCALAR_ARG]][2]
 // CHECK: %[[ALLOCA_ONE:[a-zA-Z0-9_]+]] = llvm.mlir.constant(1 : i64) : i64
 // CHECK: %[[DEVICE_SLOT:[a-zA-Z0-9_]+]] = llvm.alloca %[[ALLOCA_ONE]] x i32 : (i64) -> !llvm.ptr
 // CHECK: llvm.call @aoti_torch_get_current_device_index(%[[DEVICE_SLOT]]) : (!llvm.ptr) -> i32
@@ -33,14 +39,14 @@
 // CHECK: blocks in (%[[C32]], %[[C16]], %[[GRID_ONE]])
 // CHECK: threads in (%[[C128]], %[[GRID_ONE]], %[[GRID_ONE]])
 // CHECK: dynamic_shared_memory_size %[[SHMEM]]
-// CHECK: args(%[[DATA_PTR]] : !llvm.ptr, %[[SCALAR_I64]] : i64, %[[ZERO]] : i64, %[[ZERO]] : i64)
+// CHECK: args(%[[LAUNCH_DATA]] : !llvm.ptr, %[[LAUNCH_SCALAR]] : i64, %[[ZERO]] : i64, %[[ZERO]] : i64)
 
 // CHECK-NOT: tvm_ffi.kernel_launch
 module attributes { gpu.container_module } {
   gpu.binary @kernel [#gpu.object<#nvvm.target, "">]
 
   func.func @test_kernel_launch(
-    %tensor: !tvm_ffi.tensor,
+    %tensor: !tvm_ffi.c.tensor,
     %scalar: !tvm_ffi.int) {
     %c32 = llvm.mlir.constant(32 : i64) : i64
     %c16 = llvm.mlir.constant(16 : i64) : i64
@@ -48,10 +54,10 @@ module attributes { gpu.container_module } {
     %c1 = llvm.mlir.constant(1 : i64) : i64
     %shmem = llvm.mlir.constant(16384 : i32) : i32
 
-    tvm_ffi.kernel_launch @kernel::@entry
+    %launch_0 = tvm_ffi.kernel_launch @kernel::@entry
       blocks in (%c32, %c16, %c1) : i64 threads in (%c128, %c1, %c1)
       dynamic_shared_memory_size %shmem
-      args (%tensor : !tvm_ffi.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr, divisibility = 16>, %scalar : !tvm_ffi.int #tvm_ffi.variable_specialization<kind = i64, divisibility = 16>)
+      args (%tensor : !tvm_ffi.c.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr, divisibility = 16>, %scalar : !tvm_ffi.int #tvm_ffi.variable_specialization<kind = i64, divisibility = 16>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
     func.return
   }
 }

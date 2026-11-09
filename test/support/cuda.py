@@ -15,7 +15,7 @@ def assert_no_cuda_leak(
     action: Callable[[], None],
     device: torch.device,
 ) -> None:
-    """Check live allocations after each cached execution in the current process."""
+    """Check cached executions restore the PyTorch CUDA allocation baseline."""
     assert device.type == "cuda" and device.index is not None
 
     def allocated_bytes() -> int:

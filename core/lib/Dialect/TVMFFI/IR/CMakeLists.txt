@@ -1,9 +1,13 @@
 add_mlir_dialect_library(
   TVMFFIDialect
+  Base/TVMFFITypes.cc
+  Monad/TVMFFIOps.cc
+  Monad/TVMFFITypes.cc
+  Opaque/TVMFFITypes.cc
+  TVMFFIAttrs.cc
   TVMFFIDialect.cc
   TVMFFIInterfaces.cc
   TVMFFIOps.cc
-  TVMFFISpecialization.cc
   TVMFFITypes.cc
   DEPENDS
   MLIRTVMFFIAttrDefsIncGen
@@ -15,6 +19,7 @@ add_mlir_dialect_library(
   LINK_LIBS
   PUBLIC
   DLPackDialect
+  MLIRArithDialect
   MLIRControlFlowDialect
   MLIRControlFlowInterfaces
   MLIRFuncDialect

@@ -6,7 +6,7 @@ from __future__ import annotations
 import ast
 from typing import TYPE_CHECKING
 
-from ..codes import ASTCode, GuardBuilder, TypeIdCode
+from ..codes import ASTCode, GuardCode, TypeIdCode
 from ..local import Local
 from .base import Guard
 
@@ -26,7 +26,7 @@ class SequenceLengthGuard(Guard):
         cls,
         texts: list[str],
         source: Local | None,
-    ) -> list[GuardBuilder] | None:
+    ) -> list[GuardCode] | None:
         expressions = [ASTCode.parse(text, source) for text in texts]
         has_tensor_shape = any(
             expression is not None
@@ -36,17 +36,17 @@ class SequenceLengthGuard(Guard):
             )
             for expression in expressions
         )
-        parsed_codes: list[GuardBuilder] = []
+        parsed_codes: list[GuardCode] = []
         for text, expression in zip(texts, expressions):
             if expression is not None:
-                parsed_codes.append(expression.to_builder())
+                parsed_codes.append(expression)
                 continue
             if has_tensor_shape:
                 continue
             type_code = TypeIdCode.parse(text, source)
             if type_code is None:
                 return None
-            parsed_codes.append(type_code.to_builder())
+            parsed_codes.append(type_code)
         return parsed_codes
 
     @classmethod
