@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "trident/core/Conversion/Utils/TVMFFIUtils.h"
-#include "trident/core/Conversion/Utils/String.h"
+#include "trident/core/Conversion/Utils/StdLibCAPIDescriptors.h"
 #include "trident/core/Conversion/Utils/TVMFFICAPIDescriptors.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <cstddef>
@@ -22,12 +22,14 @@
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/IR/Attributes.h>
+#include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/Location.h>
 #include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Types.h>
 #include <mlir/IR/Value.h>
 #include <mlir/Support/LLVM.h>
@@ -37,10 +39,8 @@
 
 namespace trident::conversion::utils {
 
-namespace {
-
 /// Get or create the module-level global caching the handle of \p funcName.
-mlir::FailureOr<mlir::LLVM::GlobalOp>
+static mlir::FailureOr<mlir::LLVM::GlobalOp>
 getOrCreateTVMFFIGlobalHandle(mlir::ModuleOp moduleOp,
                               llvm::StringRef funcName) {
   mlir::MLIRContext *ctx = moduleOp.getContext();
@@ -66,7 +66,7 @@ getOrCreateTVMFFIGlobalHandle(mlir::ModuleOp moduleOp,
 
 /// Get or create a `void ()` module-level function whose body is emitted by
 /// \p buildBody. \p description names the function in diagnostics.
-mlir::FailureOr<mlir::LLVM::LLVMFuncOp> getOrCreateTVMFFIHandleLifecycle(
+static mlir::FailureOr<mlir::LLVM::LLVMFuncOp> getOrCreateTVMFFIHandleLifecycle(
     mlir::ModuleOp moduleOp, llvm::StringRef prefix, llvm::StringRef funcName,
     llvm::function_ref<mlir::LogicalResult(mlir::OpBuilder &, mlir::Location)>
         buildBody,
@@ -101,7 +101,7 @@ mlir::FailureOr<mlir::LLVM::LLVMFuncOp> getOrCreateTVMFFIHandleLifecycle(
 
 /// Resolve \p funcName once at load time and cache the handle and the lookup
 /// status in module-level storage.
-mlir::LogicalResult
+static mlir::LogicalResult
 buildTVMFFIHandleCtorBody(mlir::OpBuilder &builder, mlir::Location loc,
                           mlir::ModuleOp moduleOp, llvm::StringRef funcName,
                           mlir::LLVM::GlobalOp handleGlobal) {
@@ -136,6 +136,8 @@ buildTVMFFIHandleCtorBody(mlir::OpBuilder &builder, mlir::Location loc,
 
   mlir::Value const funcSlot =
       mlir::LLVM::AllocaOp::create(builder, loc, ptrTy, ptrTy, one);
+  mlir::LLVM::StoreOp::create(
+      builder, loc, mlir::LLVM::ZeroOp::create(builder, loc, ptrTy), funcSlot);
   mlir::LLVM::CallOp::create(builder, loc, getGlobal.value(),
                              {nameSlot, funcSlot});
   mlir::LLVM::StoreOp::create(
@@ -145,7 +147,7 @@ buildTVMFFIHandleCtorBody(mlir::OpBuilder &builder, mlir::Location loc,
 }
 
 /// Release the cached handle at unload time.
-mlir::LogicalResult
+static mlir::LogicalResult
 buildTVMFFIHandleDtorBody(mlir::OpBuilder &builder, mlir::Location loc,
                           mlir::ModuleOp moduleOp,
                           mlir::LLVM::GlobalOp handleGlobal) {
@@ -165,7 +167,8 @@ buildTVMFFIHandleDtorBody(mlir::OpBuilder &builder, mlir::Location loc,
 }
 
 /// Add \p ctor to the module's `llvm.mlir.global_ctors`, unless already listed.
-void registerGlobalCtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp ctor) {
+static void registerGlobalCtor(mlir::ModuleOp moduleOp,
+                               mlir::LLVM::LLVMFuncOp ctor) {
   for (mlir::LLVM::GlobalCtorsOp list :
        moduleOp.getOps<mlir::LLVM::GlobalCtorsOp>()) {
     if (llvm::any_of(list.getCtors(), [&](mlir::Attribute attr) {
@@ -189,7 +192,8 @@ void registerGlobalCtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp ctor) {
 }
 
 /// Add \p dtor to the module's `llvm.mlir.global_dtors`, unless already listed.
-void registerGlobalDtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp dtor) {
+static void registerGlobalDtor(mlir::ModuleOp moduleOp,
+                               mlir::LLVM::LLVMFuncOp dtor) {
   for (mlir::LLVM::GlobalDtorsOp list :
        moduleOp.getOps<mlir::LLVM::GlobalDtorsOp>()) {
     if (llvm::any_of(list.getDtors(), [&](mlir::Attribute attr) {
@@ -215,7 +219,7 @@ void registerGlobalDtor(mlir::ModuleOp moduleOp, mlir::LLVM::LLVMFuncOp dtor) {
 /// Resolve \p funcName into the module-level cache and load the handle it
 /// holds. The module owns that reference for its whole lifetime, so the
 /// returned handle is borrowed.
-mlir::FailureOr<mlir::Value>
+static mlir::FailureOr<mlir::Value>
 loadCachedTVMFFIGlobalHandle(mlir::OpBuilder &builder, mlir::Location loc,
                              mlir::ModuleOp moduleOp,
                              llvm::StringRef funcName) {
@@ -260,8 +264,6 @@ loadCachedTVMFFIGlobalHandle(mlir::OpBuilder &builder, mlir::Location loc,
       .getResult();
 }
 
-} // namespace
-
 mlir::FailureOr<mlir::Value>
 callTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
                          mlir::ModuleOp moduleOp, llvm::StringRef funcName,
@@ -272,7 +274,7 @@ callTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::LLVM::LLVMPointerType const ptrTy =
       mlir::LLVM::LLVMPointerType::get(ctx);
   mlir::LLVM::LLVMStructType const anyTy =
-      tvm_ffi::TVMFFIABIType::getLLVMType(ctx);
+      tvm_ffi::TVMFFICABIType::getLLVMType(ctx);
   const size_t numArgsCount = args.size();
 
   // Allocate contiguous args array and copy each pre-built slot.
@@ -311,21 +313,46 @@ getTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::Value const handle = cachedHandle.value();
   // The cached reference belongs to the module, so retain one for the caller.
   // `FunctionGetGlobalOp` keeps its default `Owned` result contract, and the
-  // ownership deallocation pass pairs this retain with a release.
+  // constructing layer pairs this retain with an explicit release.
   mlir::FailureOr<mlir::LLVM::LLVMFuncOp> incRef =
       getOrCreateTVMFFIObjectIncRef(moduleOp);
   if (mlir::failed(incRef)) {
     return mlir::failure();
   }
+  mlir::FailureOr<mlir::LLVM::LLVMFuncOp> setError =
+      getOrCreateTVMFFIErrorSetRaisedFromCStr(moduleOp);
+  if (mlir::failed(setError)) {
+    return mlir::failure();
+  }
+  // A missing global is reported as success with a null handle by TVM FFI.
+  // Establish an error on the calling thread before propagating failure.
+  mlir::Block *current = builder.getInsertionBlock();
+  mlir::Block *continuation = current->splitBlock(builder.getInsertionPoint());
+  mlir::Value const status = continuation->addArgument(i32Ty, loc);
+  mlir::Block *resolved =
+      builder.createBlock(current->getParent(), continuation->getIterator());
+  mlir::Block *missing =
+      builder.createBlock(current->getParent(), current->getParent()->end());
+  builder.setInsertionPointToEnd(current);
+  mlir::Value const nonnull = mlir::LLVM::ICmpOp::create(
+      builder, loc, mlir::LLVM::ICmpPredicate::ne, handle,
+      mlir::LLVM::ZeroOp::create(builder, loc, ptrTy));
+  mlir::LLVM::CondBrOp::create(builder, loc, nonnull, resolved, missing);
+  builder.setInsertionPointToStart(resolved);
   mlir::LLVM::CallOp::create(builder, loc, incRef.value(), {handle});
-  // The constructor leaves the global null when the lookup failed, so the
-  // status the caller checks is derived from the cached handle: zero, i.e.
-  // success, exactly when a handle was resolved.
-  mlir::Value const status = mlir::LLVM::ZExtOp::create(
-      builder, loc, i32Ty,
-      mlir::LLVM::ICmpOp::create(
-          builder, loc, mlir::LLVM::ICmpPredicate::eq, handle,
-          mlir::LLVM::ZeroOp::create(builder, loc, ptrTy)));
+  mlir::Value const zero =
+      mlir::LLVM::ConstantOp::create(builder, loc, i32Ty, 0);
+  mlir::LLVM::BrOp::create(builder, loc, mlir::ValueRange{zero}, continuation);
+  builder.setInsertionPointToStart(missing);
+  mlir::Value const kind = getString(builder, loc, "RuntimeError");
+  mlir::Value const message = getString(
+      builder, loc, ("TVM FFI global function not found: " + funcName).str());
+  mlir::LLVM::CallOp::create(builder, loc, setError.value(), {kind, message});
+  mlir::Value const failed =
+      mlir::LLVM::ConstantOp::create(builder, loc, i32Ty, -1);
+  mlir::LLVM::BrOp::create(builder, loc, mlir::ValueRange{failed},
+                           continuation);
+  builder.setInsertionPointToStart(continuation);
   return std::make_tuple(handle, status);
 }
 
@@ -339,7 +366,7 @@ callTVMFFIFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::LLVM::LLVMPointerType const ptrTy =
       mlir::LLVM::LLVMPointerType::get(ctx);
   mlir::LLVM::LLVMStructType const anyTy =
-      tvm_ffi::TVMFFIABIType::getLLVMType(ctx);
+      tvm_ffi::TVMFFICABIType::getLLVMType(ctx);
   mlir::Value const argsArray = mlir::LLVM::AllocaOp::create(
       builder, loc, ptrTy, anyTy,
       mlir::LLVM::ConstantOp::create(builder, loc, i64Ty,
@@ -381,12 +408,11 @@ callTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
   mlir::MLIRContext *ctx = builder.getContext();
   mlir::IntegerType const i32Ty = mlir::IntegerType::get(ctx, 32);
   mlir::LLVM::LLVMStructType const anyTy =
-      tvm_ffi::TVMFFIABIType::getLLVMType(ctx);
+      tvm_ffi::TVMFFICABIType::getLLVMType(ctx);
   mlir::IntegerType const i64Ty = mlir::IntegerType::get(ctx, 64);
   mlir::LLVM::LLVMPointerType const ptrTy =
       mlir::LLVM::LLVMPointerType::get(ctx);
-  // This helper emits LLVM directly, so the ownership deallocation pass never
-  // sees it. The module holds the cached reference for its whole lifetime and
+  // The module holds the cached reference for its whole lifetime and
   // the call cannot outlive it, so borrowing the handle is enough.
   mlir::FailureOr<mlir::Value> cachedHandle =
       loadCachedTVMFFIGlobalHandle(builder, loc, moduleOp, funcName);
@@ -417,6 +443,61 @@ callTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
     return mlir::failure();
   }
   return resultSlot;
+}
+
+mlir::LogicalResult emitLLVMAssert(mlir::RewriterBase &rewriter,
+                                   mlir::Location loc, mlir::Value condition) {
+  mlir::Block *current = rewriter.getInsertionBlock();
+  mlir::ModuleOp const module =
+      current->getParentOp()->getParentOfType<mlir::ModuleOp>();
+  if (!module) {
+    return mlir::failure();
+  }
+  mlir::FailureOr<mlir::LLVM::LLVMFuncOp> abortFunction =
+      getOrCreateAbort(module);
+  if (mlir::failed(abortFunction)) {
+    return mlir::failure();
+  }
+  mlir::Block *continuation =
+      rewriter.splitBlock(current, rewriter.getInsertionPoint());
+  mlir::Block *failure =
+      rewriter.createBlock(current->getParent(), continuation->getIterator());
+  rewriter.setInsertionPointToEnd(current);
+  mlir::LLVM::CondBrOp::create(rewriter, loc, condition, continuation, failure);
+  rewriter.setInsertionPointToEnd(failure);
+  // TODO: Print an error message before aborting.
+  mlir::LLVM::CallOp::create(rewriter, loc, abortFunction.value(),
+                             mlir::ValueRange{});
+  mlir::LLVM::UnreachableOp::create(rewriter, loc);
+  rewriter.setInsertionPointToStart(continuation);
+  return mlir::success();
+}
+
+mlir::Value getString(mlir::OpBuilder &builder, mlir::Location loc,
+                      llvm::StringRef content) {
+  mlir::MLIRContext *context = builder.getContext();
+  const mlir::Type ptrTy = mlir::LLVM::LLVMPointerType::get(context);
+  const mlir::Type i8Ty = mlir::IntegerType::get(context, 8);
+  const mlir::Value length = mlir::LLVM::ConstantOp::create(
+      builder, loc, mlir::IntegerType::get(context, 64),
+      static_cast<int64_t>(content.size() + 1));
+  const mlir::Value stringPtr =
+      mlir::LLVM::AllocaOp::create(builder, loc, ptrTy, i8Ty, length);
+  for (auto [index, character] : llvm::enumerate(llvm::concat<int8_t>(
+           llvm::map_range(content,
+                           [](char character) -> int8_t {
+                             return static_cast<int8_t>(character);
+                           }),
+           llvm::ArrayRef<int8_t>{0}))) {
+    const mlir::Value elementPtr = mlir::LLVM::GEPOp::create(
+        builder, loc, ptrTy, i8Ty, stringPtr,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{static_cast<int32_t>(index)});
+    mlir::LLVM::StoreOp::create(
+        builder, loc,
+        mlir::LLVM::ConstantOp::create(builder, loc, i8Ty, character),
+        elementPtr);
+  }
+  return stringPtr;
 }
 
 } // namespace trident::conversion::utils

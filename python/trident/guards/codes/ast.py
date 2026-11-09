@@ -11,9 +11,9 @@ from typing_extensions import Self, override
 from trident.core import ir
 from trident.input import InputTable
 
-from ..ast import ASTVisitor
+from ..ast import ASTVisitor, GuardExpressionVisitor
 from ..local import Local
-from .base import GuardBuildFn, GuardBuilder, GuardCode
+from .base import GuardCode
 
 
 class ASTCode(GuardCode):
@@ -23,20 +23,22 @@ class ASTCode(GuardCode):
         self,
         text: str,
         expression: ast.expr,
+        *,
+        source: Local | None = None,
     ) -> None:
-        super().__init__(text, None)
+        super().__init__(text, source)
         self.expression: Final[ast.expr] = expression
-        self.build_fn: Final[GuardBuildFn | None] = ASTVisitor(text).build(expression)
+        self.supported: Final[bool] = ASTVisitor.supports(expression)
 
     @override
-    def build(
-        self,
-        tree: InputTable,
-        context: ir.Context,
-    ) -> ir.Value:
-        if self.build_fn is None:
-            return super().build(tree, context)
-        return self.build_fn(tree, context)
+    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
+        """Build standalone expressions used by the guard IR tests."""
+        return GuardExpressionVisitor(self.text, tree, context).value(self.expression)
+
+    @override
+    def build_result(self, tree: InputTable, context: ir.Context) -> list[ir.Value]:
+        assert self.supported, f"guard expression cannot be lowered: {self.text!r}"
+        return GuardExpressionVisitor(self.text, tree, context).build(self.expression)
 
     @property
     def key(self) -> Hashable:
@@ -53,10 +55,4 @@ class ASTCode(GuardCode):
         except SyntaxError:
             return None
         code = cls(text, expression)
-        return code if code.build_fn is not None else None
-
-    def to_builder(self) -> GuardBuilder:
-        assert self.build_fn is not None, (
-            f"guard expression cannot be lowered: {self.text!r}"
-        )
-        return GuardBuilder(code=self, build_fn=self.build_fn)
+        return code if code.supported else None

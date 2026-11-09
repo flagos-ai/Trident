@@ -21,8 +21,7 @@ namespace trident::conversion {
 #define GEN_PASS_REGISTRATION_CONVERTTVMFFITOGPU
 #include "trident/core/Conversion/Passes.h.inc"
 
-void populateTVMFFIToGPUConversionPatterns(mlir::ConversionTarget &target,
-                                           mlir::RewritePatternSet &patterns,
+void populateTVMFFIToGPUConversionPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::TypeConverter &typeConverter);
 
 void registerConvertTVMFFIToGPUPass();

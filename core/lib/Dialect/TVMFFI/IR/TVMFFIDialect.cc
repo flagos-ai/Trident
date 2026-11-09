@@ -18,15 +18,16 @@
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFIOps.h"
 #include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
 #include <llvm/ADT/ArrayRef.h>
-#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLExtras.h>
-#include <llvm/ADT/STLFunctionalExtras.h>
-#include <llvm/ADT/TypeSwitch.h>             // NOLINT(misc-include-cleaner)
+#include <llvm/ADT/TypeSwitch.h> // NOLINT(misc-include-cleaner)
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h> // NOLINT(misc-include-cleaner)
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/BuiltinAttributeInterfaces.h>
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/DialectImplementation.h> // NOLINT(misc-include-cleaner)
+#include <mlir/IR/Location.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Region.h>
@@ -50,8 +51,6 @@
 
 namespace trident::tvm_ffi {
 
-namespace {
-
 struct TVMFFIInlinerInterface final : mlir::DialectInlinerInterface {
   using mlir::DialectInlinerInterface::DialectInlinerInterface;
 
@@ -66,75 +65,44 @@ struct TVMFFIInlinerInterface final : mlir::DialectInlinerInterface {
   }
 };
 
-} // namespace
-
-void TVMFFIDialect::initialize() {
-  addInterfaces<TVMFFIInlinerInterface>();
-  addAttributes<
-#define GET_ATTRDEF_LIST
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFIAttrs.cpp.inc"
-      >();
-  addTypes<
-#define GET_TYPEDEF_LIST
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.cpp.inc"
-      >();
-
-  addOperations<
-#define GET_OP_LIST
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFI.cpp.inc"
-      >();
-}
-
-bool UnionType::contains(mlir::Type type) const {
-  if (const UnionType unionType = mlir::dyn_cast<UnionType>(type)) {
-    return llvm::all_of(unionType.getTypes(),
-                        [&](const mlir::Type member) -> bool {
-                          return llvm::is_contained(getTypes(), member);
-                        });
+static bool isTaggedCastType(mlir::Type type) {
+  if (mlir::isa<AnyType, CAnyType, ArrayType, ExceptionType, FunctionType,
+                StrType, TensorType, TupleType>(type)) {
+    return true;
   }
-  return llvm::is_contained(getTypes(), type);
+  if (UnionType const unionType = mlir::dyn_cast<UnionType>(type)) {
+    return llvm::all_of(unionType.getTypes(), isTaggedCastType);
+  }
+  return mlir::isa<TVMFFICABIType>(type) &&
+         mlir::isa<TVMFFITypeIndexInterface>(type);
 }
 
-bool CastOp::areCastCompatible(mlir::TypeRange inputs,
-                               mlir::TypeRange outputs) {
-  if (inputs.size() != 1 || outputs.size() != 1) {
+bool DowncastOp::areCastCompatible(mlir::TypeRange inputs,
+                                   mlir::TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1 ||
+      !isTaggedCastType(inputs[0]) || !isTaggedCastType(outputs[0])) {
     return false;
   }
-  mlir::Type const input = inputs[0];
-  mlir::Type output = outputs[0];
-  return mlir::isa<AnyType, UnionType>(output) &&
-         mlir::isa<TVMFFIABIType>(input) &&
-         (mlir::isa<AnyType>(output) ||
-          mlir::cast<UnionType>(output).contains(input));
-}
-
-mlir::LogicalResult
-UnionType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
-                  llvm::ArrayRef<mlir::Type> types) {
-  if (types.size() < 2) {
-    return emitError() << "union requires at least two member types";
+  if (inputs[0] == outputs[0]) {
+    return true;
   }
-  llvm::SmallDenseSet<mlir::Type> uniqueTypes;
-  for (mlir::Type const type : types) {
-    if (!mlir::isa<TVMFFIABIType>(type) ||
-        mlir::isa<AnyType, UnionType>(type)) {
-      return emitError() << "invalid union member type " << type;
-    }
-    if (!mlir::isa<TVMFFITypeIndexInterface>(type)) {
-      return emitError() << "invalid union member type " << type;
-    }
-    if (!uniqueTypes.insert(type).second) {
-      return emitError() << "union member types must be unique";
-    }
+  if (mlir::isa<AnyType, CAnyType>(outputs[0])) {
+    return false;
   }
-  return mlir::success();
-}
-
-// FuncOp custom assembly format.
-
-mlir::Region *FuncOp::getCallableRegion() {
-  mlir::Region &body = getBody();
-  return body.empty() ? nullptr : &body;
+  return llvm::TypeSwitch<mlir::Type, bool>(inputs[0])
+      .Case<AnyType, CAnyType>([](mlir::Type) -> bool { return true; })
+      .Case<StrType>([&](StrType) -> bool {
+        return mlir::isa<RawStrType, SmallStrType, CStrType>(outputs[0]);
+      })
+      .Case<UnionType>([&](UnionType source) -> bool {
+        if (!source.contains(mlir::cast<TVMFFICABIType>(outputs[0]))) {
+          return false;
+        }
+        UnionType const target = mlir::dyn_cast<UnionType>(outputs[0]);
+        return !target ||
+               !target.contains(mlir::cast<TVMFFICABIType>(inputs[0]));
+      })
+      .Default([](mlir::Type) -> bool { return false; });
 }
 
 void FuncOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
@@ -145,6 +113,13 @@ void FuncOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
 
 llvm::ArrayRef<mlir::Type> FuncOp::getArgumentTypes() {
   return getFunctionType().getInputs();
+}
+
+// FuncOp custom assembly format.
+
+mlir::Region *FuncOp::getCallableRegion() {
+  mlir::Region &body = getBody();
+  return body.empty() ? nullptr : &body;
 }
 
 llvm::ArrayRef<mlir::Type> FuncOp::getResultTypes() {
@@ -167,6 +142,90 @@ void FuncOp::print(mlir::OpAsmPrinter &p) {
   mlir::function_interface_impl::printFunctionOp(
       p, *this, /*isVariadic=*/false, getFunctionTypeAttrName(),
       getArgAttrsAttrName(), getResAttrsAttrName());
+}
+
+void PackFuncOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                       llvm::StringRef name, mlir::FunctionType type,
+                       llvm::ArrayRef<mlir::NamedAttribute> attrs) {
+  buildWithEntryBlock(builder, state, name, type, attrs, type.getInputs());
+}
+
+llvm::ArrayRef<mlir::Type> PackFuncOp::getArgumentTypes() {
+  return getFunctionType().getInputs();
+}
+
+// PackFuncOp custom assembly format.
+
+mlir::Region *PackFuncOp::getCallableRegion() {
+  mlir::Region &body = getBody();
+  return body.empty() ? nullptr : &body;
+}
+
+llvm::ArrayRef<mlir::Type> PackFuncOp::getResultTypes() {
+  return getFunctionType().getResults();
+}
+
+mlir::ParseResult PackFuncOp::parse(mlir::OpAsmParser &parser,
+                                    mlir::OperationState &result) {
+  return mlir::function_interface_impl::parseFunctionOp(
+      parser, result, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(result.name),
+      [](mlir::Builder &builder, llvm::ArrayRef<mlir::Type> argTypes,
+         llvm::ArrayRef<mlir::Type> results,
+         mlir::function_interface_impl::VariadicFlag,
+         std::string &) -> mlir::FunctionType {
+        return builder.getFunctionType(argTypes, results);
+      },
+      getArgAttrsAttrName(result.name), getResAttrsAttrName(result.name));
+}
+
+void PackFuncOp::print(mlir::OpAsmPrinter &p) {
+  mlir::function_interface_impl::printFunctionOp(
+      p, *this, /*isVariadic=*/false, getFunctionTypeAttrName(),
+      getArgAttrsAttrName(), getResAttrsAttrName());
+}
+
+void TVMFFIDialect::initialize() {
+  addInterfaces<TVMFFIInlinerInterface>();
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "trident/core/Dialect/TVMFFI/IR/TVMFFIAttrs.cpp.inc"
+      >();
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.cpp.inc"
+      >();
+
+  addOperations<
+#define GET_OP_LIST
+#include "trident/core/Dialect/TVMFFI/IR/TVMFFI.cpp.inc"
+      >();
+}
+
+mlir::Operation *TVMFFIDialect::materializeConstant(mlir::OpBuilder &builder,
+                                                    mlir::Attribute value,
+                                                    mlir::Type type,
+                                                    mlir::Location location) {
+  return mlir::arith::ConstantOp::isBuildableWith(value, type)
+             ? mlir::arith::ConstantOp::create(
+                   builder, location, mlir::cast<mlir::TypedAttr>(value))
+             : nullptr;
+}
+
+bool UpcastOp::areCastCompatible(mlir::TypeRange inputs,
+                                 mlir::TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1) {
+    return false;
+  }
+  mlir::Type const input = inputs[0];
+  mlir::Type output = outputs[0];
+  return isTaggedCastType(input) && isTaggedCastType(output) &&
+         (input == output || mlir::isa<AnyType, CAnyType>(output) ||
+          (mlir::isa<StrType>(output) &&
+           mlir::isa<RawStrType, SmallStrType, CStrType>(input)) ||
+          (mlir::isa<UnionType>(output) &&
+           mlir::cast<UnionType>(output).contains(
+               mlir::cast<TVMFFICABIType>(input))));
 }
 
 } // namespace trident::tvm_ffi

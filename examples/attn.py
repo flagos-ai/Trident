@@ -147,10 +147,13 @@ def attn_fwd(
     )
     stage: int = 3 if causal else 1
 
-    def grid(meta: dict[str, Any]) -> tuple[int, int, int]:
-        return (triton.cdiv(q.shape[2], meta["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
-
-    _attn_fwd[grid](
+    _attn_fwd[
+        lambda meta: (
+            triton.cdiv(q.shape[2], meta["BLOCK_M"]),
+            q.shape[0] * q.shape[1],
+            1,
+        )
+    ](
         sm_scale,
         m,
         q.shape[0],

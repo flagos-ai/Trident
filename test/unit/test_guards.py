@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from torch._guards import GuardSource
 from trident.core import ir
+from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.guards.codes import (
     ASTCode,
@@ -34,6 +35,7 @@ from trident.guards.kinds import (
     TypeMatchGuard,
 )
 from trident.guards.local import Local
+from trident.input import InputNodeBuilder, InputTableBuilder
 
 from test.support.ir import new_context
 
@@ -75,6 +77,46 @@ class GuardExpressionTest(unittest.TestCase):
             module_text = str(module)
         return result_type, module_text
 
+    def test_container_length_extracts_nested_input(self) -> None:
+        for container in (tvm_ffi_d.ArrayType, tvm_ffi_d.TupleType):
+            with (
+                self.subTest(container=container.__name__),
+                new_context() as context,
+                ir.Location.unknown(),
+            ):
+                tensor = tvm_ffi_d.TensorType.get()
+                type_ = (
+                    container.get(tensor)
+                    if container is tvm_ffi_d.ArrayType
+                    else container.get([tensor, tensor])
+                )
+                array = tvm_ffi_d.ArrayType.get(type_)
+                builder = InputTableBuilder(
+                    [("xs", InputNodeBuilder(array, [InputNodeBuilder(type_)]))],
+                    ["xs"],
+                )
+                text = "len(L['xs'][0]) == 2"
+                code = ASTCode(text, ast.parse(text, mode="eval").body)
+                module = ir.Module.create()
+                result_type = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+                with ir.InsertionPoint(module.body):
+                    function = func.FuncOp("guard", ([array], [result_type]))
+                    block = function.add_entry_block()
+                with ir.InsertionPoint(block):
+                    results = code.build_result(builder.build(block.arguments), context)
+                    func.return_(results)
+                self.assertEqual([result.type for result in results], [result_type])
+                self.assertTrue(module.operation.verify())
+                module_text = f"{module}"
+                self.assertIn("tvm_ffi.array.get", module_text)
+                self.assertIn("tvm_ffi.monad.bind", module_text)
+                self.assertIn("arith.cmpi eq", module_text)
+                # Tuple guards must check runtime arity instead of trusting the schema.
+                if container is tvm_ffi_d.TupleType:
+                    self.assertIn('"ffi.ArraySize"', module_text)
+                else:
+                    self.assertIn("tvm_ffi.array.size", module_text)
+
     def test_invalid_comparisons(self) -> None:
         for text, message in (
             ("L['x'] is L['y'] is L['z']", "identity guard comparison must be binary"),
@@ -88,45 +130,85 @@ class GuardExpressionTest(unittest.TestCase):
 
     def test_supported_expressions(self) -> None:
         cases = (
-            ("bitwise_or", "(1 | 2) == 3", ir.IntegerType, 1, ("arith.ori",)),
-            ("boolean_logic", "True and not False", ir.IntegerType, 1, ("arith.xori",)),
-            ("chained_comparison", "1 == 1 <= 3", ir.IntegerType, 1, ("arith.cmpi",)),
+            ("bitwise_or", "(1 | 2) == 3", tvm_ffi_d.BoolType, ("arith.ori",)),
+            (
+                "boolean_logic",
+                "True and not False",
+                tvm_ffi_d.BoolType,
+                ("arith.cmpi eq",),
+            ),
+            ("boolean_or", "True | False", tvm_ffi_d.BoolType, ("arith.ori",)),
+            (
+                "chained_comparison",
+                "1 == 1 <= 3",
+                tvm_ffi_d.BoolType,
+                ("arith.cmpi eq", "arith.cmpi sle"),
+            ),
             (
                 "dtype",
                 "torch.float32",
                 tvm_ffi_d.DTypeType,
-                None,
                 ("tvm_ffi.constant.dtype",),
             ),
             (
                 "float_comparison",
                 "1.0 + 2.0 <= 4.0",
-                ir.IntegerType,
-                1,
+                tvm_ffi_d.BoolType,
                 ("arith.addf", "arith.cmpf"),
             ),
-            ("integer_addition", "1 + 2", ir.IntegerType, 64, ("arith.addi",)),
-            ("negation", "-1", ir.IntegerType, 64, ("arith.subi",)),
-            ("true_division", "5 / 2", ir.F64Type, None, ("arith.divf",)),
+            ("float_negation", "-1.5", tvm_ffi_d.FloatType, ("arith.negf",)),
+            (
+                "float_not_negative_zero",
+                "not -0.0",
+                tvm_ffi_d.BoolType,
+                ("arith.cmpf oeq",),
+            ),
+            ("integer_addition", "1 + 2", tvm_ffi_d.IntType, ("arith.addi",)),
+            ("integer_not", "not 0", tvm_ffi_d.BoolType, ("arith.cmpi eq",)),
+            (
+                "mixed_boolean_float",
+                "True + 2.0",
+                tvm_ffi_d.FloatType,
+                ("arith.uitofp", "arith.addf"),
+            ),
+            (
+                "mixed_boolean_integer",
+                "True | 2",
+                tvm_ffi_d.IntType,
+                (
+                    "arith.extui",
+                    "arith.ori",
+                ),
+            ),
+            ("negation", "-1", tvm_ffi_d.IntType, ("arith.subi",)),
+            ("select", "1 if True else 2", tvm_ffi_d.IntType, ("scf.if",)),
+            (
+                "string_equality",
+                "'name' == 'name'",
+                tvm_ffi_d.BoolType,
+                ("tvm_ffi.eq", "tvm_ffi.to"),
+            ),
+            (
+                "true_division",
+                "5 / 2",
+                tvm_ffi_d.FloatType,
+                ("arith.divf",),
+            ),
         )
-        for name, text, type_class, width, operations in cases:
+        for name, text, type_class, operations in cases:
             with self.subTest(case=name):
                 actual_type, module = self._build_expression(text)
                 self.assertIsInstance(actual_type, type_class)
-                if width is not None:
-                    self.assertTrue(actual_type.is_signless)
-                    self.assertEqual(actual_type.width, width)
                 for operation in operations:
                     self.assertIn(operation, module)
+                self.assertNotIn("arith.constant", module)
                 self.assertNotIn("torch.aten.", module)
 
     def test_tensor_base_fallback(self) -> None:
         with self.assertWarnsRegex(RuntimeWarning, "Tensor\\._base guard"):
             result_type, module = self._build_expression("L['x']._base.size()[0] == 1")
-        self.assertIsInstance(result_type, ir.IntegerType)
-        self.assertTrue(result_type.is_signless)
-        self.assertEqual(result_type.width, 1)
-        self.assertIn("arith.constant true", module)
+        self.assertIsInstance(result_type, tvm_ffi_d.BoolType)
+        self.assertIn("tvm_ffi.constant.bool true", module)
 
 
 class GuardParsingTest(unittest.TestCase):
@@ -141,7 +223,7 @@ class GuardParsingTest(unittest.TestCase):
         parsed = Guard.parse(guard)
         self.assertIsInstance(parsed, kind)
         assert parsed is not None
-        self.assertEqual(tuple(type(item.code) for item in parsed.codes), code_types)
+        self.assertEqual(tuple(type(item) for item in parsed.codes), code_types)
         self.assertEqual(parsed.source, Local.parse(guard.name))
         return parsed
 
@@ -162,7 +244,7 @@ class GuardParsingTest(unittest.TestCase):
                     ConstantMatchGuard,
                     (ConstantCode,),
                 )
-                code = parsed.codes[0].code
+                code = parsed.codes[0]
                 assert isinstance(code, ConstantCode)
                 self.assertEqual(
                     ast.dump(code.expression, include_attributes=False),
@@ -294,12 +376,7 @@ class GuardParsingTest(unittest.TestCase):
                 DynamoAttributeAbsentCode,
             ),
         )
-        _, dtype_item, device_item, grad_item, rank_item, attribute_item = parsed.codes
-        dtype = dtype_item.code
-        device = device_item.code
-        grad = grad_item.code
-        rank = rank_item.code
-        attribute = attribute_item.code
+        _, dtype, device, grad, rank, attribute = parsed.codes
         assert isinstance(dtype, TensorDTypeCode)
         assert isinstance(device, TensorDeviceCode)
         assert isinstance(grad, RequiresGradCode)
