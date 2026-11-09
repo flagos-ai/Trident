@@ -7,17 +7,23 @@
 
 #include "trident/core/Conversion/Pipeline/Pipeline.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
-#include "trident/core/Conversion/FinalizeTVMFFI/FinalizeTVMFFI.h"
 #include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/OwnershipDeallocation.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerKernelLaunch.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerToPack.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
+#include <mlir/Conversion/ControlFlowToSCF/ControlFlowToSCF.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
 #include <mlir/Conversion/Passes.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
+#include <mlir/Conversion/UBToLLVM/UBToLLVM.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>     // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h> // NOLINT(misc-include-cleaner)
 #include <mlir/Dialect/SCF/IR/SCF.h>         // NOLINT(misc-include-cleaner)
@@ -36,22 +42,42 @@ class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
   void runOnOperation() final {
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
-    // Pass order follows lowering dependencies: inline before kernel
-    // conversion, deallocate semantic objects before ABI conversion, then lower
-    // to LLVM.
-    pm.addPass(mlir::createInlinerPass());
+    // Materialize lexical cleanup before inlining can merge its block scopes.
+    pm.addPass(tvm_ffi::createLowerKernelLaunch());
     pm.addPass(createConvertTVMFFIToGPU());
-    pm.addPass(mlir::createSCFToControlFlowPass());
-    pm.addPass(createFinalizeTVMFFI());
-    pm.addPass(tvm_ffi::createOwnershipDeallocation());
+    // Simplify continuations while Result success and payloads are explicit.
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(tvm_ffi::createDecomposeTVMFFI());
+    pm.addPass(tvm_ffi::createLowerTVMFFIDefer());
+    pm.addPass(mlir::createInlinerPass());
+    pm.addPass(mlir::createSymbolDCEPass());
+    pm.addPass(tvm_ffi::createLowerTensorMetadata());
+    // Form packed entry bodies before lowering their native ABI.
+    pm.addPass(tvm_ffi::createLowerToPack());
     pm.addPass(createConvertTVMFFIToFunc());
+    pm.addPass(mlir::createCanonicalizerPass());
+    // Packed ABI preflight introduces CFG blocks. Structure them so calls in
+    // single-block SCF regions can inline the entire callee, including guards.
+    pm.addPass(mlir::createLiftControlFlowToSCFPass());
+    // Local calls now target packed ABI functions. Inline while their control
+    // flow still uses SCF regions, before lowering SCF to the LLVM CFG.
+    pm.addPass(mlir::createInlinerPass());
+    pm.addPass(mlir::createSymbolDCEPass());
+    // Expose identical inlined guard predicates to SCF condition propagation.
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
-    pm.addPass(createConvertTVMFFIToLLVM());
-    pm.addPass(createConvertDLPackToLLVM());
-    pm.addPass(mlir::createArithToLLVMConversionPass());
-    pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+    // GPU conversion simplifies regions before applying LLVM patterns. Run it
+    // before packed calls and reference checks expand into large LLVM CFGs.
     pm.addPass(
         mlir::createGpuToLLVMConversionPass()); // NOLINT(misc-include-cleaner)
+    pm.addPass(createConvertTVMFFIToLLVM());
+    pm.addPass(createConvertDLPackToLLVM());
+    pm.addPass(mlir::createUBToLLVMConversionPass());
+    pm.addPass(mlir::createArithToLLVMConversionPass());
+    pm.addPass(mlir::createConvertControlFlowToLLVMPass());
     pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(mlir::createConvertFuncToLLVMPass());
     pm.addPass(mlir::createCanonicalizerPass());

@@ -65,6 +65,7 @@ endif()
 
 ExternalProject_Add(
   trident-core
+  BUILD_ALWAYS TRUE
   SOURCE_DIR ${CMAKE_SOURCE_DIR}/core
   BINARY_DIR ${CMAKE_BINARY_DIR}/core
   INSTALL_DIR ${CMAKE_BINARY_DIR}/install/trident
@@ -89,6 +90,7 @@ ExternalProject_Add(
 
 ExternalProject_Add(
   trident-ffi
+  BUILD_ALWAYS TRUE
   SOURCE_DIR ${CMAKE_SOURCE_DIR}/ffi
   BINARY_DIR ${CMAKE_BINARY_DIR}/ffi
   INSTALL_DIR ${CMAKE_BINARY_DIR}/install/trident

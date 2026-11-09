@@ -3,37 +3,29 @@
 
 """Shared IR builders for graph import, input handling and Dynamo guards.
 
-Scalars stay native while computing and are boxed at FFI boundaries.
+Frontend values use TVM FFI types. Python builders unify scalar operand types,
+compute with temporary native values and immediately box the results.
 Checked calls validate lookup status, function handles and call status.
 """
 
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable, Sequence
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable, Sequence
+from contextlib import ExitStack
 from functools import partial
-from typing import Any
+from types import TracebackType
+from typing import Any, Self, TypeVar
 
 import torch
 import tvm_ffi as runtime
 
 from trident.core import ir
-from trident.core.dialects import arith, builtin, cf, llvm
+from trident.core.dialects import arith, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
-
-def _is_native_scalar(type_: ir.Type) -> bool:
-    return isinstance(type_, ir.F64Type) or (
-        isinstance(type_, ir.IntegerType)
-        and type_.is_signless
-        and type_.width in (1, 64)
-    )
-
-
-def _is_numeric_scalar(type_: ir.Type) -> bool:
-    return _is_native_scalar(type_) or isinstance(
-        type_, (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
-    )
+_NUMERIC_SCALAR_TYPES = (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
 
 
 def _is_signless_integer(type_: ir.Type, width: int) -> bool:
@@ -42,178 +34,224 @@ def _is_signless_integer(type_: ir.Type, width: int) -> bool:
     )
 
 
-def _wrap_bool(
-    builder: Callable[[ir.Value, ir.Value], ir.Value],
-) -> Callable[[ir.Value, ir.Value], ir.Value]:
-    def wrapped(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-        operands = []
-        for value in (lhs, rhs):
-            if isinstance(value.type, ir.F64Type):
-                value = arith.cmpf(arith.CmpFPredicate.UNE, value, native_constant(0.0))
-            elif not _is_signless_integer(value.type, 1):
-                value = arith.cmpi(arith.CmpIPredicate.ne, value, native_constant(0))
-            operands.append(value)
-        return builder(*operands)
-
-    return wrapped
-
-
-def _wrap_floating(
-    builder: Callable[[ir.Value, ir.Value], ir.Value],
-) -> Callable[[ir.Value, ir.Value], ir.Value]:
-    def wrapped(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-        operands = []
-        for value in (lhs, rhs):
-            if _is_signless_integer(value.type, 1):
-                value = arith.extui(ir.IntegerType.get_signless(64), value)
-            if not isinstance(value.type, ir.F64Type):
-                value = arith.sitofp(ir.F64Type.get(), value)
-            operands.append(value)
-        return builder(*operands)
-
-    return wrapped
-
-
-def _wrap_integer(
-    builder: Callable[[ir.Value, ir.Value], ir.Value],
-) -> Callable[[ir.Value, ir.Value], ir.Value]:
-    def wrapped(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-        if any(isinstance(value.type, ir.F64Type) for value in (lhs, rhs)):
-            raise NotImplementedError("floating-point input to integer operation")
-        return builder(
-            *(
-                arith.extui(ir.IntegerType.get_signless(64), value)
-                if _is_signless_integer(value.type, 1)
-                else value
-                for value in (lhs, rhs)
-            )
-        )
-
-    return wrapped
-
-
-# Entries contain boolean, integer and floating-point implementations, in that order.
+# Entries contain integer and floating-point implementations, in that order.
 _BINARY_ARITHMETIC: dict[
     Callable[..., Any],
     tuple[
         Callable[[ir.Value, ir.Value], ir.Value] | None,
         Callable[[ir.Value, ir.Value], ir.Value] | None,
-        Callable[[ir.Value, ir.Value], ir.Value] | None,
     ],
 ] = {
-    max: (None, _wrap_integer(arith.maxsi), _wrap_floating(arith.maximumf)),
-    min: (None, _wrap_integer(arith.minsi), _wrap_floating(arith.minimumf)),
-    operator.add: (None, _wrap_integer(arith.addi), _wrap_floating(arith.addf)),
-    operator.and_: (_wrap_bool(arith.andi), _wrap_integer(arith.andi), None),
+    max: (arith.maxsi, arith.maximumf),
+    min: (arith.minsi, arith.minimumf),
+    operator.add: (arith.addi, arith.addf),
+    operator.and_: (arith.andi, None),
     operator.eq: (
-        None,
-        _wrap_integer(partial(arith.cmpi, arith.CmpIPredicate.eq)),
-        _wrap_floating(partial(arith.cmpf, arith.CmpFPredicate.OEQ)),
+        partial(arith.cmpi, arith.CmpIPredicate.eq),
+        partial(arith.cmpf, arith.CmpFPredicate.OEQ),
     ),
-    operator.floordiv: (None, _wrap_integer(arith.floordivsi), None),
+    operator.floordiv: (arith.floordivsi, None),
     operator.ge: (
-        None,
-        _wrap_integer(partial(arith.cmpi, arith.CmpIPredicate.sge)),
-        _wrap_floating(partial(arith.cmpf, arith.CmpFPredicate.OGE)),
+        partial(arith.cmpi, arith.CmpIPredicate.sge),
+        partial(arith.cmpf, arith.CmpFPredicate.OGE),
     ),
     operator.gt: (
-        None,
-        _wrap_integer(partial(arith.cmpi, arith.CmpIPredicate.sgt)),
-        _wrap_floating(partial(arith.cmpf, arith.CmpFPredicate.OGT)),
+        partial(arith.cmpi, arith.CmpIPredicate.sgt),
+        partial(arith.cmpf, arith.CmpFPredicate.OGT),
     ),
     operator.le: (
-        None,
-        _wrap_integer(partial(arith.cmpi, arith.CmpIPredicate.sle)),
-        _wrap_floating(partial(arith.cmpf, arith.CmpFPredicate.OLE)),
+        partial(arith.cmpi, arith.CmpIPredicate.sle),
+        partial(arith.cmpf, arith.CmpFPredicate.OLE),
     ),
-    operator.lshift: (None, _wrap_integer(arith.shli), None),
+    operator.lshift: (arith.shli, None),
     operator.lt: (
-        None,
-        _wrap_integer(partial(arith.cmpi, arith.CmpIPredicate.slt)),
-        _wrap_floating(partial(arith.cmpf, arith.CmpFPredicate.OLT)),
+        partial(arith.cmpi, arith.CmpIPredicate.slt),
+        partial(arith.cmpf, arith.CmpFPredicate.OLT),
     ),
     operator.mod: (
-        None,
-        _wrap_integer(
-            lambda lhs, rhs: arith.subi(
-                lhs, arith.muli(arith.floordivsi(lhs, rhs), rhs)
-            )
-        ),
+        lambda lhs, rhs: arith.subi(lhs, arith.muli(arith.floordivsi(lhs, rhs), rhs)),
         None,
     ),
-    operator.mul: (None, _wrap_integer(arith.muli), _wrap_floating(arith.mulf)),
+    operator.mul: (arith.muli, arith.mulf),
     operator.ne: (
-        None,
-        _wrap_integer(partial(arith.cmpi, arith.CmpIPredicate.ne)),
-        _wrap_floating(partial(arith.cmpf, arith.CmpFPredicate.UNE)),
+        partial(arith.cmpi, arith.CmpIPredicate.ne),
+        partial(arith.cmpf, arith.CmpFPredicate.UNE),
     ),
-    operator.or_: (_wrap_bool(arith.ori), _wrap_integer(arith.ori), None),
-    operator.rshift: (None, _wrap_integer(arith.shrsi), None),
-    operator.sub: (None, _wrap_integer(arith.subi), _wrap_floating(arith.subf)),
-    operator.truediv: (None, None, _wrap_floating(arith.divf)),
-    operator.xor: (_wrap_bool(arith.xori), _wrap_integer(arith.xori), None),
+    operator.or_: (arith.ori, None),
+    operator.rshift: (arith.shrsi, None),
+    operator.sub: (arith.subi, arith.subf),
+    operator.truediv: (None, arith.divf),
+    operator.xor: (arith.xori, None),
 }
 
 
-def array(values: Sequence[ir.Value]) -> ir.Value:
-    return checked_call("ffi.Array", values, tvm_ffi_d.ArrayType.get())
-
-
-def array_get(value: ir.Value, index: int, result: ir.Type) -> ir.Value:
-    return checked_call("ffi.ArrayGetItem", [value, native_constant(index)], result)
+def array_type(types: Sequence[ir.Type]) -> tvm_ffi_d.ArrayType:
+    elements = [*types]
+    element = (
+        elements[0]
+        if elements and all(type_ == elements[0] for type_ in elements)
+        else tvm_ffi_d.AnyType.get()
+    )
+    return tvm_ffi_d.ArrayType.get(element)
 
 
 def binary(operation: Any, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-    lhs, rhs = native(lhs), native(rhs)
-    boolean, integer, floating = _BINARY_ARITHMETIC[operation]
-    if operation is operator.truediv or any(
-        isinstance(value.type, ir.F64Type) for value in (lhs, rhs)
-    ):
-        builder = floating
-    elif boolean is not None and all(
-        _is_signless_integer(value.type, 1) for value in (lhs, rhs)
-    ):
-        builder = boolean
-    else:
-        builder = integer
+    assert all(isinstance(value.type, _NUMERIC_SCALAR_TYPES) for value in (lhs, rhs)), (
+        "scalar operands must use TVM FFI types"
+    )
+    values = (native(lhs), native(rhs))
+    integer, floating = _BINARY_ARITHMETIC[operation]
+    use_float = operation is operator.truediv or any(
+        isinstance(value.type, ir.F64Type) for value in values
+    )
+    builder = floating if use_float else integer
     if builder is None:
         raise NotImplementedError(f"unsupported scalar operation: {operation}")
-    return builder(lhs, rhs)
-
-
-def box(value: ir.Value) -> ir.Value:
-    return tvm_ffi_d.to(value) if _is_native_scalar(value.type) else value
-
-
-def checked_call(name: str, arguments: Sequence[ir.Value], result: ir.Type) -> ir.Value:
-    handle = tvm_ffi_d.FunctionGetGlobalOp(name)
-    cf.AssertOp(handle.success, f"TVMFFIFunctionGetGlobal failed for {name}")
-    pointer = builtin.unrealized_conversion_cast(
-        [llvm.PointerType.get()], [handle.result]
+    keep_bool = operation in (operator.and_, operator.or_, operator.xor) and all(
+        _is_signless_integer(value.type, 1) for value in values
     )
-    null = llvm.mlir_zero(llvm.PointerType.get())
-    nonnull = llvm.icmp(llvm.ICmpPredicate.ne, pointer, null)
-    cf.AssertOp(nonnull, f"TVMFFIFunctionGetGlobal returned null for {name}")
-    call = tvm_ffi_d.FunctionCallOp(
-        result,
-        ir.IntegerType.get_signless(1),
-        handle.result,
-        [box(argument) for argument in arguments],
-    )
-    cf.AssertOp(call.success, f"TVMFFIFunctionCall failed for {name}")
-    return call.result
+    operands: list[ir.Value] = []
+    for value in values:
+        if use_float and not isinstance(value.type, ir.F64Type):
+            value = (
+                arith.uitofp(ir.F64Type.get(), value)
+                if _is_signless_integer(value.type, 1)
+                else arith.sitofp(ir.F64Type.get(), value)
+            )
+        elif not keep_bool and _is_signless_integer(value.type, 1):
+            value = arith.extui(ir.IntegerType.get_signless(64), value)
+        operands.append(value)
+    return tvm_ffi_d.to(builder(*operands))
+
+
+BINARY_ARITHMETIC: dict[
+    Callable[..., Any], Callable[[ir.Value, ir.Value], ir.Value]
+] = {operation: partial(binary, operation) for operation in _BINARY_ARITHMETIC}
+
+
+class Scope(ABC):
+    """Construct one block with an explicit, operation-specific terminator."""
+
+    def __init__(self, block: ir.Block) -> None:
+        self.block = block
+        self._insertion_point = ir.InsertionPoint(block)
+
+    def __enter__(self) -> Self:
+        self._insertion_point.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._insertion_point.__exit__(exc_type, exc_value, traceback)
+
+    @property
+    @abstractmethod
+    def results(self) -> list[ir.Value]:
+        """Complete operation results forwarded to the enclosing scope."""
+
+    @abstractmethod
+    def yield_(self, values: Sequence[ir.Value]) -> None:
+        """Terminate only this block; operation results belong to its owner."""
+
+
+class BindScope(Scope):
+    """Expose borrowed payloads in one monadic success region."""
+
+    def __init__(
+        self, result_types: Sequence[ir.Type], inputs: Sequence[ir.Value]
+    ) -> None:
+        assert all(isinstance(type_, tvm_ffi_d.ResultType) for type_ in result_types)
+        assert all(isinstance(value.type, tvm_ffi_d.ResultType) for value in inputs), (
+            "bind inputs must be Results"
+        )
+        self.operation = tvm_ffi_d.MonadBindOp(result_types, inputs)
+        super().__init__(self.operation.add_entry_block())
+
+    @property
+    def arguments(self) -> Sequence[ir.Value]:
+        return self.operation.arguments
+
+    @property
+    def results(self) -> list[ir.Value]:
+        return [*self.operation.outputs]
+
+    def yield_(self, values: Sequence[ir.Value]) -> None:
+        with ir.InsertionPoint(self.block):
+            tvm_ffi_d.monad_yield(values)
+
+
+_ScopeT = TypeVar("_ScopeT", bound=Scope)
+
+
+class ScopeStack(ExitStack):
+    """Enter local scopes and explicitly terminate them from innermost outward."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._scopes: list[Scope] = []
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self._scopes.clear()
+
+    def bind(
+        self, result_types: Sequence[ir.Type], inputs: Sequence[ir.Value]
+    ) -> Sequence[ir.Value]:
+        return self.push(BindScope(result_types, inputs)).arguments
+
+    def push(self, scope: _ScopeT) -> _ScopeT:
+        self.enter_context(scope)
+        self._scopes.append(scope)
+        return scope
+
+    def yield_(self, values: Sequence[ir.Value]) -> list[ir.Value]:
+        """Drain this stack, forwarding complete results from each scope."""
+        results = [*values]
+        while self._scopes:
+            scope = self._scopes.pop()
+            scope.yield_(results)
+            results = scope.results
+        self.close()
+        return results
+
+
+def checked_call(
+    name: str, arguments: Sequence[ir.Value], result: ir.Type
+) -> list[ir.Value]:
+    """Return an asserting invocation wrapped as a successful Result."""
+    handle = tvm_ffi_d.FunctionGetGlobalOp(name).result
+    call = tvm_ffi_d.FunctionCallOp(result, handle, arguments)
+    return [pure(call.result)]
 
 
 def constant(value: Any) -> ir.Value:
-    if isinstance(value, (bool, int, float)):
-        return native_constant(value)
-    if value is None:
+    if isinstance(value, bool):
+        return tvm_ffi_d.constant_bool(value)
+    elif isinstance(value, int):
+        assert -(1 << 63) <= value < (1 << 63), (
+            f"integer does not fit the i64 runtime ABI: {value}"
+        )
+        return tvm_ffi_d.constant_int(value)
+    elif isinstance(value, float):
+        return tvm_ffi_d.constant_float(value)
+    elif value is None:
         return tvm_ffi_d.constant_none()
-    if isinstance(value, str):
-        return tvm_ffi_d.constant_raw_str(value)
-    if isinstance(value, torch.device):
+    elif isinstance(value, str):
+        return tvm_ffi_d.constant_str(value)
+    elif isinstance(value, torch.device):
         return tvm_ffi_d.constant_device(f"{value}")
-    if isinstance(value, torch.dtype):
+    elif isinstance(value, torch.dtype):
         dtype = runtime.convert(value)
         i64 = ir.IntegerType.get_signless(64)
         return tvm_ffi_d.constant_dtype(
@@ -222,9 +260,7 @@ def constant(value: Any) -> ir.Value:
                 for field in (dtype.type_code, dtype.bits, dtype.lanes)
             ]
         )
-    if isinstance(value, (tuple, list)):
-        return array([constant(element) for element in value])
-    if isinstance(value, torch.Tensor):
+    elif isinstance(value, torch.Tensor):
         # Lifted literals reuse the existing owned runtime materialization.
         cpu = value.detach().cpu().contiguous()
         if cpu.dtype == torch.bfloat16:
@@ -235,70 +271,170 @@ def constant(value: Any) -> ir.Value:
         else:
             elements = ir.DenseElementsAttr.get(cpu.numpy())
         return tvm_ffi_d.tensor_literal(elements)
-    raise NotImplementedError(f"unsupported FX constant: {value!r}")
+    else:
+        raise NotImplementedError(f"unsupported FX constant: {value!r}")
+
+
+def container_create(values: Sequence[ir.Value], type_: ir.Type) -> list[ir.Value]:
+    elements = [*values]
+    types = (
+        type_.types
+        if isinstance(type_, tvm_ffi_d.TupleType)
+        else [type_.element_type] * len(elements)
+    )
+    elements = [
+        tvm_ffi_d.upcast(target, value)
+        for value, target in zip(elements, types, strict=True)
+    ]
+    if isinstance(type_, tvm_ffi_d.TupleType):
+        value = tvm_ffi_d.tuple_construct(type_, elements)
+    else:
+        value = tvm_ffi_d.array_create(type_, elements)
+    return [pure(value)]
+
+
+def container_get(
+    container: ir.Value, index: int | ir.Value, target: ir.Type
+) -> list[ir.Value]:
+    type_ = container.type
+    if isinstance(type_, tvm_ffi_d.TupleType):
+        assert isinstance(index, int)
+        assert -len(type_.types) <= index < len(type_.types), "tuple index out of range"
+        payload = type_.types[index]
+        value = tvm_ffi_d.TupleUnconstructOp(type_.types, container).elements[index]
+    elif isinstance(type_, tvm_ffi_d.ArrayType):
+        payload = type_.element_type
+        value = tvm_ffi_d.array_get(
+            container, native(constant(index) if isinstance(index, int) else index)
+        )
+    else:
+        return checked_call(
+            "ffi.ArrayGetItem",
+            [container, constant(index) if isinstance(index, int) else index],
+            target,
+        )
+    widening = isinstance(
+        target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+    ) and not isinstance(payload, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType))
+    if payload != target and not widening:
+        value = tvm_ffi_d.downcast(target, value)
+    return [pure(value, result_type=tvm_ffi_d.ResultType.get(target))]
 
 
 def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-    if _is_numeric_scalar(lhs.type) and _is_numeric_scalar(rhs.type):
+    if isinstance(lhs.type, _NUMERIC_SCALAR_TYPES) and isinstance(
+        rhs.type, _NUMERIC_SCALAR_TYPES
+    ):
         return binary(operator.eq, lhs, rhs)
-    return tvm_ffi_d.eq(box(lhs), box(rhs))
+    else:
+        return tvm_ffi_d.to(tvm_ffi_d.eq(lhs, rhs))
 
 
-def ffi_type(name: str) -> ir.Type:
-    """Compatibility constructor for a textual TVM FFI type description."""
-    return ir.Type.parse(f"!tvm_ffi.{name}")
+def logical_not(value: ir.Value) -> ir.Value:
+    """Compare against zero, preserving NaN truthiness and signed-zero behavior."""
+    return equal(value, constant(0))
 
 
-def is_binary_operation(operation: Any) -> bool:
-    """Whether a callable has a native binary scalar implementation."""
-    return operation in _BINARY_ARITHMETIC
-
-
-def native(value: ir.Value) -> ir.Value:
+def negate(value: ir.Value) -> ir.Value:
     return (
-        tvm_ffi_d.get(value)
-        if isinstance(
-            value.type, (tvm_ffi_d.BoolType, tvm_ffi_d.IntType, tvm_ffi_d.FloatType)
-        )
-        else value
+        tvm_ffi_d.to(arith.negf(native(value)))
+        if isinstance(value.type, tvm_ffi_d.FloatType)
+        else binary(operator.sub, constant(0), value)
     )
 
 
-def native_constant(value: bool | float) -> ir.Value:
-    if isinstance(value, bool):
-        type_ = ir.IntegerType.get_signless(1)
-    elif isinstance(value, int):
-        type_ = ir.IntegerType.get_signless(64)
-        if not -(1 << 63) <= value < (1 << 63):
-            raise OverflowError(f"integer does not fit the i64 runtime ABI: {value}")
+def power(base: ir.Value, exponent: int) -> ir.Value:
+    """Build a nonnegative constant power using the runtime's scalar widths."""
+    assert isinstance(exponent, int) and exponent >= 0
+    floating = isinstance(base.type, tvm_ffi_d.FloatType)
+    result = constant(1.0 if floating else 1)
+    if floating:
+        # Preserve sequential floating-point multiplication and rounding.
+        for _ in range(exponent):
+            result = binary(operator.mul, result, base)
     else:
-        type_ = ir.F64Type.get()
-    return arith.constant(type_, value)
+        # Squaring keeps the number of generated integer operations logarithmic.
+        while exponent:
+            if exponent & 1:
+                result = binary(operator.mul, result, base)
+            exponent >>= 1
+            if exponent:
+                base = binary(operator.mul, base, base)
+    return result
+
+
+def make_result_types(payload_types: Iterable[ir.Type]) -> list[ir.Type]:
+    """Wrap TVM FFI payload types, using None for an empty sequence."""
+    return [tvm_ffi_d.ResultType.get(type_) for type_ in payload_types] or [
+        tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
+    ]
+
+
+def native(value: ir.Value) -> ir.Value:
+    """Extract a temporary native scalar for arithmetic or a dialect interface."""
+    assert isinstance(value.type, _NUMERIC_SCALAR_TYPES), (
+        "scalar must use a TVM FFI type"
+    )
+    return tvm_ffi_d.get(value)
+
+
+def pure(value: ir.Value, *, result_type: ir.Type | None = None) -> ir.Value:
+    """Wrap one borrowed payload in a successful Result."""
+    assert isinstance(value, ir.Value), "pure requires one MLIR value"
+    if result_type is None:
+        result_type = tvm_ffi_d.ResultType.get(value.type)
+    assert isinstance(result_type, tvm_ffi_d.ResultType)
+    target = result_type.payload_type
+    assert value.type == target or isinstance(
+        target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+    ), "payload type must match Result type"
+    payload = tvm_ffi_d.upcast(target, value)
+    return tvm_ffi_d.MonadPureOp(result_type, payload).output
+
+
+def select(condition: ir.Value, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
+    """Select between equally typed semantic values without exposing native results."""
+    assert isinstance(condition.type, tvm_ffi_d.BoolType)
+    assert lhs.type == rhs.type, "select alternatives must have the same TVM FFI type"
+    selection = scf.IfOp(native(condition), [lhs.type], has_else=True)
+    with ir.InsertionPoint(selection.then_block):
+        scf.yield_([lhs])
+    with ir.InsertionPoint(selection.else_block):
+        scf.yield_([rhs])
+    [result] = selection.results
+    return result
+
+
+def tensor_device_fields(tensor: ir.Value) -> list[ir.Value]:
+    """Read the DLPack device type and index as semantic integer values."""
+    return [
+        tvm_ffi_d.to(arith.extsi(ir.IntegerType.get_signless(64), field))
+        for field in tvm_ffi_d.tensor_device(tensor)
+    ]
 
 
 def value_type(value: Any) -> ir.Type:
     if isinstance(value, torch.Tensor):
         return tvm_ffi_d.TensorType.get()
-    if isinstance(value, (bool, torch.SymBool)):
+    elif isinstance(value, (bool, torch.SymBool)):
         return tvm_ffi_d.BoolType.get()
-    if isinstance(value, (int, torch.SymInt)):
+    elif isinstance(value, (int, torch.SymInt)):
         return tvm_ffi_d.IntType.get()
-    if isinstance(value, (float, torch.SymFloat)):
+    elif isinstance(value, (float, torch.SymFloat)):
         return tvm_ffi_d.FloatType.get()
-    if isinstance(value, str):
-        return tvm_ffi_d.UnionType.get(
-            [
-                tvm_ffi_d.RawStrType.get(),
-                tvm_ffi_d.SmallStrType.get(),
-                tvm_ffi_d.StrType.get(),
-            ]
-        )
-    if isinstance(value, torch.device):
+    elif isinstance(value, str):
+        return tvm_ffi_d.StrType.get()
+    elif isinstance(value, torch.device):
         return tvm_ffi_d.DeviceType.get()
-    if isinstance(value, torch.dtype):
+    elif isinstance(value, torch.dtype):
         return tvm_ffi_d.DTypeType.get()
-    if isinstance(value, (tuple, list, dict)):
-        return tvm_ffi_d.ArrayType.get()
-    if value is None:
+    elif isinstance(value, list):
+        return array_type([value_type(item) for item in value])
+    elif isinstance(value, tuple):
+        return tvm_ffi_d.TupleType.get([value_type(item) for item in value])
+    elif isinstance(value, dict):
+        return tvm_ffi_d.ArrayType.get(tvm_ffi_d.AnyType.get())
+    elif value is None:
         return tvm_ffi_d.NoneType.get()
-    raise NotImplementedError(f"unsupported FX value type: {type(value)}")
+    else:
+        raise NotImplementedError(f"unsupported FX value type: {type(value)}")

@@ -6,38 +6,42 @@ from __future__ import annotations
 import ast
 import operator
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from functools import reduce
-from itertools import chain, pairwise
-from typing import Any, ClassVar, TypeAlias
+from itertools import pairwise
+from typing import Any, ClassVar
 
 import torch
 
 from trident.core import ir
-from trident.core.dialects import arith
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.input import InputTable
 from trident.ir import (
-    binary,
+    BINARY_ARITHMETIC,
+    BindScope,
+    ScopeStack,
     checked_call,
     constant,
     equal,
+    logical_not,
+    make_result_types,
     native,
-    native_constant,
+    negate,
+    pure,
+    select,
+    value_type,
 )
 
 from .local import Local
 
-GuardBuildFn: TypeAlias = Callable[[InputTable, ir.Context], ir.Value]
-TensorMetadataFn: TypeAlias = Callable[[ir.Value], ir.Value]
-TensorIndexedMetadataFn: TypeAlias = Callable[[ir.Value, ir.Value], ir.Value]
-ScalarOperationKey: TypeAlias = type[ast.operator | ast.cmpop] | str
 
+class ASTVisitor:
+    """Validate guard syntax without creating IR or delayed builder chains."""
 
-class ASTVisitor(ast.NodeVisitor):
-    """Compose delayed native/TVM FFI builders from Dynamo guard expressions."""
-
-    _scalar_ops: ClassVar[dict[ScalarOperationKey, Callable[..., Any]]] = {
+    scalar_ops: ClassVar[
+        dict[type[ast.operator | ast.cmpop] | str, Callable[..., Any]]
+    ] = {
         ast.Add: operator.add,
         ast.BitOr: operator.or_,
         ast.Div: operator.truediv,
@@ -55,424 +59,480 @@ class ASTVisitor(ast.NodeVisitor):
         "min": min,
     }
 
-    def __init__(self, text: str) -> None:
-        self.text = text
+    @staticmethod
+    def device(node: ast.Call) -> torch.device | None:
+        if not isinstance(node.func, ast.Name) or node.func.id != "device" or node.args:
+            return None
+        try:
+            keywords = {
+                keyword.arg: ast.literal_eval(keyword.value)
+                for keyword in node.keywords
+            }
+            return (
+                torch.device(**keywords)
+                if len(keywords) == len(node.keywords)
+                else None
+            )
+        except (SyntaxError, TypeError, ValueError, RuntimeError):
+            return None
 
     @staticmethod
-    def _build_binary_template(
-        lhs: GuardBuildFn, rhs: GuardBuildFn, operation_key: ScalarOperationKey
-    ) -> GuardBuildFn:
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
-            return binary(
-                ASTVisitor._scalar_ops[operation_key],
-                lhs(tree, context),
-                rhs(tree, context),
-            )
-
-        return build
-
-    def _build_comparison(
-        self, operation: ast.cmpop, lhs: GuardBuildFn, rhs: GuardBuildFn
-    ) -> GuardBuildFn:
-        if isinstance(operation, ast.Eq):
-            return lambda tree, context: equal(lhs(tree, context), rhs(tree, context))
-        return self._build_binary_template(lhs, rhs, type(operation))
-
-    def _build_identity(self, lhs: Local, rhs: Local) -> GuardBuildFn:
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
-            lhs_value, rhs_value = lhs.resolve(tree), rhs.resolve(tree)
-            assert lhs_value is not None and rhs_value is not None, (
-                f"guard source cannot be resolved: {self.text!r}"
-            )
-            if not isinstance(lhs_value.type, tvm_ffi_d.TensorType) or not isinstance(
-                rhs_value.type, tvm_ffi_d.TensorType
+    def metadata(node: ast.expr) -> tuple[Local | None, str, int | None]:
+        index = None
+        if isinstance(node, ast.Subscript):
+            if (
+                not isinstance(node.slice, ast.Constant)
+                or not isinstance(node.slice.value, int)
+                or isinstance(node.slice.value, bool)
             ):
-                return equal(lhs_value, rhs_value)
+                return None, "", None
+            index = node.slice.value
+            node = node.value
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and not node.args
+            and not node.keywords
+        ):
+            return Local.from_expression(node.func.value), node.func.attr, index
+        else:
+            return None, "", None
+
+    @classmethod
+    def supports(cls, node: ast.expr) -> bool:
+        if Local.from_expression(node) is not None:
+            return True
+        elif isinstance(node, ast.Constant):
+            return node.value is None or isinstance(node.value, (bool, int, float, str))
+        elif isinstance(node, ast.Attribute):
+            return (
+                (
+                    isinstance(node.value, ast.Name)
+                    and node.value.id == "torch"
+                    and isinstance(getattr(torch, node.attr, None), torch.dtype)
+                )
+                or node.attr == "_base"
+                or (isinstance(node.value, ast.Attribute) and cls.supports(node.value))
+            )
+        elif isinstance(node, ast.BinOp):
+            return (
+                type(node.op) in cls.scalar_ops
+                and cls.supports(node.left)
+                and cls.supports(node.right)
+            )
+        elif isinstance(node, ast.BoolOp):
+            return all(cls.supports(value) for value in node.values)
+        elif isinstance(node, ast.UnaryOp):
+            return isinstance(node.op, (ast.Not, ast.UAdd, ast.USub)) and cls.supports(
+                node.operand
+            )
+        elif isinstance(node, ast.IfExp):
+            return all(
+                cls.supports(value) for value in (node.test, node.body, node.orelse)
+            )
+        elif isinstance(node, ast.Compare):
+            if any(isinstance(operation, ast.Is) for operation in node.ops):
+                if len(node.ops) != 1:
+                    return True  # Preserve the build-time invariant diagnostic.
+                (rhs,) = node.comparators
+                if isinstance(rhs, ast.Constant) and rhs.value is None:
+                    return cls.supports(node.left)
+                else:
+                    left, right = (
+                        Local.from_expression(node.left),
+                        Local.from_expression(rhs),
+                    )
+                    return left is not None and right is not None and left != right
+            else:
+                return True  # Unsupported operators/operands receive precise diagnostics when visited.
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if cls.device(node) is not None:
+                return True
+            elif (
+                node.func.id in ("max", "min")
+                and len(node.args) == 2
+                and not node.keywords
+            ):
+                return all(cls.supports(value) for value in node.args)
+            elif node.func.id == "len" and len(node.args) == 1 and not node.keywords:
+                (source,) = node.args
+                return (
+                    Local.from_expression(
+                        source.value
+                        if isinstance(source, ast.Attribute) and source.attr == "shape"
+                        else source
+                    )
+                    is not None
+                )
+        source, method, index = cls.metadata(node)
+        if source is not None:
+            return (method in ("ndimension", "storage_offset") and index is None) or (
+                method in ("size", "stride") and index is not None
+            )
+        else:
+            call = node.value if isinstance(node, ast.Subscript) else node
+            return (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Attribute)
+                and call.func.value.attr == "_base"
+                and not call.args
+                and not call.keywords
+            )
+
+
+class GuardExpressionVisitor:
+    """Build complete expression Results, with static whole-expression fallback metadata."""
+
+    def __init__(
+        self,
+        text: str,
+        tree: InputTable | None,
+        context: ir.Context,
+    ) -> None:
+        self.text = text
+        self.tree = tree
+        self.context = context
+        self._analysis: dict[ast.expr, _ExpressionAnalysis] = {}
+
+    def _analyze(self, node: ast.expr) -> _ExpressionAnalysis:
+        if node in self._analysis:
+            return self._analysis[node]
+        source = Local.from_expression(node)
+        if source is not None:
+            assert self.tree is not None
+            entry = self.tree.node(source.subscripts)
+            assert entry is not None, f"guard source cannot be resolved: {self.text!r}"
+            analysis = _ExpressionAnalysis(entry.type, pure=entry.value is not None)
+        elif isinstance(node, ast.Constant):
+            analysis = _ExpressionAnalysis(value_type(node.value))
+        elif self._direct_fallback(node):
+            analysis = _ExpressionAnalysis(tvm_ffi_d.BoolType.get(), fallback=True)
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            analysis = _ExpressionAnalysis(value_type(getattr(torch, node.attr)))
+        elif isinstance(node, ast.Call) and ASTVisitor.device(node) is not None:
+            analysis = _ExpressionAnalysis(tvm_ffi_d.DeviceType.get())
+        else:
+            length = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "len"
+            )
+            array_size = False
+            if length:
+                [argument] = node.args
+                array_size = not (
+                    isinstance(argument, ast.Attribute) and argument.attr == "shape"
+                )
+            operands: list[ast.expr] = []
+            types: list[ir.Type] = []
+            pure = not array_size
+            fallback: bool | None = None
+            for operand in self._operands(node):
+                operands.append(operand)
+                child = self._analyze(operand)
+                types.append(child.type)
+                pure = pure and child.pure
+                fallback = child.fallback
+                if fallback is not None:
+                    break
+            if (
+                fallback is not None
+                or isinstance(node, ast.Compare)
+                or (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not))
+            ):
+                type_ = tvm_ffi_d.BoolType.get()
+            elif isinstance(node, ast.Attribute):
+                [type_] = types
+            elif isinstance(node, (ast.BoolOp, ast.UnaryOp)):
+                first_type, *_ = types
+                type_ = (
+                    tvm_ffi_d.IntType.get()
+                    if isinstance(node, ast.UnaryOp)
+                    and isinstance(node.op, ast.USub)
+                    and isinstance(first_type, tvm_ffi_d.BoolType)
+                    else first_type
+                )
+            elif isinstance(node, ast.IfExp):
+                _, body_type, _ = types
+                type_ = body_type
+            elif length:
+                type_ = tvm_ffi_d.IntType.get()
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                type_ = tvm_ffi_d.FloatType.get()
+            else:
+                type_ = (
+                    tvm_ffi_d.BoolType.get()
+                    if isinstance(node, ast.BinOp)
+                    and isinstance(node.op, ast.BitOr)
+                    and all(isinstance(type_, tvm_ffi_d.BoolType) for type_ in types)
+                    else tvm_ffi_d.FloatType.get()
+                    if any(isinstance(type_, tvm_ffi_d.FloatType) for type_ in types)
+                    else tvm_ffi_d.IntType.get()
+                )
+            analysis = _ExpressionAnalysis(
+                type_, tuple(operands), pure, fallback, array_size
+            )
+        self._analysis[node] = analysis
+        return analysis
+
+    def _build_comparison(self, node: ast.Compare) -> list[ir.Value]:
+        analysis = self._analyze(node)
+        types = make_result_types([analysis.type])
+        with ScopeStack() as stack:
+            comparisons: list[ir.Value] = []
+            for index, operation in enumerate(node.ops):
+                operands = analysis.operands[2 * index : 2 * index + 2]
+                values = stack.bind(types, self._build_operands(operands))
+                if any(
+                    self._analyze(operand).fallback is not None for operand in operands
+                ):
+                    # A whole-expression fallback replaces preceding comparisons.
+                    value = values[-1]
+                    break
+                comparisons.append(self._compare(operation, *values))
+            else:
+                value = reduce(
+                    BINARY_ARITHMETIC[operator.and_], comparisons, constant(True)
+                )
+            results = [pure(value, result_type=types[0])]
+            return stack.yield_(results)
+
+    def _build_operands(self, operands: Sequence[ast.expr]) -> list[ir.Value]:
+        """Build analyzed operands, already truncated at the first fallback."""
+        types = make_result_types(self._analyze(value).type for value in operands)
+
+        with ScopeStack() as stack:
+            values: list[ir.Value] = []
+            for operand in operands:
+                if self._analyze(operand).pure:
+                    values.append(self.value(operand))
+                else:
+                    scope = stack.push(BindScope(types, self.build(operand)))
+                    values.extend(scope.arguments)
+            results = [
+                pure(value, result_type=result_type)
+                for value, result_type in zip(
+                    values or [constant(None)], types, strict=True
+                )
+            ]
+            return stack.yield_(results)
+
+    def _compare(self, operation: ast.cmpop, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
+        if isinstance(operation, ast.Is) and all(
+            isinstance(value.type, tvm_ffi_d.TensorType) for value in (lhs, rhs)
+        ):
             warnings.warn(
                 f"Skipping unsupported Tensor identity guard; object identity will not be validated: {self.text!r}",
                 RuntimeWarning,
                 stacklevel=2,
             )
-            return native_constant(True)
-
-        return build
-
-    @staticmethod
-    def _build_logical_and(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-        return arith.andi(native(lhs), native(rhs))
-
-    @staticmethod
-    def _build_logical_not(value: ir.Value) -> ir.Value:
-        return arith.xori(native(value), native_constant(True))
-
-    @staticmethod
-    def _build_logical_or(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-        return arith.ori(native(lhs), native(rhs))
-
-    @staticmethod
-    def _build_negate(value: ir.Value) -> ir.Value:
-        value = native(value)
-        return (
-            arith.negf(value)
-            if isinstance(value.type, ir.F64Type)
-            else arith.subi(native_constant(0), value)
-        )
-
-    def _build_not_sequence(self, source: Local) -> GuardBuildFn:
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
-            value = source.resolve(tree)
-            assert value is not None, f"guard source cannot be resolved: {self.text!r}"
-            return binary(operator.eq, self._sequence_length(value), native_constant(0))
-
-        return build
-
-    @staticmethod
-    def _build_select(
-        condition: ir.Value, true_value: ir.Value, false_value: ir.Value
-    ) -> ir.Value:
-        return arith.select(native(condition), native(true_value), native(false_value))
-
-    def _build_tensor_indexed_metadata(
-        self, source: Local, operation: TensorIndexedMetadataFn, index: int
-    ) -> GuardBuildFn:
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
-            tensor = source.resolve(tree)
-            assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-            return operation(tensor, native_constant(index))
-
-        return build
-
-    def _build_tensor_metadata(
-        self, source: Local, operation: TensorMetadataFn
-    ) -> GuardBuildFn:
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
-            tensor = source.resolve(tree)
-            assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-            return operation(tensor)
-
-        return build
-
-    @staticmethod
-    def _constant(value: Any) -> GuardBuildFn | None:
-        if value is None or isinstance(
-            value, (torch.device, torch.dtype, bool, int, float, str)
-        ):
-            return lambda _, context: constant(value)
-        return None
-
-    def _error(self, message: str) -> GuardBuildFn:
-        def build(_: InputTable, context: ir.Context) -> ir.Value:
-            assert False, f"{message}: {self.text!r} in {context}"
-
-        return build
-
-    @staticmethod
-    def _false(context: ir.Context) -> ir.Value:
-        return native_constant(False)
-
-    @staticmethod
-    def _sequence_length(value: ir.Value) -> ir.Value:
-        return native(checked_call("ffi.ArraySize", [value], tvm_ffi_d.IntType.get()))
-
-    def _skip_base(self) -> GuardBuildFn:
-        def build(_: InputTable, context: ir.Context) -> ir.Value:
-            warnings.warn(
-                f"Unsupported Tensor._base guard forces a specialization miss: {self.text!r} in {context}",
-                RuntimeWarning,
-                stacklevel=2,
+            return constant(True)
+        else:
+            return (
+                equal(lhs, rhs)
+                if isinstance(operation, (ast.Eq, ast.Is))
+                else BINARY_ARITHMETIC[ASTVisitor.scalar_ops[type(operation)]](lhs, rhs)
             )
-            raise _SkipGuard(True)
 
-        return build
+    def _container_size(self, value: ir.Value) -> list[ir.Value]:
+        if isinstance(value.type, tvm_ffi_d.TupleType):
+            # Entry guards validate untrusted tuple arity before the static
+            # schema may be used; static type arity cannot validate the input.
+            return checked_call("ffi.ArraySize", [value], tvm_ffi_d.IntType.get())
+        return [pure(tvm_ffi_d.array_size(value))]
 
-    def _skip_storage_offset(self) -> GuardBuildFn:
-        def build(_: InputTable, __: ir.Context) -> ir.Value:
-            # Python Tensor arguments reach the packed TVM FFI function via
-            # DLPack. That boundary exposes the logical data pointer and
-            # canonicalizes byte_offset to zero, so the original PyTorch
-            # storage_offset is neither observable nor needed for addressing.
-            raise _SkipGuard(True)
+    def _direct_fallback(self, node: ast.expr) -> bool:
+        if isinstance(node, ast.Attribute):
+            return node.attr == "_base"
+        elif isinstance(node, (ast.Call, ast.Subscript)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                return False
+            else:
+                source, method, _ = ASTVisitor.metadata(node)
+                return source is None or method == "storage_offset"
+        else:
+            return False
 
-        return build
-
-    @staticmethod
-    def _true(context: ir.Context) -> ir.Value:
-        return native_constant(True)
-
-    @staticmethod
-    def _value(
-        build_fn: GuardBuildFn,
-        tree: InputTable,
-        context: ir.Context,
-    ) -> ir.Value:
-        return build_fn(tree, context)
-
-    def _visit_method_call(self, node: ast.Call) -> GuardBuildFn | None:
-        if not isinstance(node.func, ast.Attribute) or node.args or node.keywords:
-            return None
-        if (
-            isinstance(node.func.value, ast.Attribute)
-            and node.func.value.attr == "_base"
-        ):
-            return self._skip_base()
-        source = Local.from_expression(node.func.value)
-        if source is None:
-            return None
-        if node.func.attr == "storage_offset":
-            return self._skip_storage_offset()
-        operations = {
-            "ndimension": tvm_ffi_d.tensor_dim,
-        }
-        operation = operations.get(node.func.attr)
-        return self._build_tensor_metadata(source, operation) if operation else None
-
-    def build(self, expression: ast.expr | str) -> GuardBuildFn | None:
-        if isinstance(expression, str):
-            expression = ast.parse(expression, mode="eval").body
-        build_fn = self.visit(expression)
-        if build_fn is None:
-            return None
-
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
-            try:
-                return build_fn(tree, context)
-            except _SkipGuard as skip:
-                return self._true(context) if skip.result else self._false(context)
-
-        return build
-
-    def generic_visit(self, node: ast.AST) -> None:
-        return None
-
-    def visit_Attribute(self, node: ast.Attribute) -> GuardBuildFn | None:
-        if (
-            isinstance(node.value, ast.Name)
-            and node.value.id == "torch"
-            and isinstance(value := getattr(torch, node.attr, None), torch.dtype)
-        ):
-            return self._constant(value)
-        if node.attr == "_base":
-            return self._skip_base()
-        if isinstance(node.value, ast.Attribute):
-            return self.visit(node.value)
-        return None
-
-    def visit_BinOp(self, node: ast.BinOp) -> GuardBuildFn | None:
-        if type(node.op) not in self._scalar_ops:
-            return None
-        lhs = self.visit(node.left)
-        rhs = self.visit(node.right)
-        if lhs is None or rhs is None:
-            return None
-        return self._build_binary_template(
-            lhs,
-            rhs,
-            type(node.op),
-        )
-
-    def visit_BoolOp(self, node: ast.BoolOp) -> GuardBuildFn | None:
-        values = [self.visit(value) for value in node.values]
-        if any(value is None for value in values):
-            return None
-        function = (
-            self._build_logical_and
-            if isinstance(node.op, ast.And)
-            else self._build_logical_or
-        )
-
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
+    def _evaluate(self, node: ast.expr, values: Sequence[ir.Value]) -> ir.Value:
+        if isinstance(node, ast.Attribute):
+            [value] = values
+            return value
+        elif isinstance(node, ast.BinOp):
+            return BINARY_ARITHMETIC[ASTVisitor.scalar_ops[type(node.op)]](*values)
+        elif isinstance(node, ast.BoolOp):
             return reduce(
-                function,
-                (self._value(value, tree, context) for value in values if value),
+                BINARY_ARITHMETIC[
+                    operator.and_ if isinstance(node.op, ast.And) else operator.or_
+                ],
+                values,
             )
-
-        return build
-
-    def visit_Call(self, node: ast.Call) -> GuardBuildFn | None:
-        if (
-            isinstance(node.func, ast.Name)
-            and node.func.id == "device"
-            and not node.args
-        ):
-            try:
-                keywords = {
-                    keyword.arg: ast.literal_eval(keyword.value)
-                    for keyword in node.keywords
-                }
-                if len(keywords) != len(node.keywords):
-                    return None
-                value = torch.device(**keywords)
-            except (SyntaxError, TypeError, ValueError, RuntimeError):
-                return None
-            return self._constant(value)
-
-        operations = {"max", "min"}
-        if (
-            isinstance(node.func, ast.Name)
-            and len(node.args) == 2
-            and not node.keywords
-            and node.func.id in operations
-        ):
-            lhs_node, rhs_node = node.args
-            lhs = self.visit(lhs_node)
-            rhs = self.visit(rhs_node)
-            if lhs is None or rhs is None:
-                return None
-            return self._build_binary_template(
-                lhs,
-                rhs,
-                node.func.id,
-            )
-
-        if (
-            not isinstance(node.func, ast.Name)
-            or node.func.id != "len"
-            or len(node.args) != 1
-            or node.keywords
-        ):
-            return self._visit_method_call(node)
-
-        [argument] = node.args
-        is_tensor_shape = (
-            isinstance(argument, ast.Attribute) and argument.attr == "shape"
-        )
-        source = Local.from_expression(argument.value if is_tensor_shape else argument)
-        if source is None:
-            return None
-        return self._build_tensor_metadata(
-            source,
-            tvm_ffi_d.tensor_dim if is_tensor_shape else self._sequence_length,
-        )
-
-    def visit_Compare(self, node: ast.Compare) -> GuardBuildFn | None:
-        if any(isinstance(operation, ast.Is) for operation in node.ops):
-            if len(node.ops) != 1:
-                return self._error("identity guard comparison must be binary")
-            [comparator] = node.comparators
-            if isinstance(comparator, ast.Constant) and comparator.value is None:
-                return self.visit_Compare(
-                    ast.Compare(node.left, [ast.Eq()], [comparator])
+        elif isinstance(node, ast.IfExp):
+            return select(*values)
+        elif isinstance(node, ast.UnaryOp):
+            [value] = values
+            if isinstance(node.op, ast.Not):
+                return logical_not(value)
+            elif isinstance(node.op, ast.USub):
+                return negate(value)
+            else:
+                return value
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "len":
+                [value] = values
+                return tvm_ffi_d.to(tvm_ffi_d.tensor_dim(value))
+            else:
+                return BINARY_ARITHMETIC[ASTVisitor.scalar_ops[node.func.id]](*values)
+        else:
+            _, method, index = ASTVisitor.metadata(node)
+            [value] = values
+            if method == "ndimension":
+                return tvm_ffi_d.to(tvm_ffi_d.tensor_dim(value))
+            else:
+                assert index is not None
+                operation = (
+                    tvm_ffi_d.tensor_size
+                    if method == "size"
+                    else tvm_ffi_d.tensor_stride
                 )
-            lhs_local = Local.from_expression(node.left)
-            rhs_local = Local.from_expression(comparator)
-            if lhs_local is None or rhs_local is None or lhs_local == rhs_local:
-                return None
-            return self._build_identity(lhs_local, rhs_local)
+                return tvm_ffi_d.to(operation(value, native(constant(index))))
 
-        if any(
-            not isinstance(
-                operation,
-                (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE),
+    def _operands(self, node: ast.expr) -> Sequence[ast.expr]:
+        """Select operands in evaluation order, retaining comparison diagnostics."""
+
+        if isinstance(node, ast.BinOp):
+            return (node.left, node.right)
+        elif isinstance(node, ast.BoolOp):
+            return node.values
+        elif isinstance(node, ast.IfExp):
+            return (node.test, node.body, node.orelse)
+        elif isinstance(node, ast.Compare):
+            identity = any(isinstance(operation, ast.Is) for operation in node.ops)
+            assert not identity or len(node.ops) == 1, (
+                f"identity guard comparison must be binary: {self.text!r} in {self.context}"
             )
-            for operation in node.ops
-        ):
-            return self._error("unsupported guard comparison operator")
-        values = [
-            self.visit(operand) for operand in chain((node.left,), node.comparators)
-        ]
-        if any(value is None for value in values):
-            return self._error("guard comparison operand cannot be lowered")
-        comparison_builders = tuple(
-            self._build_comparison(operation, lhs, rhs)
-            for operation, (lhs, rhs) in zip(node.ops, pairwise(values), strict=True)
-        )
-
-        def build(tree: InputTable, context: ir.Context) -> ir.Value:
-            return reduce(
-                self._build_logical_and,
-                (comparison(tree, context) for comparison in comparison_builders),
-                native_constant(True),
+            assert all(
+                isinstance(
+                    operation,
+                    (ast.Eq, ast.Gt, ast.GtE, ast.Is, ast.Lt, ast.LtE, ast.NotEq),
+                )
+                for operation in node.ops
+            ), f"unsupported guard comparison operator: {self.text!r} in {self.context}"
+            assert all(
+                ASTVisitor.supports(value) for value in (node.left, *node.comparators)
+            ), (
+                f"guard comparison operand cannot be lowered: {self.text!r} in {self.context}"
+            )
+            # Preserve the existing pairwise evaluation order, including shared operands.
+            return [
+                value
+                for operands in pairwise((node.left, *node.comparators))
+                for value in operands
+            ]
+        elif isinstance(node, ast.UnaryOp):
+            if (
+                isinstance(node.op, ast.Not)
+                and Local.from_expression(node.operand) is not None
+                and isinstance(
+                    self._analyze(node.operand).type,
+                    (tvm_ffi_d.ArrayType, tvm_ffi_d.TupleType),
+                )
+            ):
+                return [ast.Call(ast.Name("len", ast.Load()), [node.operand], [])]
+            else:
+                return [node.operand]
+        elif isinstance(node, ast.Attribute):
+            return [node.value]
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "len":
+                [argument] = node.args
+                return [
+                    argument.value
+                    if isinstance(argument, ast.Attribute) and argument.attr == "shape"
+                    else argument
+                ]
+            else:
+                return node.args
+        else:
+            source, _, _ = ASTVisitor.metadata(node)
+            return (
+                [] if source is None else [ast.parse(source.literal, mode="eval").body]
             )
 
-        return build
-
-    def visit_Constant(self, node: ast.Constant) -> GuardBuildFn | None:
-        if node.value is None or isinstance(node.value, (bool, int, float, str)):
-            return self._constant(node.value)
-        return None
-
-    def visit_IfExp(self, node: ast.IfExp) -> GuardBuildFn | None:
-        condition = self.visit(node.test)
-        body = self.visit(node.body)
-        orelse = self.visit(node.orelse)
-        if condition is None or body is None or orelse is None:
-            return None
-
-        return lambda tree, context: self._build_select(
-            self._value(condition, tree, context),
-            self._value(body, tree, context),
-            self._value(orelse, tree, context),
-        )
-
-    def visit_Subscript(self, node: ast.Subscript) -> GuardBuildFn | None:
+    def build(self, node: ast.expr) -> list[ir.Value]:
+        analysis = self._analyze(node)
+        types = make_result_types([analysis.type])
+        if analysis.pure:
+            return [pure(self.value(node), result_type=types[0])]
         source = Local.from_expression(node)
         if source is not None:
+            assert self.tree is not None
+            return self.tree.extract(source.subscripts)
+        elif isinstance(node, ast.Compare):
+            return self._build_comparison(node)
+        else:
+            with BindScope(types, self._build_operands(analysis.operands)) as scope:
+                payloads = scope.arguments
+                if analysis.fallback is not None:
+                    *_, fallback = payloads
+                    results = [pure(fallback, result_type=types[0])]
+                elif analysis.array_size:
+                    results = self._container_size(payloads[0])
+                else:
+                    results = [
+                        pure(self._evaluate(node, payloads), result_type=types[0])
+                    ]
+                scope.yield_(results)
+                bound_results = scope.results
+            return [*bound_results]
 
-            def build(tree: InputTable, context: ir.Context) -> ir.Value:
-                value = source.resolve(tree)
-                assert value is not None, (
-                    f"guard source cannot be resolved: {self.text!r} in {context}"
+    def value(self, node: ast.expr) -> ir.Value:
+        """Evaluate a pure expression through ordinary values and shared operations."""
+        analysis = self._analyze(node)
+        source = Local.from_expression(node)
+        if source is not None:
+            assert self.tree is not None
+            value = source.resolve(self.tree)
+            assert value is not None
+            return value
+        elif isinstance(node, ast.Constant):
+            return constant(node.value)
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            return constant(getattr(torch, node.attr))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            device = ASTVisitor.device(node)
+            if device is not None:
+                return constant(device)
+        if self._direct_fallback(node):
+            fallback = analysis.fallback
+            assert fallback is not None
+            source, _, _ = ASTVisitor.metadata(node)
+            if source is None:
+                warnings.warn(
+                    f"Ignoring unobservable Tensor._base guard: {self.text!r} in {self.context}",
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
+            return constant(fallback)
+        values = []
+        comparisons: list[ir.Value] = []
+        for index, operand in enumerate(analysis.operands):
+            value = self.value(operand)
+            values.append(value)
+            if self._analyze(operand).fallback is not None:
                 return value
-
-            return build
-        if not isinstance(node.value, ast.Call):
-            return None
-        call = node.value
-        if not (
-            isinstance(call.func, ast.Attribute)
-            and not call.args
-            and not call.keywords
-            and isinstance(node.slice, ast.Constant)
-            and isinstance(node.slice.value, int)
-            and not isinstance(node.slice.value, bool)
-        ):
-            return None
-        source = Local.from_expression(call.func.value)
-        if (
-            source is None
-            and isinstance(call.func.value, ast.Attribute)
-            and call.func.value.attr == "_base"
-        ):
-            return self._skip_base()
-        if source is None:
-            return None
-        operations = {
-            "size": tvm_ffi_d.tensor_size,
-            "stride": tvm_ffi_d.tensor_stride,
-        }
-        operation = operations.get(call.func.attr)
-        if operation is None:
-            return None
-
-        return self._build_tensor_indexed_metadata(
-            source,
-            operation,
-            node.slice.value,
-        )
-
-    def visit_UnaryOp(self, node: ast.UnaryOp) -> GuardBuildFn | None:
-        if isinstance(node.op, ast.Not):
-            source = Local.from_expression(node.operand)
-            if source is not None:
-                return self._build_not_sequence(source)
-        operand = self.visit(node.operand)
-        if operand is None:
-            return None
-        if isinstance(node.op, ast.Not):
-            return lambda tree, context: self._build_logical_not(
-                self._value(operand, tree, context),
-            )
-        if isinstance(node.op, ast.UAdd):
-            return operand
-        if isinstance(node.op, ast.USub):
-            return lambda tree, context: self._build_negate(
-                self._value(operand, tree, context),
-            )
-        return None
+            if isinstance(node, ast.Compare) and index % 2:
+                comparisons.append(self._compare(node.ops[index // 2], *values[-2:]))
+        if isinstance(node, ast.Compare):
+            return reduce(BINARY_ARITHMETIC[operator.and_], comparisons, constant(True))
+        else:
+            return self._evaluate(node, values)
 
 
-class _SkipGuard(Exception):
-    def __init__(self, result: bool):
-        super().__init__(result)
-        self.result = result
+@dataclass(frozen=True)
+class _ExpressionAnalysis:
+    type: ir.Type
+    operands: tuple[ast.expr, ...] = ()
+    pure: bool = True
+    fallback: bool | None = None
+    array_size: bool = False

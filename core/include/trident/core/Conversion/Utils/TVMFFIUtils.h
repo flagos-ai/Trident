@@ -9,23 +9,32 @@
 #ifndef TRIDENT_CORE_CONVERSION_UTILS_TVMFFIUTILS_H_
 #define TRIDENT_CORE_CONVERSION_UTILS_TVMFFIUTILS_H_
 
+#include <llvm/ADT/StringRef.h>
 #include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/Location.h>
+#include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Value.h>
 #include <mlir/Support/LogicalResult.h>
 #include <tuple>
 
 namespace trident::conversion::utils {
 
+/// Emit an assertion in every build mode and resume at the success block.
+mlir::LogicalResult emitLLVMAssert(mlir::RewriterBase &rewriter,
+                                   mlir::Location loc, mlir::Value condition);
+
+/// Allocates a null-terminated string on the stack and returns a pointer to
+/// its first byte.
+mlir::Value getString(mlir::OpBuilder &builder, mlir::Location loc,
+                      llvm::StringRef content);
+
 /// Get an owned TVM FFI global function handle by name.
 ///
-/// The name is resolved once per module: the handle and the status reported
-/// by `TVMFFIFunctionGetGlobal` are cached in module-level globals filled by a
-/// generated constructor, and a matching destructor drops that reference on
-/// unload. Call sites load the cached values instead of repeating the lookup,
-/// and retain the handle so the caller still owns the returned reference.
+/// Resolved handles are cached at module initialization and released at unload.
+/// Call sites retain a cached handle for the caller. A null cache entry sets a
+/// RuntimeError on the calling thread without retaining the null handle.
 ///
-/// \return The cached function handle and the i32 status of the load-time
-///         lookup (zero on success).
+/// \return The owned function handle and i32 status (zero on success).
 mlir::FailureOr<std::tuple<mlir::Value, mlir::Value>>
 getTVMFFIGlobalFunction(mlir::OpBuilder &builder, mlir::Location loc,
                         mlir::ModuleOp moduleOp, llvm::StringRef funcName);

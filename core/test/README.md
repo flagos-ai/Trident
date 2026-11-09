@@ -1,43 +1,115 @@
-<!--
-Part of the Trident project, under the MIT License.
-SPDX-License-Identifier: MIT
--->
+<!-- Part of the Trident project, under the MIT License. -->
+<!-- SPDX-License-Identifier: MIT -->
 
 # Core Lit tests
 
-The directory follows the LLVM convention of organizing
-regression tests by the implementation layer under test:
+Run `cmake --build build/core --target check-trident-core`, or the equivalent
+`core-build` target for a standalone configuration.
 
-- `Conversion/<Pass>/` covers one conversion pass and checks its pass-local
-  rewrite. The directory name matches the corresponding `core/lib` pass.
-- `Conversion/Pipeline/` covers representative end-to-end lowering through
-  `--trident-lowering-pipeline`, and explicit pass compositions when their
-  integration contract concerns an intermediate dialect such as `gpu`.
-- `Dialect/<Dialect>/` covers parsing, printing, verification, and dialect
-  transforms. Invalid IR uses `-verify-diagnostics`.
+Directories mirror the implementation layer:
 
-Keep each file focused on one operation family or lowering concern. Use
-descriptive filenames, `CHECK-LABEL` for each function, and named FileCheck
-captures when a value is reused. Bind function arguments and reuse those
-captures when checking data flow instead of relying on printed names such as
-`%arg0`. Spell FileCheck directives with one space after the colon and use
-`[a-zA-Z0-9_]+` for ordinary SSA captures. Do not use anonymous wildcard
-matches in place of a capture. Shared auxiliary inputs belong in an `Inputs/`
-directory and are excluded by the root Lit configuration.
+| Directory | Contract |
+| --- | --- |
+| `Dialect/<Dialect>/IR/` | Parsing, printing, verification and operation semantics |
+| `Dialect/<Dialect>/Transforms/` | Dialect transformation passes |
+| `Conversion/<Component>/` | Local conversion behavior |
+| `Conversion/Pipeline/` | Representative cross-pass integration |
 
-Use the smallest pass sequence for local conversion tests. Parsing and
-printing belong in `Dialect`, rather than an extra no-pass `RUN` in a
-conversion test. Metadata and GPU tests composing multiple conversions belong
-in `Pipeline`; the GPU pass-local test checks semantic operands before ABI
-lowering, while its pipeline counterpart checks native launch operands.
+The organization follows [LLVM’s testing guide](https://llvm.org/docs/TestingGuide.html):
+IR transformations use small Lit regression inputs; Python unit tests cover
+bindings and construction helpers, and execution tests cover runtime behavior.
+A parser round trip, a pass-local rewrite and an executable case may share an
+operation while testing different contracts. Do not repeat the same lowering
+assertions at all three layers.
 
-`Pipeline/aten-dispatch.mlir` owns the representative whole-pipeline registry
-call, cached-handle ownership and packed wrapper checks. Numerical overloads,
-memory formats and view aliases are checked through the public Python JIT;
-they do not each need a copy of the same ABI fixture. Dimension arrays,
-semantic copy, tensor literals and control flow retain their own integration
-regressions. Ownership edge transfers and ABI zero initialization remain
-explicit pass-local contracts.
+## Coverage ownership
 
-Python tests never load these files as executable fixtures. Lit regressions
-can be minimized or renamed independently of Python test setup.
+Keep one file per operation family or conversion concern. Related cases share
+RUN lines and use `--split-input-file` where modules or diagnostics need isolation.
+A new operation or regression normally extends an existing family instead of
+adding a file for each type, arity or operator name.
+
+| Family | Coverage boundary |
+| --- | --- |
+| `DLPack/IR/ops`, `TVMFFI/IR/types*` | Public type spellings and representative type parameter constraints |
+| `TVMFFI/IR/ops*` | Scalar/registry operations, containers, reference types, cleanup regions and kernel syntax/verifiers |
+| `TVMFFI/IR/casts*` | Widening, membership, subsets, identity parsing/folding and incompatible casts |
+| `TVMFFI/IR/result*` | Local calls, variadic Results, bind/yield, unpack inference and packed return shape |
+| `Transforms/lower-monad` | Result construction/unpack, continuations, independent input/output arities, local call attributes and CFG signature conversion |
+| `Transforms/canonicalize-containers` | Tuple element forwarding with shared users and automatic dead construct elimination before container decomposition |
+| `Transforms/canonicalize-monad` | Pure bind input removal, zero-input inlining, remaining unknown inputs, effect ordering and attribute preservation |
+| `Transforms/decompose-representations` | Opaque/Base mapping, recursive Result/attribute conversion, borrowing casts, local calls and string elements |
+| `Transforms/decompose-containers` | Checked container calls, nested types/attributes and captured values inside nested continuations |
+| `Transforms/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, region transfers, loop-carried references, direct producer exports, CFG type conversion and synchronous captures and rejected legalization |
+| `Transforms/lower-defer*` | Generic SSACFG dominance-scope cleanup, CFG edges/loops, generic region exits, SSA cloning, empty bodies, repeat lowering and rejected region structure |
+| `DLPackToLLVM/metadata`, `Transforms/lower-tensor-metadata` | Tensor metadata expansion to DLPack and LLVM field mapping |
+| `Transforms/lower-to-pack` | Typed-body conversion, count/tag guards, CFG forwarding, success-only payload checks and visibility |
+| `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Packed entry ABI, output writes, return status, declarations and duplicate-symbol verification |
+| `Transforms/lower-kernel-launch` | Attribute removal, native arguments and Monad success/rejection |
+| `TVMFFIToGPU/kernel-launch`, `invalid` | Guarded launch integration, launch arguments/stream, specializations and unsupported native operands |
+| `TVMFFIToFunc/call` | Packed argument/output slots, structured success-only reads and zero/repeated local calls |
+| `TVMFFIToLLVM/invalid`, `pack` | Checked dynamic indexing, borrowed argument access and undecomposed input rejection |
+| `TVMFFIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
+| `Pipeline/inlined-guards`, `Transforms/canonicalize-scalars`, `IR/casts` | Packed CFG structuring and DLPack inlining, repeated enclosing guards, scalar roundtrips/constants and safe cast folding |
+| `TVMFFIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |
+| `TVMFFIToLLVM/runtime-ops` | Cached registry lookup/error/call checks, conditional reference updates and clone/copy operand data flow |
+
+Public type mnemonics retain individual spelling checks because they have separate
+parser registrations. Generic constraints use representative categories rather
+than every scalar width or object type. Result payload rejection retains native
+scalar, native Object and nested Result examples. Unpack inference retains Any,
+CAny, a scalar and a native function handle; cast compatibility owns membership
+and subset variations. Identity folds use scalar, container, function and union
+representatives. Scalar constants reuse boxing coverage; DType packing and None
+initialization keep their own checks.
+
+Automatic ownership checks producer defer registration (`DEFER`) and final cleanup
+(`CHECK`); region transfers check the resulting retains and releases directly. Original Base values stay manually managed. Exports retain independent
+references before local releases, including repeated exports and branch
+results. Region tests cover loop initialization, per-execution entry cleanup,
+results and condition forwarding in if/for/while, with representative full LLVM
+lowering. Synchronous execute_region captures and local cleanup are accepted;
+negative cases reject unsupported semantic execute_region and index_switch
+boundaries. Base-only regions remain accepted. Internal CFG
+block arguments borrow; branch forwarding does not extend owner
+lifetimes. CFG cleanup runs on dominance-scope exits and registration-block
+re-entry, without prescribing relative order between defers at the same exit.
+Empty and unreachable registrations are covered together; upstream CFG
+canonicalization does not need its own cleanup fixture.
+Monad lowering precedes decomposition; defer lowering immediately follows it,
+before inlining or SCF-to-CFG conversion. Semantic tuple inputs rely on this
+policy without manual retains.
+
+Pipeline cases are selected by interaction:
+
+| Fixture | Integration contract |
+| --- | --- |
+| `aten-dispatch` | Semantic call ownership, cached dispatch and packed entry |
+| `c-any-checks` | Erased finite constraints at packed boundaries |
+| `checked-continuation` | Nested status-gated calls and payload-independent mutation |
+| `containers` | Array metadata, tuple construction/extraction and packed tuple results |
+| `kernel-launch` | Specialization, tensor/native arguments and runtime stream |
+| `local-call` | Monadic local calls through converted packed entries and inlining before SCF-to-CFG conversion |
+| `tensors` | Dynamic metadata and splat/nonsplat tensor literals through LLVM |
+
+Local passes own scalar boxing, None returns, copy operand order and string casts.
+The pipeline does not repeat generic ATen dispatch for each operator name, or
+upstream SCF selection and assertion lowering in isolation. Python execution tests
+own numerical overloads, list-valued schema arguments, formats, aliases, allocation
+behavior and output pytrees. Python tests never load Lit files as executable
+fixtures.
+
+## Writing tests
+
+Use the smallest pass sequence that owns the behavior. Keep negative parsing and
+verification cases with their operation family, using `--verify-diagnostics`.
+A merged file must run every section through its intended pass sequence; use
+separate files when pass requirements conflict.
+
+Use `CHECK-LABEL` for each function and bind relevant SSA values, including
+arguments, to verify data flow. Avoid incidental IDs and printed argument names.
+Use `CHECK-NEXT` for intentional order, such as export retains preceding
+local releases. Keep lookup status, non-null handles, call status, ABI zero
+initialization and success-only output-slot reads explicit. Never replace SSA
+captures with unconstrained wildcards. Use a single space after directive colons.
+Shared auxiliary inputs belong in `Inputs/`, which Lit excludes from discovery.

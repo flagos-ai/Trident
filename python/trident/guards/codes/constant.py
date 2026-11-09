@@ -5,37 +5,23 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Hashable
-from typing import Final
-from typing_extensions import Self, override
-
-from trident.core import ir
-from trident.input import InputTable
+from typing_extensions import Self
 
 from ..ast import ASTVisitor
 from ..local import Local
-from .base import GuardBuildFn, GuardBuilder, GuardCode
+from .ast import ASTCode
 
 
-class ConstantCode(GuardCode):
+class ConstantCode(ASTCode):
+    priority = 1
+
     def __init__(
         self,
         text: str,
         source: Local,
         expression: ast.expr,
     ) -> None:
-        super().__init__(text, source)
-        self.expression: Final[ast.expr] = expression
-        self.build_fn: Final[GuardBuildFn | None] = ASTVisitor(text).visit(expression)
-
-    @override
-    def build(
-        self,
-        tree: InputTable,
-        context: ir.Context,
-    ) -> ir.Value:
-        if self.build_fn is None:
-            return super().build(tree, context)
-        return self.build_fn(tree, context)
+        super().__init__(text, expression, source=source)
 
     @property
     def key(self) -> Hashable:
@@ -73,14 +59,8 @@ class ConstantCode(GuardCode):
         ) or (
             isinstance(operation, ast.Eq)
             and Local.from_expression(comparator) is None
-            and ASTVisitor(text).visit(comparator) is not None
+            and ASTVisitor.supports(comparator)
         ):
             return cls(text, source, expression)
         else:
             return None
-
-    def to_builder(self) -> GuardBuilder:
-        assert self.build_fn is not None, (
-            f"guard expression cannot be lowered: {self.text!r}"
-        )
-        return GuardBuilder(code=self, build_fn=self.build_fn)

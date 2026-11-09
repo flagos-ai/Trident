@@ -6,15 +6,16 @@ add_mlir_conversion_library(
   LINK_LIBS
   PUBLIC
   DLPackToLLVM
-  FinalizeTVMFFI
   MLIRArithToLLVM
   MLIRControlFlowToLLVM
+  MLIRControlFlowToSCF
   MLIRFuncToLLVM
   MLIRGPUToGPURuntimeTransforms
   MLIRPass
   MLIRSCFToControlFlow
   MLIRTransforms
-  OwnershipDeallocation
+  MLIRUBToLLVM
   TVMFFIToFunc
   TVMFFIToGPU
-  TVMFFIToLLVM)
+  TVMFFIToLLVM
+  TVMFFITransforms)
