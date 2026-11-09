@@ -22,7 +22,11 @@
 #include <torch/csrc/inductor/aoti_torch/c/macros.h>
 #include <torch/csrc/inductor/aoti_torch/c/shim.h>
 #include <tvm/ffi/any.h>
+#if __has_include(<tvm/ffi/base_detail.h>)
+#include <tvm/ffi/base_detail.h>
+#else
 #include <tvm/ffi/base_details.h>
+#endif
 #include <tvm/ffi/c_api.h>
 #include <tvm/ffi/container/tensor.h>
 #include <tvm/ffi/error.h>

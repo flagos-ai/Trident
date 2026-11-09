@@ -13,7 +13,11 @@
 #include "trident/ffi/ExceptionObj.h"
 #include <cstdint>
 #include <string>
+#if __has_include(<tvm/ffi/base_detail.h>)
+#include <tvm/ffi/base_detail.h>
+#else
 #include <tvm/ffi/base_details.h>
+#endif
 #include <tvm/ffi/memory.h>
 #include <tvm/ffi/object.h>
 #include <tvm/ffi/reflection/registry.h>
