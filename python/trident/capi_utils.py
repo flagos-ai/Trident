@@ -8,6 +8,11 @@ import pathlib
 import torch
 import tvm_ffi
 
+try:
+    from triton._flagtree_backend import FLAGTREE_BACKEND
+except ImportError:
+    FLAGTREE_BACKEND = ""
+
 
 @functools.cache
 def _trident_pkg_dir() -> pathlib.Path:
@@ -61,6 +66,15 @@ def find_mlir_cuda_runtime_library() -> str:
     return f"{cuda_runtime_lib}"
 
 
+def find_hcu_runtime_library() -> str:
+    """Find the Trident HIP launch runtime used by FlagTree Hcu."""
+    hcu_runtime_lib = _trident_pkg_dir() / "lib" / "libTridentHcuRuntime.so"
+    assert hcu_runtime_lib.is_file(), (
+        f"missing Trident Hcu runtime library: {hcu_runtime_lib}"
+    )
+    return f"{hcu_runtime_lib}"
+
+
 def find_runtime_libraries() -> list[str]:
     """Find the Trident runtime libraries.
 
@@ -72,10 +86,14 @@ def find_runtime_libraries() -> list[str]:
     """
     torch_library: str | None = torch._C.__file__
     assert torch_library is not None, "PyTorch C extension has no library path"
-    return [
+    libraries = [
         find_ffi_exception_library(),
         find_aten_ffi_library(),
-        find_mlir_cuda_runtime_library(),
-        torch_library,
-        tvm_ffi.libinfo.find_libtvm_ffi(),
     ]
+    libraries.append(
+        find_hcu_runtime_library()
+        if FLAGTREE_BACKEND == "hcu"
+        else find_mlir_cuda_runtime_library()
+    )
+    libraries.extend([torch_library, tvm_ffi.libinfo.find_libtvm_ffi()])
+    return libraries

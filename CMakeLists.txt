@@ -9,6 +9,11 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(Python_EXECUTABLE ${Python3_EXECUTABLE})
 set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 
+set(_TRIDENT_ENABLE_CUDA_RUNNER ON)
+if("$ENV{FLAGTREE_BACKEND}" STREQUAL "hcu")
+  set(_TRIDENT_ENABLE_CUDA_RUNNER OFF)
+endif()
+
 set(_TRIDENT_LLVM_CONFIG
     ${CMAKE_BINARY_DIR}/install/llvm-project/lib/cmake/llvm/LLVMConfig.cmake)
 if(EXISTS "${_TRIDENT_LLVM_CONFIG}")
@@ -35,7 +40,7 @@ else()
                -DLLVM_INCLUDE_UTILS=ON
                -DLLVM_INSTALL_UTILS=ON
                -DMLIR_ENABLE_BINDINGS_PYTHON=ON
-               -DMLIR_ENABLE_CUDA_RUNNER=ON
+               -DMLIR_ENABLE_CUDA_RUNNER=${_TRIDENT_ENABLE_CUDA_RUNNER}
                -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
                -DPython3_EXECUTABLE=${Python3_EXECUTABLE}
                -DPython3_FIND_VIRTUALENV=ONLY

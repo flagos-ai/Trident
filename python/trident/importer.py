@@ -10,6 +10,7 @@ ATen call order, tensor aliases, and mutations are preserved.
 from __future__ import annotations
 
 import operator
+import re
 from functools import cached_property, reduce
 from typing import Any, TypeAlias, cast
 
@@ -22,6 +23,11 @@ from torch.export.graph_signature import ConstantArgument, InputKind, OutputKind
 from trident.core import ir
 from trident.core.dialects import arith, cf, func, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
+
+try:
+    from triton._flagtree_backend import FLAGTREE_BACKEND
+except ImportError:
+    FLAGTREE_BACKEND = ""
 
 from .ir import (
     array,
@@ -207,8 +213,11 @@ class TridentFxImporter:
         # Each imported specialization gets a unique symbol namespace from the
         # graph module.  FX node names are unique within an imported graph, so the
         # pair is sufficient to keep binaries distinct after module merging.
-        cubin = kernel.asm["cubin"]
         binary_name = f"_trident_s{self.specialization_id}_{node.name}"
+        if FLAGTREE_BACKEND == "hcu":
+            return self._import_hcu_binary(kernel, binary_name, loc)
+
+        cubin = kernel.asm["cubin"]
         module_op = self.module.operation
         module_op.attributes["gpu.container_module"] = ir.UnitAttr.get()
         if all(
@@ -228,6 +237,76 @@ class TridentFxImporter:
                     loc=loc,
                 )
         return ir.Attribute.parse(f"@{binary_name}::@{kernel.metadata.name}")
+
+    def _import_hcu_binary(
+        self,
+        kernel: triton.compiler.CompiledKernel,
+        binary_name: str,
+        loc: ir.Location,
+    ) -> ir.Attribute:
+        metadata = kernel.metadata
+        target = metadata.target
+        if target.backend != "hip":
+            raise RuntimeError(
+                f"FlagTree Hcu produced an unexpected target backend: {target.backend!r}"
+            )
+        arch = str(target.arch)
+        if re.fullmatch(r"gfx[0-9a-z]+", arch) is None:
+            raise RuntimeError(f"unsupported Hcu target architecture: {arch!r}")
+        if int(getattr(metadata, "num_ctas", 1)) != 1:
+            raise NotImplementedError(
+                "Trident Hcu runtime does not support clustered launches"
+            )
+        if bool(getattr(metadata, "launch_cooperative_grid", False)):
+            raise NotImplementedError(
+                "Trident Hcu runtime does not support cooperative launches"
+            )
+        if int(getattr(metadata, "profile_scratch_size", 0) or 0) != 0:
+            raise NotImplementedError(
+                "Trident Hcu runtime does not support profiling scratch storage"
+            )
+        if int(getattr(metadata, "global_scratch_size", 0) or 0) != 0:
+            raise NotImplementedError(
+                "Trident Hcu runtime does not support global scratch storage"
+            )
+        if getattr(metadata, "kernel_init_hooks", None):
+            raise NotImplementedError(
+                "Trident Hcu runtime does not support kernel initialization hooks"
+            )
+        if bool(getattr(metadata, "use_dushmem", False)) or bool(
+            getattr(metadata, "use_nvshmem", False)
+        ):
+            raise NotImplementedError(
+                "Trident Hcu runtime does not support device-side SHMEM"
+            )
+        if any(getattr(metadata, "tensordesc_meta", ()) or ()):
+            raise NotImplementedError(
+                "Trident Hcu runtime does not support tensor descriptors"
+            )
+
+        hsaco = kernel.asm["hsaco"]
+        if not isinstance(hsaco, (bytes, bytearray)):
+            raise TypeError(
+                f"expected Hcu hsaco to contain bytes, got {type(hsaco).__name__}"
+            )
+        module_op = self.module.operation
+        module_op.attributes["gpu.container_module"] = ir.UnitAttr.get()
+        if all(
+            not isinstance(op, gpu.BinaryOp) or op.sym_name != binary_name
+            for op in self.module.body.operations
+        ):
+            hsaco_mlir = "".join(f"\\{byte:02X}" for byte in hsaco)
+            gpu_object = ir.Attribute.parse(
+                f'#gpu.object<#rocdl.target<chip = "{arch}">, "{hsaco_mlir}">'
+            )
+            with ir.InsertionPoint(self.module.body):
+                gpu.binary(
+                    binary_name,
+                    ir.ArrayAttr.get([gpu_object]),
+                    offloading_handler=ir.Attribute.parse("#gpu.select_object"),
+                    loc=loc,
+                )
+        return ir.Attribute.parse(f"@{binary_name}::@{metadata.name}")
 
     def _import_call(self, node: torch.fx.Node) -> ImportedValue:
         target = {torch.sym_max: max, torch.sym_min: min}.get(node.target, node.target)
@@ -305,6 +384,17 @@ class TridentFxImporter:
             assert (compiled_name, compiled_type) == (name, triton_type), (
                 f"compiled Triton signature does not match its source parameter order: expected {(name, triton_type)!r}, got {(compiled_name, compiled_type)!r}"
             )
+            if FLAGTREE_BACKEND == "hcu" and (
+                isinstance(triton_type, tuple)
+                or (
+                    isinstance(triton_type, str)
+                    and triton_type.startswith("tensordesc")
+                )
+            ):
+                raise NotImplementedError(
+                    "Trident Hcu runtime does not support tuple-valued or "
+                    "tensor-descriptor kernel arguments"
+                )
             specialization_attr = self._triton_specialization(
                 triton_type, descriptor, name
             )
