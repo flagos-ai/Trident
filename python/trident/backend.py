@@ -132,13 +132,19 @@ class TridentGraphModule:
         )
         for sub_mod in self._sub_modules:
             with self.ctx, sub_mod.operation.location:
-                for attr_name in sub_mod.operation.attributes:
+                source_attributes = sub_mod.operation.attributes
+                for attribute in source_attributes:
+                    attr_name = (
+                        attribute
+                        if isinstance(attribute, str)
+                        else str(attribute.name)
+                    )
                     if (
                         attr_name not in combined.operation.attributes
                         and not attr_name.startswith("sym_name")
                     ):
                         combined.operation.attributes[attr_name] = (
-                            sub_mod.operation.attributes[attr_name]
+                            source_attributes[attr_name]
                         )
 
                 transform.interpreter.copy_symbols_and_merge_into(
