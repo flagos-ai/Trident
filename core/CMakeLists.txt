@@ -6,9 +6,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-find_package(CUDAToolkit REQUIRED)
 find_package(Python REQUIRED COMPONENTS Interpreter Development)
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+set(FLAGTREE_BACKEND "$ENV{FLAGTREE_BACKEND}")
+if(NOT FLAGTREE_BACKEND)
+  find_package(CUDAToolkit REQUIRED)
+endif()
 
 execute_process(
   COMMAND "${Python3_EXECUTABLE}" -c
