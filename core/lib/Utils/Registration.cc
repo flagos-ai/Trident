@@ -23,6 +23,7 @@
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
 #include <mlir/Pass/PassRegistry.h>
+#include <mlir/Target/LLVMIR/Dialect/All.h>
 
 void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
   // Register base dialects before extensions and external interfaces.
@@ -30,6 +31,10 @@ void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
   registry.insert<trident::dlpack::DLPackDialect,
                   trident::tvm_ffi::TVMFFIDialect>();
   mlir::registerAllExtensions(registry);
+  // registerAllExtensions intentionally excludes LLVM IR translations. The
+  // ExecutionEngine needs these interfaces while translating gpu.binary and
+  // gpu.launch_func operations from precompiled device objects.
+  mlir::registerAllGPUToLLVMIRTranslations(registry);
   mlir::arith::registerConvertArithToLLVMInterface(registry);
   mlir::registerConvertFuncToLLVMInterface(registry);
   mlir::gpu::registerConvertGpuToLLVMInterface(registry);
