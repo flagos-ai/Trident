@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import gc
 import inspect
 import operator
@@ -79,6 +80,7 @@ class TridentGraphModule:
     ) -> None:
         super().__init__()
         self.fn: Final[RuntimeCallable] = fn
+        functools.update_wrapper(self, fn, updated=())
         self.dynamic: Final[bool] = dynamic
         self.ctx: Final[ir.Context] = ir.Context()
         register_all_dialects(self.ctx)
@@ -89,9 +91,6 @@ class TridentGraphModule:
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
-
-    def __name__(self) -> str:
-        return self.fn.__name__
 
     def _alloca_tvmffi_any(
         self,
