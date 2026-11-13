@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
+import ast
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from ..codes.base import GuardCode
-from ..local import Local
+from ..scope import parse_source
 
 if TYPE_CHECKING:
     import torch._guards
@@ -21,10 +22,10 @@ class Guard:
 
     def __init__(
         self,
-        source: Local | None,
+        source: ast.Subscript | None,
         codes: list[GuardCode],
     ) -> None:
-        self.source: Final[Local | None] = source
+        self.source: Final[ast.Subscript | None] = source
         self.codes: Final[list[GuardCode]] = codes
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -58,7 +59,7 @@ class Guard:
     def parse_codes(
         cls,
         texts: list[str],
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> list[GuardCode] | None:
         assert cls.create_fn_name is not None
         parsed_codes: list[GuardCode] = []
@@ -80,8 +81,8 @@ class Guard:
     def parse_source(
         cls,
         guard: torch._guards.Guard,
-    ) -> Local | None:
-        return Local.parse(guard.name)
+    ) -> ast.Subscript | None:
+        return parse_source(guard.name)
 
     @classmethod
     def validate_code_list(

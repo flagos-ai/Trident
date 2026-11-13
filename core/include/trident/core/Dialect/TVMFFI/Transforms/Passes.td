@@ -12,7 +12,7 @@ def DecomposeTVMFFI : Pass<"decompose-tvm-ffi", "mlir::ModuleOp"> {
   let description = [{
     Preserve local calls while converting semantic containers to CArray,
     Tensor/Exception/Function to their Base types, and Str to CAny. Recursively convert signatures, regions and type-bearing attributes.
-    Dedicated scf.if, scf.for and scf.while conversion patterns retain semantic
+    Dedicated scf.execute_region, scf.if, scf.for and scf.while patterns retain semantic
     exports and register argument/result releases in defer regions, including
     loop-carried values and zero-trip results. Every forwarded semantic slot
     retains a reference; producer cleanup remains local. Synchronous captures

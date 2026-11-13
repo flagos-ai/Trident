@@ -6,13 +6,13 @@ from __future__ import annotations
 import ast
 from collections.abc import Hashable
 from typing import Final
+
 from typing_extensions import Self, override
 
 from trident.core import ir
-from trident.input import InputTable
 
 from ..ast import ASTVisitor, GuardExpressionVisitor
-from ..local import Local
+from ..scope import Scope
 from .base import GuardCode
 
 
@@ -24,21 +24,21 @@ class ASTCode(GuardCode):
         text: str,
         expression: ast.expr,
         *,
-        source: Local | None = None,
+        source: ast.Subscript | None = None,
     ) -> None:
         super().__init__(text, source)
         self.expression: Final[ast.expr] = expression
         self.supported: Final[bool] = ASTVisitor.supports(expression)
 
     @override
-    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
+    def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         """Build standalone expressions used by the guard IR tests."""
-        return GuardExpressionVisitor(self.text, tree, context).value(self.expression)
+        return GuardExpressionVisitor(self.text, scope, context).value(self.expression)
 
     @override
-    def build_result(self, tree: InputTable, context: ir.Context) -> list[ir.Value]:
+    def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
         assert self.supported, f"guard expression cannot be lowered: {self.text!r}"
-        return GuardExpressionVisitor(self.text, tree, context).build(self.expression)
+        return GuardExpressionVisitor(self.text, scope, context).build(self.expression)
 
     @property
     def key(self) -> Hashable:
@@ -48,7 +48,7 @@ class ASTCode(GuardCode):
     def parse(
         cls,
         text: str,
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> Self | None:
         try:
             expression = ast.parse(text, mode="eval").body

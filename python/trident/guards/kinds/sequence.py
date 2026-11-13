@@ -7,7 +7,7 @@ import ast
 from typing import TYPE_CHECKING
 
 from ..codes import ASTCode, GuardCode, TypeIdCode
-from ..local import Local
+from ..scope import input_source
 from .base import Guard
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ class SequenceLengthGuard(Guard):
     def parse_codes(
         cls,
         texts: list[str],
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> list[GuardCode] | None:
         expressions = [ASTCode.parse(text, source) for text in texts]
         has_tensor_shape = any(
@@ -50,11 +50,11 @@ class SequenceLengthGuard(Guard):
         return parsed_codes
 
     @classmethod
-    def parse_source(cls, guard: torch._guards.Guard) -> Local | None:
+    def parse_source(cls, guard: torch._guards.Guard) -> ast.Subscript | None:
         try:
             expression = ast.parse(guard.name, mode="eval").body
         except SyntaxError:
             return None
         if isinstance(expression, ast.Attribute) and expression.attr == "shape":
-            return Local.from_expression(expression.value)
-        return Local.from_expression(expression)
+            return input_source(expression.value)
+        return input_source(expression)

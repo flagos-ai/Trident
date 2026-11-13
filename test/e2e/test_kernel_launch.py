@@ -71,13 +71,11 @@ class KernelLaunchTest(unittest.TestCase):
             for phase in ("first", "cached"):
                 with self.subTest(phase=phase):
                     value.zero_()
-                    first, second = compiled(value)
-                    torch.testing.assert_close(first, torch.ones_like(value))
-                    torch.testing.assert_close(second, first)
-                    self.assertEqual(first.data_ptr(), second.data_ptr())
-                    # Rejection must suppress the in-place effect before retry.
-                    torch.testing.assert_close(value, torch.ones_like(value))
-            self.assertEqual(len(compiled._sub_modules), 2)
+                    with self.assertRaisesRegex(RuntimeError, "GuardMatch"):
+                        compiled(value)
+                    # Rejection suppresses later effects and never recompiles.
+                    torch.testing.assert_close(value, torch.zeros_like(value))
+            self.assertEqual(len(compiled._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

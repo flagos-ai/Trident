@@ -31,21 +31,6 @@ func.func @base_regions(%input: !tvm_ffi.c.tensor, %index: index) -> !tvm_ffi.c.
 
 // -----
 
-func.func @execute_cfg(%condition: i1, %input: !tvm_ffi.tensor) {
-  // expected-error@+1 {{failed to legalize operation 'scf.execute_region'}}
-  %result = scf.execute_region -> !tvm_ffi.tensor {
-    %clone = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
-    cf.cond_br %condition, ^left(%clone : !tvm_ffi.tensor), ^right
-  ^left(%borrowed: !tvm_ffi.tensor):
-    scf.yield %borrowed : !tvm_ffi.tensor
-  ^right:
-    scf.yield %clone : !tvm_ffi.tensor
-  }
-  return
-}
-
-// -----
-
 func.func @switch_capture(%index: index, %input: !tvm_ffi.tensor) {
   // expected-error@+1 {{failed to legalize operation 'scf.index_switch'}}
   %result = scf.index_switch %index -> !tvm_ffi.tensor

@@ -34,8 +34,9 @@ class ContainerTest(unittest.TestCase):
         def tuple_add(
             x: torch.Tensor,
             values: tuple[torch.Tensor, torch.Tensor],
+            bias: int = 3,
         ) -> torch.Tensor:
-            return x + values[0] + values[-1]
+            return x + values[0] + values[-1] + bias
 
         def check() -> None:
             x = torch.randn(4, device="cuda")
@@ -50,11 +51,16 @@ class ContainerTest(unittest.TestCase):
                     [(first, torch.zeros_like(x)), (torch.zeros_like(x), second)],
                     x + first + second,
                 ),
-                ("tuple", tuple_add, (first, second), x + first + second),
+                ("tuple", tuple_add, (first, second), x + first + second + 3),
             ):
                 for phase in ("warmup", "cached"):
                     with self.subTest(container=name, phase=phase):
-                        torch.testing.assert_close(function(x, values), expected)
+                        result = (
+                            function(values=values, x=x)
+                            if name == "tuple"
+                            else function(x, values)
+                        )
+                        torch.testing.assert_close(result, expected)
                 self.assertEqual(len(function._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())

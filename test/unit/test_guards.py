@@ -13,6 +13,8 @@ from torch._guards import GuardSource
 from trident.core import ir
 from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.guards import parse_guards
+from trident.guards.ast import GuardExpressionVisitor
 from trident.guards.codes import (
     ASTCode,
     ConstantCode,
@@ -34,8 +36,16 @@ from trident.guards.kinds import (
     TensorMatchGuard,
     TypeMatchGuard,
 )
-from trident.guards.local import Local
-from trident.input import InputNodeBuilder, InputTableBuilder
+from trident.guards.scope import Scope, parse_source
+from trident.guards.tree import (
+    ExecutionNode,
+    GuardNode,
+    InputNode,
+    Node,
+    Root,
+    build_dispatcher,
+)
+from trident.ir import constant
 
 from test.support.ir import new_context
 
@@ -91,10 +101,6 @@ class GuardExpressionTest(unittest.TestCase):
                     else container.get([tensor, tensor])
                 )
                 array = tvm_ffi_d.ArrayType.get(type_)
-                builder = InputTableBuilder(
-                    [("xs", InputNodeBuilder(array, [InputNodeBuilder(type_)]))],
-                    ["xs"],
-                )
                 text = "len(L['xs'][0]) == 2"
                 code = ASTCode(text, ast.parse(text, mode="eval").body)
                 module = ir.Module.create()
@@ -103,7 +109,11 @@ class GuardExpressionTest(unittest.TestCase):
                     function = func.FuncOp("guard", ([array], [result_type]))
                     block = function.add_entry_block()
                 with ir.InsertionPoint(block):
-                    results = code.build_result(builder.build(block.arguments), context)
+                    scope = Scope(
+                        block.arguments[0],
+                        {"xs": Scope(block.arguments[0])},
+                    )
+                    results = code.build_result(scope, context)
                     func.return_(results)
                 self.assertEqual([result.type for result in results], [result_type])
                 self.assertTrue(module.operation.verify())
@@ -116,6 +126,35 @@ class GuardExpressionTest(unittest.TestCase):
                     self.assertIn('"ffi.ArraySize"', module_text)
                 else:
                     self.assertIn("tvm_ffi.array.size", module_text)
+
+    def test_input_reads_reuse_local_bindings(self) -> None:
+        for text in (
+            "L['xs'][0] + L['xs'][0] == 2",
+            "len(L['xs']) == L['xs'][0] == L['xs'][0]",
+        ):
+            with (
+                self.subTest(text=text),
+                new_context() as context,
+                ir.Location.unknown(),
+            ):
+                integer = tvm_ffi_d.IntType.get()
+                array = tvm_ffi_d.ArrayType.get(integer)
+                result_type = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+                module = ir.Module.create()
+                with ir.InsertionPoint(module.body):
+                    function = func.FuncOp("guard", ([array], [result_type]))
+                    block = function.add_entry_block()
+                with ir.InsertionPoint(block):
+                    root = Scope(block.arguments[0], {"xs": Scope(block.arguments[0])})
+                    visitor = GuardExpressionVisitor(text, root, context)
+                    results = visitor.build(ast.parse(text, mode="eval").body)
+                    # Values produced in bind bodies must not escape via the cache.
+                    visitor.value(ast.parse("L['xs'][0]", mode="eval").body)
+                    func.return_(results)
+                self.assertIsNone(root["xs"].get(0))
+                self.assertTrue(module.operation.verify())
+                if text.startswith("L["):
+                    self.assertEqual(str(module).count("tvm_ffi.array.get"), 1)
 
     def test_invalid_comparisons(self) -> None:
         for text, message in (
@@ -211,6 +250,83 @@ class GuardExpressionTest(unittest.TestCase):
         self.assertIn("tvm_ffi.constant.bool true", module)
 
 
+class DispatcherTreeTest(unittest.TestCase):
+    """Independent candidates and module-local SSA lifetimes."""
+
+    def _build_dispatcher(self, dispatcher: Root) -> ir.Module:
+        module = ir.Module.create()
+        any_type = tvm_ffi_d.AnyType.get()
+
+        def add_functions(node: Node) -> None:
+            if isinstance(node, ExecutionNode):
+                graph_input_types = node.graph_input_types
+                function = tvm_ffi_d.FuncOp(
+                    node.graph_symbol,
+                    ir.TypeAttr.get(
+                        ir.FunctionType.get(
+                            graph_input_types,
+                            [any_type],
+                        )
+                    ),
+                    sym_visibility="private",
+                )
+                with ir.InsertionPoint(function.add_entry_block()):
+                    tvm_ffi_d.return_(
+                        constant(True), tvm_ffi_d.upcast(any_type, constant(node.index))
+                    )
+            else:
+                assert isinstance(node, (GuardNode, InputNode, Root))
+                for child in node.children:
+                    add_functions(child)
+
+        with ir.InsertionPoint(module.body):
+            add_functions(dispatcher)
+            function = tvm_ffi_d.PackFuncOp(
+                "dispatch",
+                ir.TypeAttr.get(
+                    ir.FunctionType.get([tvm_ffi_d.PackArgumentsType.get()], [any_type])
+                ),
+            )
+            with ir.InsertionPoint(function.add_entry_block()) as ip:
+                success, payload = build_dispatcher(
+                    dispatcher, Scope(ip.block.arguments[0])
+                )
+                tvm_ffi_d.return_(success, payload)
+        self.assertTrue(module.operation.verify())
+        return module
+
+    def test_ordered_prefix_and_fresh_modules(self) -> None:
+        with new_context(), ir.Location.unknown():
+            input_types = {"x": tvm_ffi_d.IntType.get()}
+            checks = [["L['x'] >= 0", f"L['x'] == {index}"] for index in range(3)]
+            dispatcher = Root()
+            for index, texts in enumerate(checks):
+                dispatcher.add(
+                    parse_guards([FakeGuard("SHAPE_ENV", texts)]),
+                    input_types,
+                    (("x",),),
+                    f"run_{index}",
+                )
+            self.assertEqual(len(dispatcher.children), 3)
+            # Reuse recipes and the planned tree, but rebuild all SSA in each module.
+            for _ in range(2):
+                module = self._build_dispatcher(dispatcher)
+                self.assertEqual(f"{module}".count("arith.cmpi sge"), 3)
+            previous = f"{module}"
+            dispatcher.add(
+                parse_guards([FakeGuard("SHAPE_ENV", ["L['x'] >= 0", "L['x'] == 3"])]),
+                input_types,
+                (("x",),),
+                "run_3",
+            )
+            updated = self._build_dispatcher(dispatcher)
+            self.assertNotIn("@run_3", previous)
+            self.assertIn("tvm_ffi.monad.call @run_3", f"{updated}")
+            self.assertEqual(f"{updated}".count("arith.cmpi sge"), 4)
+            self.assertEqual(f"{module}", previous)
+            self.assertTrue(module.operation.verify())
+
+
 class GuardParsingTest(unittest.TestCase):
     """Guard dispatch, code composition, metadata and rejected inputs."""
 
@@ -224,7 +340,10 @@ class GuardParsingTest(unittest.TestCase):
         self.assertIsInstance(parsed, kind)
         assert parsed is not None
         self.assertEqual(tuple(type(item) for item in parsed.codes), code_types)
-        self.assertEqual(parsed.source, Local.parse(guard.name))
+        self.assertEqual(
+            None if parsed.source is None else ast.dump(parsed.source),
+            None if (source := parse_source(guard.name)) is None else ast.dump(source),
+        )
         return parsed
 
     def test_constant_values(self) -> None:
@@ -376,6 +495,8 @@ class GuardParsingTest(unittest.TestCase):
                 DynamoAttributeAbsentCode,
             ),
         )
+        guard = FakeGuard("TENSOR_MATCH", code_list, "L['xs'][0]")
+        self.assertEqual(len(parse_guards([guard, guard])), len(code_list))
         _, dtype, device, grad, rank, attribute = parsed.codes
         assert isinstance(dtype, TensorDTypeCode)
         assert isinstance(device, TensorDeviceCode)

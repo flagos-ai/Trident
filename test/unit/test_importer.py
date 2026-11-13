@@ -1,7 +1,7 @@
 # Part of the Trident project, under the MIT License.
 # SPDX-License-Identifier: MIT
 
-"""Python frontend construction, diagnostics and uncached input extraction."""
+"""Python frontend construction, diagnostics and domain-local input extraction."""
 
 import operator
 import unittest
@@ -11,8 +11,8 @@ import torch
 from trident.core import ir
 from trident.core.dialects import func, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.guards.scope import Scope
 from trident.importer import TridentFxImporter
-from trident.input import InputNodeBuilder, InputTableBuilder
 from trident.ir import (
     BINARY_ARITHMETIC,
     BindScope,
@@ -208,29 +208,40 @@ class ImporterTest(unittest.TestCase):
             tensor = tvm_ffi_d.TensorType.get()
             array = tvm_ffi_d.ArrayType.get(tensor)
             unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
-            builder = InputTableBuilder(
-                [("values", InputNodeBuilder(array, [InputNodeBuilder(tensor)]))],
-                ["values"],
-            )
             with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([array], []))
+                function = func.FuncOp("test", ([array, tensor], []))
                 block = function.add_entry_block()
             with ir.InsertionPoint(block):
-                table = builder.build(block.arguments)
-                first = table.extract(("values", 0))
-                second = table.extract(("values", 0))
-                self.assertNotEqual(first[0], second[0])
-                with BindScope([unit], first) as scope:
-                    extracted = table.extract(("values", 0))
-                    with BindScope([unit], extracted) as nested:
-                        nested.yield_([pure(constant(None))])
-                        nested_results = nested.results
+                scope = Scope(
+                    block.arguments[0],
+                    {
+                        "values": Scope(
+                            block.arguments[0], {1: Scope(block.arguments[1])}
+                        )
+                    },
+                )
+                first_result, local_scope = scope.extract(("values", 0))
+                second_result, reused_scope = local_scope.extract(("values", 0))
+                self.assertNotEqual(first_result, second_result)
+                self.assertIs(reused_scope, local_scope)
+                self.assertIsNone(scope["values"].get(0))
+                self.assertIs(local_scope["values"][1], scope["values"][1])
+                with BindScope([unit], [pure(constant(None))]) as bind_scope:
+                    value, local_scope = scope.read(("values", 0))
+                    self.assertIsNone(scope["values"].get(0))
+                    self.assertIs(local_scope["values"][1], scope["values"][1])
+                    with BindScope([unit], [pure(constant(None))]) as nested_bind_scope:
+                        inherited, _ = local_scope.read(("values", 0))
+                        self.assertEqual(inherited, value)
+                        inner_value, _ = scope.read(("values", 0))
+                        self.assertNotEqual(inner_value, value)
+                        nested_bind_scope.yield_([pure(constant(None))])
+                        nested_results = nested_bind_scope.results
+                    bind_scope.yield_(nested_results)
 
-                    scope.yield_(nested_results)
-
-                extracted = table.extract(("values", 0))
-                with BindScope([unit], extracted) as scope:
-                    scope.yield_([pure(constant(None))])
+                extracted_result, _ = scope.extract(("values", 0))
+                with BindScope([unit], [extracted_result]) as bind_scope:
+                    bind_scope.yield_([pure(constant(None))])
 
                 func.return_([])
 
@@ -242,27 +253,33 @@ class ImporterTest(unittest.TestCase):
             module = ir.Module.create()
             tensor = tvm_ffi_d.TensorType.get()
             array = tvm_ffi_d.ArrayType.get(tensor)
+            nested_array = tvm_ffi_d.ArrayType.get(array)
             unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
-            builder = InputTableBuilder(
-                [("values", InputNodeBuilder(array, [InputNodeBuilder(tensor)]))],
-                ["values"],
-            )
             with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([array], []))
+                function = func.FuncOp("test", ([nested_array], []))
                 block = function.add_entry_block()
             with ir.InsertionPoint(block):
-                table = builder.build(block.arguments)
+                scope = Scope(
+                    block.arguments[0],
+                    {"values": Scope(block.arguments[0])},
+                )
                 predicate = constant(True)
                 branch = scf.IfOp(native(predicate), [], has_else=True)
                 for child in (branch.then_block, branch.else_block):
                     with ir.InsertionPoint(child):
-                        values = table.extract(("values", 0))
-                        with BindScope([unit], values) as scope:
-                            scope.yield_([pure(constant(None))])
+                        with BindScope([unit], [pure(constant(None))]) as bind_scope:
+                            value, local_scope = scope.read(("values", 0, 0))
+                            reused, reused_scope = local_scope.read(("values", 0, 0))
+                            self.assertEqual(reused, value)
+                            self.assertIs(reused_scope, local_scope)
+                            other, local_scope = local_scope.read(("values", 0, 1))
+                            self.assertNotEqual(other, value)
+                            self.assertIsNone(scope["values"].get(0))
+                            bind_scope.yield_([pure(constant(None))])
                         scf.yield_([])
                 func.return_([])
 
-            self.assertEqual(self._extraction_count(module), 2)
+            self.assertEqual(self._extraction_count(module), 6)
             self.assertTrue(module.operation.verify())
 
     def test_container_array_operations(self) -> None:

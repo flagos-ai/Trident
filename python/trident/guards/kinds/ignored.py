@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
+import ast
 from typing import TYPE_CHECKING
 
 from ..codes.base import GuardCode
-from ..local import Local
 from .base import Guard
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ class IgnoredGuard(Guard):
     def parse_codes(
         cls,
         texts: list[str],
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> list[GuardCode]:
         return []
 
@@ -29,7 +29,7 @@ class IgnoredGuard(Guard):
     def parse_source(
         cls,
         guard: torch._guards.Guard,
-    ) -> Local | None:
+    ) -> ast.Subscript | None:
         return None
 
 
