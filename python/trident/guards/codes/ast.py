@@ -11,14 +11,18 @@ from typing_extensions import Self, override
 
 from trident.core import ir
 
-from ..ast import ASTVisitor, GuardExpressionVisitor
+from ..expressions import (
+    Expression,
+    ExpressionBuilder,
+    UnsupportedExpression,
+    parse_expression,
+)
 from ..scope import Scope
+from ..source import input_source
 from .base import GuardCode
 
 
 class ASTCode(GuardCode):
-    priority = 2
-
     def __init__(
         self,
         text: str,
@@ -27,22 +31,38 @@ class ASTCode(GuardCode):
         source: ast.Subscript | None = None,
     ) -> None:
         super().__init__(text, source)
-        self.expression: Final[ast.expr] = expression
-        self.supported: Final[bool] = ASTVisitor.supports(expression)
-
-    @override
-    def build(self, scope: Scope, context: ir.Context) -> ir.Value:
-        """Build standalone expressions used by the guard IR tests."""
-        return GuardExpressionVisitor(self.text, scope, context).value(self.expression)
+        self.expression: Final[Expression] = parse_expression(expression)
+        self._expression_key: Final[str] = ast.dump(
+            expression, include_attributes=False
+        )
+        # Preserve early constant checks independently of the Dynamo category.
+        self.priority = 2
+        if (
+            isinstance(expression, ast.Compare)
+            and len(expression.ops) == 1
+            and input_source(expression.left) is not None
+        ):
+            [operation], [comparator] = expression.ops, expression.comparators
+            if (
+                isinstance(operation, ast.Eq)
+                and input_source(comparator) is None
+                or isinstance(operation, ast.Is)
+                and isinstance(comparator, ast.Constant)
+                and comparator.value is None
+            ):
+                self.priority = 1
 
     @override
     def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
-        assert self.supported, f"guard expression cannot be lowered: {self.text!r}"
-        return GuardExpressionVisitor(self.text, scope, context).build(self.expression)
+        return [
+            ExpressionBuilder(self.text, scope, context).build(
+                self.expression, predicate=True
+            )
+        ]
 
     @property
     def key(self) -> Hashable:
-        return ("ast", ast.dump(self.expression, include_attributes=False))
+        return ("ast", self._expression_key)
 
     @classmethod
     def parse(
@@ -51,8 +71,7 @@ class ASTCode(GuardCode):
         source: ast.Subscript | None,
     ) -> Self | None:
         try:
-            expression = ast.parse(text, mode="eval").body
-        except SyntaxError:
+            expression = ast.parse(text.strip(), mode="eval").body
+            return cls(text, expression, source=source)
+        except (SyntaxError, UnsupportedExpression):
             return None
-        code = cls(text, expression)
-        return code if code.supported else None

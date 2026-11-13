@@ -6,7 +6,7 @@ from __future__ import annotations
 import ast
 from abc import abstractmethod
 from collections.abc import Hashable
-from typing import ClassVar, Final
+from typing import Final
 
 from typing_extensions import Self
 
@@ -20,7 +20,7 @@ class GuardCode:
     """Parsed representation of one expression from a Guard code list."""
 
     # Metadata and constant checks precede general expression checks.
-    priority: ClassVar[int] = 1
+    priority: int = 1
 
     def __init__(self, text: str, source: ast.Subscript | None) -> None:
         self.text: Final[str] = text

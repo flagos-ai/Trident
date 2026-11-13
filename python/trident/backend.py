@@ -8,6 +8,7 @@ import gc
 import inspect
 import operator
 from collections.abc import Callable, Hashable
+from itertools import islice
 from typing import Any, Final
 
 import torch
@@ -252,7 +253,10 @@ class TridentGraphModule:
                 "variadic positional inputs are unsupported"
             )
             # Traverse in export order; dispatch parameters retain signature order.
-            provided_names = [*positional_names[: len(exported_args)], *exported_kwargs]
+            provided_names = [
+                *islice(positional_names, len(exported_args)),
+                *exported_kwargs,
+            ]
             input_spec_iter = iter(input_specs)
             main_input_type_iter = iter(main_func.function_type.value.inputs)
 
@@ -389,7 +393,6 @@ class TridentGraphModule:
             )
             entry = dispatcher.add_entry_block()
             with ir.InsertionPoint(entry):
-                success, payload = build_dispatcher(
-                    self._dispatcher, Scope(entry.arguments[0])
-                )
+                [arguments] = entry.arguments
+                success, payload = build_dispatcher(self._dispatcher, Scope(arguments))
                 tvm_ffi_d.return_(success, payload)

@@ -211,9 +211,14 @@ interfaces.
 
 ## Guards and containers
 
-`parse_guards` under `python/trident/guards/` parses Dynamo guards through
-`Guard` handlers into a tuple of `GuardCode` recipes. Guard sources remain Python `ast.Subscript` expressions;
-there is no separate Local object. `TridentGraphModule.compile` in
+`parse_guards` under `python/trident/guards/` converts Dynamo guard code lists
+directly into a tuple of `GuardCode` recipes. `codes.parse_code` tries specialized
+regex templates before general AST expressions, without a Dynamo-category
+registry or wrapper objects. Support depends on each code's contents, including
+codes from previously unknown categories. Guard sources remain Python `ast.Subscript` expressions;
+there is no separate Local object. The context-free `source.py` module recognizes
+these expressions and converts them to tuple paths; Scope only manages
+materialized SSA bindings. `TridentGraphModule.compile` in
 `python/trident/backend.py` constructs a signature-ordered parameter-name-to-type
 mapping and graph-ordered tuple paths by traversing exported example inputs.
 Parameter binding uses the function signature; traversal preserves positional
@@ -283,6 +288,16 @@ the code sequence directly; GuardNodes retain the recipes without a collection
 wrapper or an additional cache. Each check produces a `Result<Bool>`. Dispatch
 stops a candidate on the first false Bool or failed Result; a candidate with no
 checks proceeds directly to execution.
+
+Captured sources and explicitly listed ambient guards retain their filtering
+policy. Empty shape environments are valid because Dynamo emits them for graphs
+without shape checks; other empty guards are rejected. Every non-filtered code
+must parse, and diagnostics identify its category, source and failing text.
+Shape sources resolve to their tensor input; only recognized shape type-id
+templates receive signature-covered handling, never arbitrary neighboring code.
+Constant comparisons use ASTCode with the same structural deduplication key as
+other AST expressions. Their early priority is retained independently of category,
+alongside metadata checks; other expressions follow in stable capture order.
 
 `python/trident/guards/tree.py` describes the dispatcher as a persistent `Root`
 with ordered `InputNode`, `GuardNode` and `ExecutionNode` children. The backend
@@ -564,20 +579,42 @@ consumer discards its version; this does not delete IR or manage runtime
 references. Extraction Results remain fresh. Construction exceptions propagate;
 discard an importer and its scopes after a construction failure.
 
-Each guard-expression visitor caches one recursive analysis per AST node for its
-type, active operands, purity, fallback and checked array-size requirement.
-Synthesized operands are reused. Expression values are evaluated afresh and comparison
-chains still evaluate their intermediate operands twice. Both pure and fallible
-construction reuse the cached active operand list; comparison construction
-slices its operand pairs from that list and uses the cached whole-expression
-fallback instead of rescanning the remaining chain. Analysis stops at fallback
-so later operands are neither resolved nor built. Guard expressions share
-ordinary scalar evaluation helpers and consume pure operand prefixes in a loop
-before opening checked-operation binds. Fallible expression helpers return
-complete Results; static fallback metadata preserves whole-expression `_base`
-and storage-offset behavior without a continuation protocol. Previously
-constructed calls still run and enforce their assertions; fallback suppresses
-later operands. Guard checks return complete boxed boolean Results. The
+Guard expressions are organized under `python/trident/guards/expressions/`.
+`syntax.py` translates Python AST once into immutable, context-free recipes.
+`codes` retains those recipes and structural AST deduplication keys alongside
+specialized regex-based metadata codes. Unsupported syntax is
+rejected during parsing. `compatibility.py` isolates historical unobservable
+checks, while `lowering.py` owns expression typing and Result construction.
+Each emission creates a fresh ExpressionBuilder with local type facts and Scope
+versions; recipes contain neither MLIR types nor SSA values. Type-dependent
+construction diagnostics include the original guard text.
+
+Ordinary `and`/`or` expressions short circuit and return the selected operand.
+Conditional expressions construct each alternative inside its own SCF branch.
+Comparisons evaluate intermediate operands once and stop on the first false
+comparison. Branches with equal payload types retain that type; different types
+join through Any. Predicate consumers convert supported scalar and container
+values to Bool, including known heterogeneous alternatives. Arithmetic still
+requires statically numeric operands. Bare untyped input truth checks retain
+the existing container interpretation; arbitrary Python object truth protocols
+are unsupported. Tuple lengths use checked runtime `ffi.ArraySize`, including
+truth checks, rather than trusting the static input schema.
+
+Expressions containing `_base` or `storage_offset` instead retain their
+historical eager traversal, including repeated middle operands in comparison
+chains. Compatibility preparation produces an explicit evaluate-prefix-then-pass
+recipe: preceding computations still execute, failures still propagate, the
+first special item makes the whole expression true, and later operands are
+neither resolved nor built. `_base` retains its warning, and storage offsets
+remain unobserved. Tensor identity checks retain their warning and skipped
+validation. No storage-offset metadata or FFI behavior changes with this policy.
+
+All expression construction returns complete Results through one entry point;
+there is no parallel bare-value evaluator or purity shortcut. Operand construction
+uses ordered binds and consumer-local persistent Scope versions. Branch and bind
+exits restore the enclosing version, keeping local SSA out of siblings and
+parents. The canonicalizer removes binds over pure inputs. GuardCode's
+`build_result` converts the final expression to a boxed boolean Result. The
 dispatcher tree emits independent candidate checks and short-circuit branches
 directly into an execute-region CFG. Each execution leaf binds its graph inputs
 and forwards the graph Result. Each `tvm_ffi.func` declares exactly one C ABI

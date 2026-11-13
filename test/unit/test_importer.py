@@ -212,13 +212,9 @@ class ImporterTest(unittest.TestCase):
                 function = func.FuncOp("test", ([array, tensor], []))
                 block = function.add_entry_block()
             with ir.InsertionPoint(block):
+                values, tensor_value = block.arguments
                 scope = Scope(
-                    block.arguments[0],
-                    {
-                        "values": Scope(
-                            block.arguments[0], {1: Scope(block.arguments[1])}
-                        )
-                    },
+                    values, {"values": Scope(values, {1: Scope(tensor_value)})}
                 )
                 first_result, local_scope = scope.extract(("values", 0))
                 second_result, reused_scope = local_scope.extract(("values", 0))
@@ -259,10 +255,8 @@ class ImporterTest(unittest.TestCase):
                 function = func.FuncOp("test", ([nested_array], []))
                 block = function.add_entry_block()
             with ir.InsertionPoint(block):
-                scope = Scope(
-                    block.arguments[0],
-                    {"values": Scope(block.arguments[0])},
-                )
+                [values] = block.arguments
+                scope = Scope(values, {"values": Scope(values)})
                 predicate = constant(True)
                 branch = scf.IfOp(native(predicate), [], has_else=True)
                 for child in (branch.then_block, branch.else_block):
@@ -418,8 +412,9 @@ class ImporterTest(unittest.TestCase):
                         with BindScope([none_result], results) as bound:
                             bound_arguments = bound.arguments
                             self.assertEqual(len(bound_arguments), count)
+                            *_, last_argument = bound_arguments
                             self.assertIsInstance(
-                                bound_arguments[-1].type, tvm_ffi_d.NoneType
+                                last_argument.type, tvm_ffi_d.NoneType
                             )
                             bound.yield_(
                                 [pure(constant(None), result_type=none_result)]
@@ -488,7 +483,8 @@ class ImporterTest(unittest.TestCase):
             with ir.InsertionPoint(importer.module.body):
                 function = func.FuncOp("semantic", ([tensor, string], []))
                 with ir.InsertionPoint(function.add_entry_block()):
-                    checked_call("test.identity", [function.arguments[0]], tensor)
+                    tensor_value, _ = function.arguments
+                    checked_call("test.identity", [tensor_value], tensor)
                     pure(tvm_ffi_d.exception("GuardMatch"))
                     importer.build_arguments(
                         [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
@@ -504,7 +500,7 @@ class ImporterTest(unittest.TestCase):
     def test_frontend_scalar_values(self) -> None:
         class Scalars(torch.nn.Module):
             def forward(self, value: torch.Tensor):
-                size = value.shape[0]
+                size, *_ = value.shape
                 return value, (size + 1) ** 2, size > 3, value.stride(0)
 
         with new_context() as context:
@@ -569,7 +565,8 @@ class ImporterTest(unittest.TestCase):
                 for target in (boxed, tvm_ffi_d.AnyType.get(), union):
                     with self.subTest(target=target):
                         result_types = make_result_types([target])
-                        result = pure(value, result_type=result_types[0])
+                        [result_type] = result_types
+                        result = pure(value, result_type=result_type)
                         operation = result.owner.opview
                         self.assertEqual(operation.value.type, target)
                         widened = operation.value
@@ -623,17 +620,13 @@ class ImporterTest(unittest.TestCase):
                                 self.assertEqual(ir.InsertionPoint.current.block, child)
                                 # Draining an empty stack forwards without another terminator.
                                 self.assertEqual(inner.yield_(results), results)
+                            *_, operation = child.operations
                             self.assertEqual(
-                                list(child.operations)[-1].operation.name,
-                                "tvm_ffi.monad.bind",
+                                operation.operation.name, "tvm_ffi.monad.bind"
                             )
                             scf.yield_(results)
-                    self.assertEqual(
-                        list(ir.InsertionPoint.current.block.operations)[
-                            -1
-                        ].operation.name,
-                        "scf.if",
-                    )
+                    *_, operation = ir.InsertionPoint.current.block.operations
+                    self.assertEqual(operation.operation.name, "scf.if")
                     results = outer.yield_(conditional.results)
                     self.assertEqual(ir.InsertionPoint.current.block, block)
                 func.return_(results)

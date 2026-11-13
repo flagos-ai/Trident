@@ -32,7 +32,7 @@ class TypeIdCode(GuardCode):
             return None
         source_regex = re.escape(ast.unparse(source))
         match = re.fullmatch(
-            rf"\s*___check_type_id\(\s*{source_regex}\s*,\s*\d+\s*\)\s*,\s*"
+            rf"\s*___check_type_id\(\s*{source_regex}(?:\s*\.shape)?\s*,\s*\d+\s*\)\s*,\s*"
             rf"type\s*=\s*<class\s+(?P<quote>['\"])"
             rf"(?P<type_name>[A-Za-z_][A-Za-z0-9_.]*)"
             rf"(?P=quote)>\s*",

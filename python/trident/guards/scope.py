@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import ast
 from collections.abc import Mapping
 from typing import Final
 
@@ -69,41 +68,3 @@ class Scope:
         """Wrap a locally reusable payload in a fresh Result and return its root."""
         value, scope = self.read(input_path)
         return pure(value), scope
-
-    def resolve(self, source: ast.Subscript) -> tuple[int | str, ...]:
-        """Translate a guard source to a path rooted at a validated parameter."""
-        assert isinstance(source, ast.Subscript) and isinstance(
-            source.slice, ast.Constant
-        )
-        key = source.slice.value
-        if isinstance(source.value, ast.Name) and source.value.id == "L":
-            input_path = (key,)
-        else:
-            input_path = (*self.resolve(source.value), key)
-        return input_path
-
-
-def input_source(expression: ast.expr) -> ast.Subscript | None:
-    """Recognize L['parameter'][index] syntax without constructing another path representation."""
-    if not isinstance(expression, ast.Subscript) or not isinstance(
-        expression.slice, ast.Constant
-    ):
-        return None
-    key = expression.slice.value
-    if isinstance(expression.value, ast.Name) and expression.value.id == "L":
-        return expression if isinstance(key, str) and key else None
-    elif (
-        isinstance(key, (int, str))
-        and not isinstance(key, bool)
-        and input_source(expression.value) is not None
-    ):
-        return expression
-    else:
-        return None
-
-
-def parse_source(text: str) -> ast.Subscript | None:
-    try:
-        return input_source(ast.parse(text, mode="eval").body)
-    except SyntaxError:
-        return None

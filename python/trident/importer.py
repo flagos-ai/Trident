@@ -159,7 +159,7 @@ class TridentFxImporter:
             )
             call = checked_call(
                 registry_name,
-                payloads[: len(arguments)],
+                payloads if arguments else (),
                 value_type(metadata),
             )
             if len(schema.returns) == 1:
@@ -178,7 +178,10 @@ class TridentFxImporter:
             return tuple(bound_results)
 
     def _build_aten_special(self, node: torch.fx.Node, name: str) -> ImportedValue:
-        arguments = node.args[:1] if name == "_assert_scalar" else node.args
+        arguments = node.args
+        if name == "_assert_scalar":
+            condition, *_ = arguments
+            arguments = (condition,)
         values = [self.argument(value) for value in arguments]
         operations = {
             "dim": tvm_ffi_d.tensor_dim,
@@ -187,8 +190,9 @@ class TridentFxImporter:
             "sym_stride": tvm_ffi_d.tensor_stride,
         }
         if operation := operations.get(name):
+            tensor, *indices = values
             return tvm_ffi_d.to(
-                operation(values[0], *[native(value) for value in values[1:]])
+                operation(tensor, *(native(value) for value in indices))
             )
         if name == "sym_numel":
             [tensor], [argument] = values, arguments
@@ -347,7 +351,7 @@ class TridentFxImporter:
                 name: (attribute, value)
                 for (name, (attribute, _)), value in zip(
                     specifications.items(),
-                    payloads[: len(specifications)],
+                    payloads if specifications else (),
                     strict=True,
                 )
             }
@@ -403,7 +407,7 @@ class TridentFxImporter:
                 loc=loc,
             )
             stack.bind(result_types, [launched])
-            outputs = [operands[name][1] for name in names]
+            outputs = [value for _, value in (operands[name] for name in names)]
             return stack.yield_([pure(value) for value in outputs or [constant(None)]])
 
     def _build_results(
@@ -443,7 +447,8 @@ class TridentFxImporter:
         result_types = [tvm_ffi_d.ResultType.get(value_type(node.meta["val"]))]
         with BindScope(result_types, self.build_arguments(arguments)) as scope:
             payloads = scope.arguments
-            yielded = [pure(self._scalar(node, payloads), result_type=result_types[0])]
+            [result_type] = result_types
+            yielded = [pure(self._scalar(node, payloads), result_type=result_type)]
             scope.yield_(yielded)
             bound_results = scope.results
         [result] = bound_results
@@ -563,9 +568,9 @@ class TridentFxImporter:
                 "u64",
                 "u8",
             }:
-                abi_type = f"i{triton_type[1:]}"
+                abi_type = f"i{triton_type.removeprefix('i').removeprefix('u')}"
             elif triton_type in {"fp32", "fp64"}:
-                abi_type = f"f{triton_type[2:]}"
+                abi_type = f"f{triton_type.removeprefix('fp')}"
             else:
                 raise RuntimeError(f"unsupported Triton argument type: {triton_type}")
             divisibility = ", divisibility = 16" if descriptor == "D" else ""
@@ -684,7 +689,7 @@ class TridentFxImporter:
                     ) as elements:
                         elements_arguments = elements.arguments
                         yielded = container_create(
-                            elements_arguments[: len(argument)], type_
+                            elements_arguments if argument else (), type_
                         )
                         elements.yield_(yielded)
                         elements_results = elements.results
@@ -767,7 +772,7 @@ class TridentFxImporter:
                     initialization_arguments = initialization.arguments
                     for spec, value in zip(
                         program.graph_signature.input_specs,
-                        initialization_arguments[: len(initial_values)],
+                        initialization_arguments if initial_values else (),
                         strict=True,
                     ):
                         self._bind(producers[spec.arg.name], value)
@@ -790,16 +795,16 @@ class TridentFxImporter:
         with BindScope([result_type], results) as outputs:
             outputs_arguments = outputs.arguments
             values = outputs_arguments
-            payload = (
-                values[0]
-                if len(values) == 1
-                else tvm_ffi_d.tuple_construct(
+            if len(values) == 1:
+                [payload] = values
+            else:
+                payload = tvm_ffi_d.tuple_construct(
                     tvm_ffi_d.TupleType.get([value.type for value in values]), values
                 )
-            )
             outputs.yield_([pure(payload, result_type=result_type)])
             outputs_results = outputs.results
-        success, payload = tvm_ffi_d.monad_unpack(outputs_results[0])
+        [result] = outputs_results
+        success, payload = tvm_ffi_d.monad_unpack(result)
         success = tvm_ffi_d.to(success)
         outcome = scf.IfOp(native(success), [any_type], has_else=True)
         with ir.InsertionPoint(outcome.then_block):
@@ -807,7 +812,8 @@ class TridentFxImporter:
         with ir.InsertionPoint(outcome.else_block):
             rejection = tvm_ffi_d.exception("GuardMatch")
             scf.yield_([tvm_ffi_d.upcast(any_type, rejection)])
-        return [tvm_ffi_d.constant_bool(True), outcome.results[0]]
+        [result] = outcome.results
+        return [tvm_ffi_d.constant_bool(True), result]
 
     def symbolic(self, expression: Any) -> ir.Value:
         operations = {

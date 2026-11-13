@@ -3,6 +3,7 @@
 
 """Execute local packed calls after monad and container lowering."""
 
+import ast
 import unittest
 from collections import Counter
 from unittest.mock import patch
@@ -17,6 +18,7 @@ from trident.core.execution_engine import ExecutionEngine
 from trident.core.passmanager import PassManager
 from trident.ffi import Exception
 from trident.guards.codes import ASTCode, GuardCode
+from trident.guards.expressions import ExpressionBuilder, parse_expression
 from trident.guards.scope import Scope
 from trident.guards.tree import Root
 from trident.ir import checked_call, constant, pure
@@ -132,7 +134,8 @@ class LocalCallTest(unittest.TestCase):
                   tvm_ffi.return %no, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
             """)
-            success = module.body.operations[1].operation.clone()
+            _, success_function, *_ = module.body.operations
+            success = success_function.operation.clone()
             failure.body.append(success)
         add_guards(failure)
         graph._sub_modules = [failure, ir.Module.create(loc=module.operation.location)]
@@ -311,20 +314,85 @@ class LocalCallTest(unittest.TestCase):
             for name, function in (("direct", invoke), ("monadic", invoke_monad)):
                 for ok in (True, False, True):
                     with self.subTest(path=name, success=ok):
-                        result = function(ok, tensor, 7)
-                        self.assertEqual(result[0], ok)
+                        success, value = function(ok, tensor, 7)
+                        self.assertEqual(success, ok)
                         if ok:
-                            payload = torch.from_dlpack(result[1])
+                            payload = torch.from_dlpack(value)
                             torch.testing.assert_close(payload, tensor)
                             self.assertEqual(payload.data_ptr(), tensor.data_ptr())
                         else:
-                            self.assertIsNone(result[1])
-            empty = invoke_empty()
-            self.assertTrue(empty[0])
-            self.assertIsNone(empty[1])
+                            self.assertIsNone(value)
+            success, value = invoke_empty()
+            self.assertTrue(success)
+            self.assertIsNone(value)
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
+
+    def test_guard_expression_evaluation(self) -> None:
+        cases = (
+            ("and", "L['flag'] and L['xs'][0] == 7", False, False, True),
+            ("comparison", "0 < len(L['xs']) < L['xs'][0]", False, False, True),
+            (
+                "compatibility",
+                "len(L['xs']) == 0 and L['unused'].storage_offset() == 0 and L['missing'] > 0",
+                False,
+                True,
+                True,
+            ),
+            ("conditional", "L['xs'][0] if L['flag'] else 42", False, 42, 7),
+            ("mixed_boolean", "True if L['flag'] else 1", False, 1, True),
+            ("mixed_conditional", "1 if L['flag'] else 'other'", False, "other", 1),
+            ("operand_and", "L['flag'] and 7", False, False, 7),
+            ("or", "L['flag'] or L['xs'][0] == 7", True, True, True),
+            ("truth", "(0 if L['flag'] else 'other')", False, True, False),
+        )
+        with new_context() as context, ir.Location.unknown():
+            register_all_passes()
+            module = ir.Module.create()
+            boolean = tvm_ffi_d.BoolType.get()
+            array = tvm_ffi_d.ArrayType.get(tvm_ffi_d.IntType.get())
+            any_type = tvm_ffi_d.AnyType.get()
+            for name, text, *_ in cases:
+                with ir.InsertionPoint(module.body):
+                    function = tvm_ffi_d.FuncOp(
+                        name,
+                        ir.TypeAttr.get(
+                            ir.FunctionType.get([boolean, array], [any_type])
+                        ),
+                    )
+                    block = function.add_entry_block()
+                with ir.InsertionPoint(block):
+                    flag, xs = block.arguments
+                    scope = Scope(flag, {"flag": Scope(flag), "xs": Scope(xs)})
+                    expression = parse_expression(ast.parse(text, mode="eval").body)
+                    result = ExpressionBuilder(text, scope, context).build(
+                        expression, predicate=name == "truth"
+                    )
+                    success, payload = tvm_ffi_d.monad_unpack(result)
+                    tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
+            self.assertTrue(module.operation.verify())
+            functions = self._compile_entries(module, *(name for name, *_ in cases))
+
+        def check() -> None:
+            for function, (
+                name,
+                _,
+                empty_flag,
+                empty_expected,
+                populated_expected,
+            ) in zip(functions, cases, strict=True):
+                with self.subTest(case=name):
+                    empty = function(empty_flag, [])
+                    populated = function(name != "or", [7])
+                    self.assertEqual(empty, empty_expected)
+                    self.assertIs(type(empty), type(empty_expected))
+                    self.assertEqual(populated, populated_expected)
+                    self.assertIs(type(populated), type(populated_expected))
+
+        assert_no_cuda_leak(
+            self, check, torch.device("cuda", torch.cuda.current_device())
+        )
 
     def test_independent_dispatch_checks(self) -> None:
         counts: Counter[int] = Counter()
@@ -340,7 +408,8 @@ class LocalCallTest(unittest.TestCase):
             # DLPack borrows the source TensorImpl's shape storage. Keep the
             # rank and backing allocation fixed while changing its size.
             self.assertEqual(tuple(value.shape), (1,))
-            mutation_inputs[0].resize_(2)
+            [value_tensor] = mutation_inputs
+            value_tensor.resize_(2)
             self.assertEqual(tuple(value.shape), (2,))
 
         tvm_ffi.register_global_func("trident.test.guard.mutate", mutate, override=True)
@@ -417,7 +486,8 @@ class LocalCallTest(unittest.TestCase):
                                 f"L['value'].size()[0] == {1 if index < 2 else 2}",
                             ]
                         if overlap and index == 1:
-                            texts[1] = "L['value'] <= 2"
+                            first, _, *remaining = texts
+                            texts = [first, "L['value'] <= 2", *remaining]
                         codes: list[GuardCode] = []
                         for text in texts:
                             code = ASTCode.parse(text, None)
@@ -457,7 +527,8 @@ class LocalCallTest(unittest.TestCase):
                     ir.Module.create(),
                 ]
                 graph._build_dispatcher(module)
-                return self._compile_entries(module, "dispatch")[0]
+                [dispatch] = self._compile_entries(module, "dispatch")
+                return dispatch
 
         effectful = build(barrier=True)
         overlapping = build(overlap=True)

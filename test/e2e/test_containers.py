@@ -98,10 +98,11 @@ class ContainerTest(unittest.TestCase):
                     result = outputs(x)
                     self.assertIsInstance(result, dict)
                     self.assertIsInstance(result["other"], tuple)
-                    self.assertEqual(result["other"][1], [3, None])
+                    other_tensor, other_values = result["other"]
+                    self.assertEqual(other_values, [3, None])
                     self.assertEqual(result["empty"], ([], (), None))
                     torch.testing.assert_close(result["tensor"], x + 1)
-                    torch.testing.assert_close(result["other"][0], x * 2)
+                    torch.testing.assert_close(other_tensor, x * 2)
             self.assertEqual(len(outputs._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())

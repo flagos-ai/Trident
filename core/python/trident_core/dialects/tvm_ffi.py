@@ -25,11 +25,15 @@ class FuncOp(FuncOp):
         self.body.blocks.append(
             *_FunctionType(self.function_type.value).inputs, arg_locs=arg_locs
         )
-        return self.body.blocks[0]
+        block, *_ = self.body.blocks
+        return block
 
     def get_entry_block(self) -> Block | None:
         """Return the entry block, or None for an external function."""
-        return self.body.blocks[0] if self.body.blocks else None
+        if not self.body.blocks:
+            return None
+        block, *_ = self.body.blocks
+        return block
 
 
 @_ods_cext.register_operation(_Dialect, replace=True)
@@ -41,11 +45,15 @@ class MonadBindOp(MonadBindOp):
         self.body.blocks.append(
             *(value.type.payload_type for value in self.inputs), arg_locs=arg_locs
         )
-        return self.body.blocks[0]
+        block, *_ = self.body.blocks
+        return block
 
     def get_entry_block(self) -> Block | None:
         """Return the entry block, or None when the body is empty."""
-        return self.body.blocks[0] if self.body.blocks else None
+        if not self.body.blocks:
+            return None
+        block, *_ = self.body.blocks
+        return block
 
     @property
     def arguments(self) -> BlockArgumentList:
@@ -64,8 +72,12 @@ class PackFuncOp(PackFuncOp):
         self.body.blocks.append(
             *_FunctionType(self.function_type.value).inputs, arg_locs=arg_locs
         )
-        return self.body.blocks[0]
+        block, *_ = self.body.blocks
+        return block
 
     def get_entry_block(self) -> Block | None:
         """Return the entry block, or None for an external function."""
-        return self.body.blocks[0] if self.body.blocks else None
+        if not self.body.blocks:
+            return None
+        block, *_ = self.body.blocks
+        return block

@@ -25,6 +25,7 @@ from trident.ir import (
 )
 
 from ..scope import Scope
+from ..source import source_path
 from .base import GuardCode
 
 
@@ -112,7 +113,7 @@ class TensorDTypeCode(GuardCode):
     def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor, scope = scope.read(scope.resolve(source))
+        tensor, scope = scope.read(source_path(source))
         if not isinstance(tensor.type, tvm_ffi_d.TensorType):
             tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
         metadata = [
@@ -179,7 +180,7 @@ class TensorDeviceCode(GuardCode):
     def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor, scope = scope.read(scope.resolve(source))
+        tensor, scope = scope.read(source_path(source))
         if not isinstance(tensor.type, tvm_ffi_d.TensorType):
             tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
         device_type, device_index = tensor_device_fields(tensor)
@@ -236,7 +237,7 @@ class TensorRankCode(GuardCode):
     def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor, scope = scope.read(scope.resolve(source))
+        tensor, scope = scope.read(source_path(source))
         if not isinstance(tensor.type, tvm_ffi_d.TensorType):
             tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
         return equal(

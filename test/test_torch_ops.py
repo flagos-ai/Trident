@@ -215,8 +215,16 @@ CASES = (
     ("full_like", lambda x: torch.full_like(x, 2.5), "unary"),
     ("zeros", lambda x: torch.zeros((3, 4), device=x.device, dtype=x.dtype), "unary"),
     ("ones", lambda x: torch.ones((3, 4), device=x.device, dtype=x.dtype), "unary"),
-    ("full", lambda x: torch.full((3, 4), -1.5, device=x.device, dtype=x.dtype), "unary"),
-    ("arange", lambda x: torch.arange(0, 8, 2, device=x.device, dtype=x.dtype), "unary"),
+    (
+        "full",
+        lambda x: torch.full((3, 4), -1.5, device=x.device, dtype=x.dtype),
+        "unary",
+    ),
+    (
+        "arange",
+        lambda x: torch.arange(0, 8, 2, device=x.device, dtype=x.dtype),
+        "unary",
+    ),
 )
 
 
@@ -254,15 +262,27 @@ def make_test(
 
     test.__doc__ = f"{name} matches eager PyTorch on {device} ({dtype})."
     if device == "cuda":
-        test = unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")(test)
+        test = unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")(
+            test
+        )
     return test
 
 
 # A small low-precision matrix for commonly used GPU operations, in addition
 # to the complete CPU/CUDA float32 suite above.
 LOW_PRECISION_OPS = {
-    "add", "mul", "div", "relu", "gelu", "silu", "softmax", "layer_norm",
-    "mm", "bmm", "linear", "conv2d",
+    "add",
+    "mul",
+    "div",
+    "relu",
+    "gelu",
+    "silu",
+    "softmax",
+    "layer_norm",
+    "mm",
+    "bmm",
+    "linear",
+    "conv2d",
 }
 
 for _name, _operation, _kind in CASES:

@@ -17,7 +17,8 @@ class DynamicTest(unittest.TestCase):
     def test_cond(self) -> None:
         @trident.jit(dynamic=True)
         def conditional(x: torch.Tensor):
-            return torch.cond(x.shape[0] > 4, lambda t: t + 1, lambda t: t - 1, (x,))
+            size, *_ = x.shape
+            return torch.cond(size > 4, lambda t: t + 1, lambda t: t - 1, (x,))
 
         def check() -> None:
             for size in (3, 6, 8):
@@ -26,7 +27,8 @@ class DynamicTest(unittest.TestCase):
                 for phase in ("warmup", "cached"):
                     with self.subTest(size=size, phase=phase):
                         torch.testing.assert_close(conditional(x), expected)
-            self.assertIn("scf.if", str(conditional._sub_modules[0]))
+            module, *_ = conditional._sub_modules
+            self.assertIn("scf.if", str(module))
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
@@ -34,7 +36,8 @@ class DynamicTest(unittest.TestCase):
     def test_dynamic_shapes(self) -> None:
         @trident.jit(dynamic=True)
         def reshape(x: torch.Tensor) -> torch.Tensor:
-            return x.reshape(x.shape[0] // 2, x.shape[1] * 2)
+            rows, columns = x.shape
+            return x.reshape(rows // 2, columns * 2)
 
         def check() -> None:
             for size in (6, 10, 14):
@@ -42,7 +45,8 @@ class DynamicTest(unittest.TestCase):
                 for phase in ("first", "repeated"):
                     with self.subTest(size=size, phase=phase):
                         torch.testing.assert_close(reshape(x), x.reshape(size // 2, 6))
-            text = str(reshape._sub_modules[0])
+            module, *_ = reshape._sub_modules
+            text = str(module)
             self.assertIn("tvm_ffi.tensor.size", text)
             self.assertIn("arith.floordivsi", text)
             self.assertIn("arith.muli", text)
@@ -54,7 +58,7 @@ class DynamicTest(unittest.TestCase):
 
     def test_scalar_arithmetic(self) -> None:
         def arithmetic(x: torch.Tensor):
-            size = x.shape[0]
+            size, *_ = x.shape
             return x + 1, (
                 size + 2,
                 size - 2,
@@ -87,14 +91,15 @@ class DynamicTest(unittest.TestCase):
         def check() -> None:
             for size in (3, 5, 7):
                 x = torch.randn(size, device="cuda")
-                expected = arithmetic(x)
+                expected_tensor, expected_scalars = arithmetic(x)
                 for phase in ("first", "repeated"):
                     with self.subTest(size=size, phase=phase):
                         tensor, scalars = compiled(x)
-                        torch.testing.assert_close(tensor, expected[0])
-                        self.assertEqual(scalars, expected[1])
+                        torch.testing.assert_close(tensor, expected_tensor)
+                        self.assertEqual(scalars, expected_scalars)
                         self.assertEqual(
-                            tuple(map(type, scalars)), tuple(map(type, expected[1]))
+                            tuple(map(type, scalars)),
+                            tuple(map(type, expected_scalars)),
                         )
             self.assertEqual(len(compiled._sub_modules), 1)
 

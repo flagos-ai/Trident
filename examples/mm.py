@@ -196,10 +196,10 @@ def main() -> None:
 
 
 def matmul_impl(a: torch.Tensor, b: torch.Tensor, activation: str = "") -> torch.Tensor:
-    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-    assert a.is_contiguous(), "Matrix A must be contiguous"
     M, K = a.shape
-    K, N = b.shape
+    b_rows, N = b.shape
+    assert K == b_rows, "Incompatible dimensions"
+    assert a.is_contiguous(), "Matrix A must be contiguous"
     c: torch.Tensor = torch.empty((M, N), device=a.device, dtype=torch.float16)
     matmul_kernel[
         lambda META: (

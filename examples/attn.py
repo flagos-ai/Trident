@@ -135,7 +135,7 @@ def attn_fwd(
     assert q.shape == k.shape == v.shape, "q, k, v must share shape"
     assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous()
 
-    head_dim = q.shape[-1]
+    batch, heads, n_ctx, head_dim = q.shape
     assert head_dim in {16, 32, 64, 128, 256}
 
     if sm_scale is None:
@@ -143,26 +143,26 @@ def attn_fwd(
 
     o: torch.Tensor = torch.empty_like(q)
     m: torch.Tensor = torch.empty(
-        (q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32
+        (batch, heads, n_ctx), device=q.device, dtype=torch.float32
     )
     stage: int = 3 if causal else 1
 
     _attn_fwd[
         lambda meta: (
-            triton.cdiv(q.shape[2], meta["BLOCK_M"]),
-            q.shape[0] * q.shape[1],
+            triton.cdiv(n_ctx, meta["BLOCK_M"]),
+            batch * heads,
             1,
         )
     ](
         sm_scale,
         m,
-        q.shape[0],
-        q.shape[1],
+        batch,
+        heads,
         q,
         k,
         v,
         o,
-        N_CTX=q.shape[2],
+        N_CTX=n_ctx,
         HEAD_DIM=head_dim,
         STAGE=stage,
     )
@@ -187,9 +187,9 @@ def attn_torch(
     causal: bool = False,
     sm_scale: float | None = None,
 ) -> torch.Tensor:
-    n_ctx: int = q.shape[2]
+    _, _, n_ctx, head_dim = q.shape
     if sm_scale is None:
-        sm_scale = 1.0 / math.sqrt(q.shape[-1])
+        sm_scale = 1.0 / math.sqrt(head_dim)
     mask: torch.Tensor = torch.tril(
         torch.ones((n_ctx, n_ctx), device=q.device, dtype=torch.bool)
     )
@@ -213,11 +213,8 @@ def attn_triton(
 def keep(conf: triton.Config) -> bool:
     block_m: int = conf.kwargs["BLOCK_M"]
     block_n: int = conf.kwargs["BLOCK_N"]
-    return not (
-        torch.cuda.get_device_capability()[0] == 9
-        and block_m * block_n < 128 * 128
-        and conf.num_warps == 8
-    )
+    major, _ = torch.cuda.get_device_capability()
+    return not (major == 9 and block_m * block_n < 128 * 128 and conf.num_warps == 8)
 
 
 def main() -> None:

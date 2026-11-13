@@ -87,11 +87,11 @@ _BINARY_ARITHMETIC: dict[
 
 def array_type(types: Sequence[ir.Type]) -> tvm_ffi_d.ArrayType:
     elements = [*types]
-    element = (
-        elements[0]
-        if elements and all(type_ == elements[0] for type_ in elements)
-        else tvm_ffi_d.AnyType.get()
-    )
+    element = tvm_ffi_d.AnyType.get()
+    if elements:
+        first, *remaining = elements
+        if all(type_ == first for type_ in remaining):
+            element = first
     return tvm_ffi_d.ArrayType.get(element)
 
 

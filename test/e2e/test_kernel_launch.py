@@ -54,15 +54,17 @@ class KernelLaunchTest(unittest.TestCase):
                     return ir.WalkResult.ADVANCE
 
                 with compiled.ctx:
-                    compiled._sub_modules[0].operation.walk(collect)
+                    module, *_ = compiled._sub_modules
+                    module.operation.walk(collect)
                     self.assertEqual(len(launches), 1)
-                    attributes = list(launches[0].attributes["specializations"])
-                    attributes[0] = ir.Attribute.parse(
+                    [launch] = launches
+                    _, *remaining_attributes = launch.attributes["specializations"]
+                    attribute = ir.Attribute.parse(
                         "#tvm_ffi.variable_specialization<kind = !llvm.ptr, "
                         "divisibility = 9223372036854775808>"
                     )
-                    launches[0].attributes["specializations"] = ir.ArrayAttr.get(
-                        attributes
+                    launch.attributes["specializations"] = ir.ArrayAttr.get(
+                        [attribute, *remaining_attributes]
                     )
                     compiled.executor = compiled.stub_compile()
                 reject_first = False
@@ -95,10 +97,8 @@ class KernelLaunchTest(unittest.TestCase):
                             value, torch.full_like(value, initial + 1)
                         )
             self.assertEqual(len(increment._sub_modules), 1)
-            self.assertIn(
-                "!tvm_ffi.monad.result<!tvm_ffi.none>",
-                f"{increment._sub_modules[0]}",
-            )
+            module, *_ = increment._sub_modules
+            self.assertIn("!tvm_ffi.monad.result<!tvm_ffi.none>", f"{module}")
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

@@ -480,6 +480,24 @@ Do not cache extraction Results or retain local bindings across guard checks.
 Copy-on-write versions describe compile-time SSA
 bindings, not snapshots of runtime container contents.
 
+Guard expression syntax belongs in `guards/expressions/syntax.py`, which produces
+context-free recipes without emitting IR. `codes.parse_code` selects specialized
+regex templates before falling back to ASTCode; do not add Dynamo-category
+handlers. Each non-filtered code must parse independently, including codes beside
+shape checks. Add construction in the expression builder using shared scalar
+helpers; do not introduce a second bare-value
+expression evaluator. Ordinary boolean and conditional expressions short circuit,
+and comparison chains evaluate each intermediate value once. Construct branch
+Results inside their respective regions and retain Scope updates only within
+that region. Differently typed alternatives join through Any; arithmetic consumers
+still require numeric types.
+Historical `_base` and `storage_offset` behavior belongs in the compatibility
+preparation step. These expressions retain eager prefix evaluation and stop at
+the first special item, passing the whole check without reading later operands.
+Keep storage-offset metadata and FFI handling unchanged. Extend existing guard
+unit coverage for parsing and IR, and the local-call execution suite for observable
+short-circuit behavior; do not duplicate unchanged metadata lowering coverage.
+
 Append an independent InputNode, guard chain and ExecutionNode for each
 candidate. Keep that candidate's own graph input paths. Do not merge input
 schemas or guard prefixes across versions. Every check builds a complete Result
