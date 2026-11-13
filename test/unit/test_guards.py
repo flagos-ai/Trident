@@ -34,10 +34,9 @@ from trident.guards.source import parse_source
 from trident.guards.tree import (
     ExecutionNode,
     GuardNode,
-    InputNode,
     Node,
     Root,
-    build_dispatcher,
+    SCMNode,
 )
 from trident.ir import constant
 
@@ -324,20 +323,21 @@ class GuardExpressionTest(unittest.TestCase):
 
 
 class DispatcherTreeTest(unittest.TestCase):
-    """Independent candidates and module-local SSA lifetimes."""
+    """Ordered prefix sharing and module-local SSA lifetimes."""
 
     def _build_dispatcher(self, dispatcher: Root) -> ir.Module:
         module = ir.Module.create()
         any_type = tvm_ffi_d.AnyType.get()
 
-        def add_functions(node: Node) -> None:
+        def add_functions(
+            node: Node | Root, input_types: tuple[ir.Type, ...] = ()
+        ) -> None:
             if isinstance(node, ExecutionNode):
-                graph_input_types = node.graph_input_types
                 function = tvm_ffi_d.FuncOp(
                     node.graph_symbol,
                     ir.TypeAttr.get(
                         ir.FunctionType.get(
-                            graph_input_types,
+                            input_types,
                             [any_type],
                         )
                     ),
@@ -345,12 +345,15 @@ class DispatcherTreeTest(unittest.TestCase):
                 )
                 with ir.InsertionPoint(function.add_entry_block()):
                     tvm_ffi_d.return_(
-                        constant(True), tvm_ffi_d.upcast(any_type, constant(node.index))
+                        constant(True),
+                        tvm_ffi_d.upcast(any_type, constant(0)),
                     )
             else:
-                assert isinstance(node, (GuardNode, InputNode, Root))
+                assert isinstance(node, (GuardNode, Root, SCMNode))
+                if isinstance(node, SCMNode):
+                    input_types = tuple(node.input_types.values())
                 for child in node.children:
-                    add_functions(child)
+                    add_functions(child, input_types)
 
         with ir.InsertionPoint(module.body):
             add_functions(dispatcher)
@@ -362,7 +365,7 @@ class DispatcherTreeTest(unittest.TestCase):
             )
             with ir.InsertionPoint(function.add_entry_block()) as ip:
                 [arguments] = ip.block.arguments
-                success, payload = build_dispatcher(dispatcher, Scope(arguments))
+                success, payload = dispatcher.build(Scope(arguments))
                 tvm_ffi_d.return_(success, payload)
         self.assertTrue(module.operation.verify())
         return module
@@ -370,33 +373,49 @@ class DispatcherTreeTest(unittest.TestCase):
     def test_ordered_prefix_and_fresh_modules(self) -> None:
         with new_context(), ir.Location.unknown():
             input_types = {"x": tvm_ffi_d.IntType.get()}
-            checks = [["L['x'] >= 0", f"L['x'] == {index}"] for index in range(3)]
+            checks = [["L['x'] >= 0", f"L['x'] < {index + 1}"] for index in range(3)]
             dispatcher = Root()
             for index, texts in enumerate(checks):
                 dispatcher.add(
                     parse_guards([FakeGuard("SHAPE_ENV", texts)]),
                     input_types,
-                    (("x",),),
                     f"run_{index}",
                 )
-            self.assertEqual(len(dispatcher.children), 3)
+            self.assertEqual(len(dispatcher.children), 1)
             # Reuse recipes and the planned tree, but rebuild all SSA in each module.
             for _ in range(2):
                 module = self._build_dispatcher(dispatcher)
-                self.assertEqual(f"{module}".count("arith.cmpi sge"), 3)
+                self.assertNotIn("tvm_ffi.pack.size", f"{module}")
+                self.assertNotIn("tvm_ffi.isa", f"{module}")
+                self.assertEqual(f"{module}".count("arith.cmpi sge"), 1)
             previous = f"{module}"
             dispatcher.add(
-                parse_guards([FakeGuard("SHAPE_ENV", ["L['x'] >= 0", "L['x'] == 3"])]),
+                parse_guards([FakeGuard("SHAPE_ENV", ["L['x'] >= 0", "L['x'] < 4"])]),
                 input_types,
-                (("x",),),
                 "run_3",
             )
             updated = self._build_dispatcher(dispatcher)
             self.assertNotIn("@run_3", previous)
-            self.assertIn("tvm_ffi.monad.call @run_3", f"{updated}")
-            self.assertEqual(f"{updated}".count("arith.cmpi sge"), 4)
+            self.assertIn("tvm_ffi.pack.call @run_3", f"{updated}")
+            self.assertEqual(f"{updated}".count("arith.cmpi sge"), 1)
             self.assertEqual(f"{module}", previous)
             self.assertTrue(module.operation.verify())
+
+    def test_signature_boundaries(self) -> None:
+        with new_context(), ir.Location.unknown():
+            int_type, float_type = tvm_ffi_d.IntType.get(), tvm_ffi_d.FloatType.get()
+            dispatcher = Root()
+            signatures = (
+                {"x": int_type, "y": float_type},
+                {"y": float_type, "x": int_type},
+                {"x": int_type, "y": float_type},
+                {"x": float_type, "y": float_type},
+                {"z": float_type, "y": float_type},
+            )
+            for index, signature in enumerate(signatures):
+                dispatcher.add((), signature, f"run_{index}")
+            self.assertEqual(len(dispatcher.children), len(signatures))
+            self._build_dispatcher(dispatcher)
 
 
 class GuardParsingTest(unittest.TestCase):

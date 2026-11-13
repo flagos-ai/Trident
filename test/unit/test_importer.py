@@ -48,16 +48,31 @@ class ImporterTest(unittest.TestCase):
                 super().__init__()
                 self.count = count
 
-            def forward(self, value: torch.Tensor):
-                return tuple(value + index for index in range(self.count))
+            def forward(self, value: list, bias: int = 3):
+                return tuple(value[0] + index for index in range(self.count))
 
         for count in (0, 1, 2):
             with self.subTest(outputs=count), new_context() as context:
-                program = torch.export.export(Outputs(count), (torch.ones(2),))
+                program = torch.export.export(Outputs(count), ([torch.ones(2), None],))
+                input_types = {
+                    "value": tvm_ffi_d.ArrayType.get(tvm_ffi_d.AnyType.get()),
+                    "bias": tvm_ffi_d.IntType.get(),
+                }
                 importer = TridentFxImporter(context=context, specialization_id=0)
-                function = importer.import_program(program, func_name="graph")
+                function = importer.import_program(
+                    program,
+                    func_name="graph",
+                    input_types=input_types,
+                    input_paths={
+                        program.graph_signature.input_specs[0].arg.name: ("value", 0)
+                    },
+                )
                 self.assertIsInstance(function, tvm_ffi_d.FuncOp)
                 self.assertEqual(function.sym_visibility.value, "private")
+                self.assertEqual(
+                    list(function.function_type.value.inputs),
+                    list(input_types.values()),
+                )
                 self.assertEqual(
                     list(function.function_type.value.results),
                     [tvm_ffi_d.AnyType.get()],
@@ -510,7 +525,14 @@ class ImporterTest(unittest.TestCase):
                 dynamic_shapes={"value": {0: torch.export.Dim("size", min=2)}},
             )
             importer = TridentFxImporter(context=context, specialization_id=0)
-            importer.import_program(program, func_name="scalars")
+            importer.import_program(
+                program,
+                func_name="scalars",
+                input_types={"value": tvm_ffi_d.TensorType.get()},
+                input_paths={
+                    program.graph_signature.input_specs[0].arg.name: ("value",)
+                },
+            )
             self.assertTrue(importer.module.operation.verify())
             scalar_types = (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
             self.assertTrue(importer.symbols)

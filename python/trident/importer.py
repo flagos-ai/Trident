@@ -10,7 +10,7 @@ ATen call order, tensor aliases, and mutations are preserved.
 from __future__ import annotations
 
 import operator
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from functools import cached_property, reduce
 from typing import Any, TypeAlias, cast
 
@@ -29,6 +29,7 @@ from trident.core import ir
 from trident.core.dialects import arith, cf, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
+from .guards.scope import Scope
 from .ir import (
     BINARY_ARITHMETIC,
     BindScope,
@@ -701,15 +702,15 @@ class TridentFxImporter:
             return stack.yield_([pure(value) for value in values or [constant(None)]])
 
     def import_program(
-        self, program: torch.export.ExportedProgram, *, func_name: str
+        self,
+        program: torch.export.ExportedProgram,
+        *,
+        func_name: str,
+        input_types: Mapping[str, ir.Type],
+        input_paths: Mapping[str, tuple[int | str, ...]],
     ) -> tvm_ffi_d.FuncOp:
+        """Build execution with the original signature and bind FX inputs locally."""
         producers = {node.name: node for node in program.graph.nodes}
-        inputs = [
-            spec
-            for spec in program.graph_signature.input_specs
-            if spec.kind == InputKind.USER_INPUT
-            and not isinstance(spec.arg, ConstantArgument)
-        ]
         outputs = [
             spec
             for spec in program.graph_signature.output_specs
@@ -720,9 +721,6 @@ class TridentFxImporter:
             ir.Location.unknown(self.context),
             ir.InsertionPoint(self.module.body),
         ):
-            input_types = [
-                value_type(producers[spec.arg.name].meta["val"]) for spec in inputs
-            ]
             payload_types = [
                 value_type(
                     spec.arg.value
@@ -734,7 +732,9 @@ class TridentFxImporter:
             any_type = tvm_ffi_d.AnyType.get()
             function = tvm_ffi_d.FuncOp(
                 func_name,
-                ir.TypeAttr.get(ir.FunctionType.get(input_types, [any_type])),
+                ir.TypeAttr.get(
+                    ir.FunctionType.get(list(input_types.values()), [any_type])
+                ),
                 sym_visibility=ir.StringAttr.get("private"),
             )
             block = function.add_entry_block()
@@ -746,15 +746,22 @@ class TridentFxImporter:
                     else producers[spec.arg.name]
                     for spec in outputs
                 ]
-                block_arguments = block.arguments
+                parameters = {
+                    name: Scope(value)
+                    for name, value in zip(input_types, block.arguments, strict=True)
+                }
                 initial_values: list[Any] = []
-                user_arguments = iter(block_arguments)
                 for spec in program.graph_signature.input_specs:
                     if (
                         not isinstance(spec.arg, ConstantArgument)
                         and spec.kind == InputKind.USER_INPUT
                     ):
-                        initial_values.append(next(user_arguments))
+                        name, *keys = input_paths[spec.arg.name]
+                        value, parameters[name] = parameters[name].read(tuple(keys))
+                        target = value_type(producers[spec.arg.name].meta["val"])
+                        if value.type != target:
+                            value = tvm_ffi_d.downcast(target, value)
+                        initial_values.append(value)
                     else:
                         state = (
                             program.state_dict

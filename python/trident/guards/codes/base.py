@@ -17,7 +17,7 @@ from ..scope import Scope
 
 
 class GuardCode:
-    """Parsed representation of one expression from a Guard code list."""
+    """Read-only check whose result may be shared within one dispatch."""
 
     # Metadata and constant checks precede general expression checks.
     priority: int = 1

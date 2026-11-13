@@ -42,7 +42,7 @@ from trident.ir import array_type, value_type
 from . import pytree as _pytree  # noqa: F401 - Register scalar nodes before export.
 from .guards import parse_guards
 from .guards.scope import Scope
-from .guards.tree import Root, build_dispatcher
+from .guards.tree import Root
 from .importer import TridentFxImporter
 
 
@@ -215,27 +215,13 @@ class TridentGraphModule:
 
         importer = TridentFxImporter(context=self.ctx, specialization_id=index)
         main_func_name = f"main_{index}"
-        main_func = importer.import_program(exported_program, func_name=main_func_name)
-        torch._dynamo.reset()
 
-        # Record the static input types and this graph's ordered argument paths.
+        # Describe original parameters and execution-local FX input bindings.
         with self.ctx:
             input_specs = exported_program.graph_signature.input_specs
             exported_input_values = pytree.tree_leaves(exported_program.example_inputs)
             assert len(input_specs) == len(exported_input_values), (
                 f"ExportedProgram input specs do not match flattened exported inputs: got {len(input_specs)} specs and {len(exported_input_values)} values"
-            )
-
-            main_input_count = sum(
-                input_spec.kind == InputKind.USER_INPUT
-                and isinstance(
-                    input_spec.arg,
-                    (SymBoolArgument, SymFloatArgument, SymIntArgument, TensorArgument),
-                )
-                for input_spec in input_specs
-            )
-            assert main_input_count == len(main_func.function_type.value.inputs), (
-                f"ExportedProgram graph inputs do not match imported MLIR inputs: got {main_input_count} graph inputs and {len(main_func.function_type.value.inputs)} MLIR inputs"
             )
 
             exported_args, exported_kwargs = exported_program.example_inputs
@@ -258,9 +244,8 @@ class TridentGraphModule:
                 *exported_kwargs,
             ]
             input_spec_iter = iter(input_specs)
-            main_input_type_iter = iter(main_func.function_type.value.inputs)
-
-            graph_input_paths: list[tuple[int | str, ...]] = []
+            producers = {node.name: node for node in exported_program.graph.nodes}
+            input_paths: dict[str, tuple[int | str, ...]] = {}
 
             def build_type(value: Any, input_path: tuple[int | str, ...]) -> ir.Type:
                 if isinstance(value, (torch.device, torch.dtype)):
@@ -283,8 +268,8 @@ class TridentGraphModule:
                     input_spec.arg,
                     (SymBoolArgument, SymFloatArgument, SymIntArgument, TensorArgument),
                 ):
-                    graph_input_paths.append(input_path)
-                    return next(main_input_type_iter)
+                    input_paths[input_spec.arg.name] = input_path
+                    return value_type(producers[input_spec.arg.name].meta["val"])
                 return value_type(value)
 
             input_types = {
@@ -295,13 +280,14 @@ class TridentGraphModule:
                 name: input_types[name] if name in input_types else value_type(value)
                 for name, value in bound.arguments.items()
             }
-        self._dispatcher.add(
-            parse_guards(gs),
-            input_types,
-            graph_input_paths,
-            main_func_name,
-            graph_input_types=main_func.function_type.value.inputs,
+        importer.import_program(
+            exported_program,
+            func_name=main_func_name,
+            input_types=input_types,
+            input_paths=input_paths,
         )
+        torch._dynamo.reset()
+        self._dispatcher.add(parse_guards(gs), input_types, main_func_name)
         self._sub_modules.append(importer.module)
         self.executor = self.stub_compile()
         gc.collect()
@@ -394,5 +380,5 @@ class TridentGraphModule:
             entry = dispatcher.add_entry_block()
             with ir.InsertionPoint(entry):
                 [arguments] = entry.arguments
-                success, payload = build_dispatcher(self._dispatcher, Scope(arguments))
+                success, payload = self._dispatcher.build(Scope(arguments))
                 tvm_ffi_d.return_(success, payload)

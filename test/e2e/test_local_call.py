@@ -6,7 +6,6 @@
 import ast
 import unittest
 from collections import Counter
-from unittest.mock import patch
 
 import torch
 import tvm_ffi
@@ -67,24 +66,16 @@ class LocalCallTest(unittest.TestCase):
                   %yes = tvm_ffi.constant.bool true
                   tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
                 }
-                tvm_ffi.func @main_2() -> !tvm_ffi.any {
-                  %answer = tvm_ffi.constant.int 42
-                  %payload = tvm_ffi.upcast %answer : !tvm_ffi.int -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
-                }
-                tvm_ffi.func @main_3(%first: !tvm_ffi.int, %second: !tvm_ffi.int) -> !tvm_ffi.any {
-                  %payload = tvm_ffi.upcast %first : !tvm_ffi.int -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
-                }
             """)
 
-        def add_guards(module: ir.Module) -> None:
+        def add_guards(module: ir.Module, symbols: tuple[str, ...]) -> None:
             graph._dispatcher = Root()
             with graph.ctx, module.operation.location, ir.InsertionPoint(module.body):
                 for function in list(module.body.operations):
                     if function.operation.name != "tvm_ffi.func":
+                        continue
+                    symbol = ir.StringAttr(function.attributes["sym_name"]).value
+                    if symbol not in symbols:
                         continue
                     input_types = {
                         f"arg{index}": type_
@@ -95,36 +86,24 @@ class LocalCallTest(unittest.TestCase):
                     graph._dispatcher.add(
                         (),
                         input_types,
-                        tuple(
-                            (name,)
-                            for name in (
-                                reversed(input_types)
-                                if graph._dispatcher.size == 3
-                                else input_types
-                            )
-                        ),
-                        ir.StringAttr(function.attributes["sym_name"]).value,
+                        symbol,
                     )
 
-        add_guards(module)
         graph._sub_modules = [
             module,
             *(ir.Module.create(loc=module.operation.location) for _ in range(3)),
         ]
-        # Bypass only Python signature normalization to exercise MLIR dynamic
-        # arity. This does not claim Python *args/**kwargs guard mapping support.
-        with patch(
-            "tvm_ffi.utils.kwargs_wrapper.make_kwargs_wrapper_from_signature",
-            side_effect=lambda invoke, signature: invoke,
-        ):
-            execute = graph.stub_compile()
+        add_guards(module, ("main_0",))
+        rejected = graph.stub_compile()
+        add_guards(module, ("main_1",))
+        execute = graph.stub_compile()
 
         with graph.ctx:
             failure = ir.Module.parse(r"""
                 llvm.mlir.global internal constant @error_kind("RuntimeError\00")
                 llvm.mlir.global internal constant @error_message("dispatcher failure\00")
                 llvm.func @TVMFFIErrorSetRaisedFromCStr(!llvm.ptr, !llvm.ptr)
-                tvm_ffi.func @main_0(%value: !tvm_ffi.any) -> !tvm_ffi.any {
+                tvm_ffi.func @main_0(%value: !tvm_ffi.int) -> !tvm_ffi.any {
                   %kind = llvm.mlir.addressof @error_kind : !llvm.ptr
                   %message = llvm.mlir.addressof @error_message : !llvm.ptr
                   llvm.call @TVMFFIErrorSetRaisedFromCStr(%kind, %message) : (!llvm.ptr, !llvm.ptr) -> ()
@@ -137,21 +116,16 @@ class LocalCallTest(unittest.TestCase):
             _, success_function, *_ = module.body.operations
             success = success_function.operation.clone()
             failure.body.append(success)
-        add_guards(failure)
+        add_guards(failure, ("main_0", "main_1"))
         graph._sub_modules = [failure, ir.Module.create(loc=module.operation.location)]
         failed = graph.stub_compile()
 
         def check() -> None:
             self.assertIsInstance(empty(7), Exception)
-            self.assertEqual(execute(), 42)
-            self.assertEqual(execute(7, 8), 8)
-            self.assertIsInstance(execute(7, 8, 9), Exception)
-            self.assertIsInstance(execute(7, "wrong type"), Exception)
             self.assertEqual(execute(7), 7)
-            self.assertIsInstance(execute("all rejected"), Exception)
             tensor = torch.ones(2, device="cuda")
             with self.assertRaisesRegex(RuntimeError, "GuardMatch"):
-                execute(tensor)
+                rejected(tensor)
             self.assertEqual(execute(-3), -3)
             with self.assertRaisesRegex(RuntimeError, "dispatcher failure"):
                 failed(7)
@@ -403,25 +377,13 @@ class LocalCallTest(unittest.TestCase):
             self, check, torch.device("cuda", torch.cuda.current_device())
         )
 
-    def test_independent_dispatch_checks(self) -> None:
+    def test_shared_prefix_dispatch(self) -> None:
         counts: Counter[int] = Counter()
 
         def record(kind: int) -> None:
             counts[kind] += 1
 
         tvm_ffi.register_global_func("trident.test.guard.record", record, override=True)
-
-        mutation_inputs: list[torch.Tensor] = []
-
-        def mutate(value: tvm_ffi.Tensor) -> None:
-            # DLPack borrows the source TensorImpl's shape storage. Keep the
-            # rank and backing allocation fixed while changing its size.
-            self.assertEqual(tuple(value.shape), (1,))
-            [value_tensor] = mutation_inputs
-            value_tensor.resize_(2)
-            self.assertEqual(tuple(value.shape), (2,))
-
-        tvm_ffi.register_global_func("trident.test.guard.mutate", mutate, override=True)
 
         class RuntimeCode(GuardCode):
             def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
@@ -433,15 +395,6 @@ class LocalCallTest(unittest.TestCase):
                             [],
                         )
                     ]
-                if self.text == "mutation":
-                    value = scope["value"].value
-                    checked_call(
-                        "trident.test.guard.mutate", [value], tvm_ffi_d.NoneType.get()
-                    )
-                    return [pure(constant(False))]
-                checked_call(
-                    "trident.test.guard.record", [constant(9)], tvm_ffi_d.NoneType.get()
-                )
                 return [pure(constant(self.text != "rejection"))]
 
         def dispatch(value: int) -> int:
@@ -452,10 +405,8 @@ class LocalCallTest(unittest.TestCase):
 
         def build(
             *,
-            barrier: bool = False,
-            overlap: bool = False,
             failing: bool = False,
-            guard_mutation: bool = False,
+            paths: tuple[tuple[str, ...], ...] | None = None,
             repeated: str | None = None,
         ) -> tvm_ffi.Function:
             with graph.ctx, ir.Location.unknown():
@@ -478,25 +429,14 @@ class LocalCallTest(unittest.TestCase):
                     else ir.Module.create()
                 )
                 any_type = tvm_ffi_d.AnyType.get()
-                type_ = (
-                    tvm_ffi_d.TensorType.get()
-                    if guard_mutation
-                    else tvm_ffi_d.IntType.get()
-                )
+                type_ = tvm_ffi_d.IntType.get()
                 graph._dispatcher = Root()
                 with ir.InsertionPoint(module.body):
                     for index in range(3):
                         input_types = {"value": type_}
                         texts = ["L['value'] >= 0", f"L['value'] == {index}"]
-                        if guard_mutation:
-                            texts = [
-                                "L['value'].ndimension() == 1",
-                                "L['value'].size()[0] >= 1",
-                                f"L['value'].size()[0] == {1 if index < 2 else 2}",
-                            ]
-                        if overlap and index == 1:
-                            first, _, *remaining = texts
-                            texts = [first, "L['value'] <= 2", *remaining]
+                        if paths is not None:
+                            texts = list(paths[index])
                         codes: list[GuardCode] = []
                         for text in texts:
                             code = ASTCode.parse(text, None)
@@ -504,16 +444,11 @@ class LocalCallTest(unittest.TestCase):
                             codes.append(code)
                         if repeated is not None and index < 2:
                             codes.insert(0, RuntimeCode(repeated, None))
-                        if barrier and index == 1:
-                            codes.insert(0, RuntimeCode("barrier", None))
                         if failing and index == 1:
                             codes.insert(0, RuntimeCode("failure", None))
-                        if guard_mutation and index == 0:
-                            codes.append(RuntimeCode("mutation", None))
                         graph._dispatcher.add(
                             codes,
                             input_types,
-                            (("value",),),
                             f"main_{index}",
                         )
                         function = tvm_ffi_d.FuncOp(
@@ -539,39 +474,41 @@ class LocalCallTest(unittest.TestCase):
                 [dispatch] = self._compile_entries(module, "dispatch")
                 return dispatch
 
-        effectful = build(barrier=True)
-        overlapping = build(overlap=True)
         failed = build(failing=True)
-        guard_mutating = build(guard_mutation=True)
         repeated_rejection = build(repeated="rejection")
+        nonadjacent = build(
+            paths=(
+                ("L['value'] >= 0", "L['value'] < 1"),
+                ("L['value'] <= 2",),
+                ("L['value'] >= 0", "L['value'] < 3"),
+            )
+        )
+        terminal = build(paths=((), ("L['value'] >= 0",), ()))
+        shorter = build(
+            paths=(
+                ("L['value'] >= 0", "L['value'] < 1"),
+                ("L['value'] >= 0",),
+                ("L['value'] >= 0", "L['value'] < 3"),
+            )
+        )
 
         def check() -> None:
-            self.assertEqual(overlapping(2), 1)
+            self.assertEqual(nonadjacent(2), 1)
+            self.assertEqual(terminal(2), 0)
+            self.assertEqual(shorter(2), 1)
+            miss = shorter(-1)
+            self.assertIsInstance(miss, Exception)
+            self.assertEqual(miss.get_kind(), "GuardMiss")
             counts.clear()
             self.assertEqual(repeated_rejection(2), 2)
-            self.assertEqual(counts[9], 2)
             self.assertEqual((counts[100], counts[101], counts[102]), (0, 0, 1))
             counts.clear()
             with self.assertRaisesRegex(RuntimeError, "guard failure"):
                 failed(2)
-            counts.clear()
-            self.assertEqual(effectful(2), 2)
-            self.assertEqual(counts[9], 1)
-            # An earlier match must suppress later effectful/fallible checks.
-            for function in (effectful, failed):
-                counts.clear()
-                self.assertEqual(function(0), 0)
-                self.assertEqual(counts[9], 0)
-                self.assertEqual(counts[100], 1)
-            counts.clear()
-            value = torch.ones(2, device="cuda").resize_(1)
-            mutation_inputs.append(value)
-            try:
-                self.assertEqual(guard_mutating(tvm_ffi.from_dlpack(value)), 2)
-                self.assertEqual(tuple(value.shape), (2,))
-                self.assertEqual(tuple(counts[100 + i] for i in range(3)), (0, 0, 1))
-            finally:
-                mutation_inputs.clear()
+            self.assertFalse(counts)
+            # An earlier match must suppress later fallible checks.
+            self.assertEqual(failed(0), 0)
+            self.assertEqual(counts[100], 1)
 
         assert_no_cuda_leak(
             self, check, torch.device("cuda", torch.cuda.current_device())

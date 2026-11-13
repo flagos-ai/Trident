@@ -50,7 +50,7 @@ adding a file for each type, arity or operator name.
 | `TVMFFIToFunc/call` | Packed argument/output slots, structured success-only reads and zero/repeated local calls |
 | `TVMFFIToLLVM/invalid`, `pack` | Checked dynamic indexing, borrowed argument access and undecomposed input rejection |
 | `TVMFFIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
-| `Pipeline/guard-dispatch` | Python-style execute-region dispatch with nested graph input adaptation through Monad, cleanup and packed ABI lowering |
+| `Pipeline/guard-dispatch` | Shared-prefix execute-region dispatch and original-pack execution through Monad, cleanup and packed ABI lowering |
 | `Pipeline/inlined-guards`, `Transforms/canonicalize-scalars`, `IR/casts` | Packed CFG structuring and DLPack inlining, repeated enclosing guards, scalar roundtrips/constants and safe cast folding |
 | `TVMFFIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |
 | `TVMFFIToLLVM/runtime-ops` | Cached registry lookup/error/call checks, conditional reference updates and clone/copy operand data flow |

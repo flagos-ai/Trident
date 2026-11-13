@@ -45,7 +45,7 @@ and destination can be reversed independently of view aliasing.
 
 | Suite | Contract |
 | --- | --- |
-| `unit/test_guards.py` | Guard parsing, expression IR, incremental fresh-module construction, nested input extraction and metadata exception recovery during construction |
+| `unit/test_guards.py` | Guard parsing, expression IR, ordered prefix sharing, incremental fresh-module construction, nested input extraction and metadata exception recovery during construction |
 | `unit/test_bindings.py` | Python type construction, registration, parameter access, operation properties and Python construction errors |
 | `unit/test_importer.py` | Semantic frontend and scalar values, argument/result construction, bind scopes, persistent input paths, lexical isolation, payload reuse, fresh extraction Results and importer diagnostics |
 | `e2e/test_operators.py` | Scalar/tensor overloads, schema arguments, reductions and multiple results |
@@ -56,7 +56,7 @@ and destination can be reversed independently of view aliasing.
 | `e2e/test_specialization.py` | Device, dtype and string specialization, including string storage boundaries and Unicode |
 | `e2e/test_kernel_launch.py` | Triton execution, specialization rejection and cleanup |
 | `e2e/test_regions.py` | Packed region execution, zero/multiple iterations, replacement/identity payloads and loop allocation cleanup |
-| `e2e/test_local_call.py` | Executable packed-call success/failure, ordered dispatch, argument adaptation, terminal execution, independent checks, expression short-circuiting and typed conditional results, mutation invalidation, erased boundaries and tensor payload ownership |
+| `e2e/test_local_call.py` | Executable packed-call success/failure, ordered dispatch, argument adaptation, terminal execution, shared read-only guard prefixes and ordered fallback, expression short-circuiting and typed conditional results, erased boundaries and tensor payload ownership |
 
 Lit owns textual parsing/verifier diagnostics, pass-local lowering, reference
 ordering and representative cross-pass integration. Python binding construction

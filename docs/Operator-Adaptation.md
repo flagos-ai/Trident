@@ -161,7 +161,7 @@ within the current domain to reuse repeated paths and common prefixes.
 read payload in `pure` without caching Results. Neither traversal implicitly
 narrows Any/Union to a container. Wrap the Result in a sequence at multi-Result
 interface boundaries.
-Execution leaves bind input paths
+Execution functions bind input paths
 in graph argument order; `trident.ir.container_read` owns direct typed container reads.
 `container_get` wraps semantic reads in Results for other frontend consumers. Guards use
 these shared builders directly and do not create or receive a graph importer.
@@ -436,42 +436,46 @@ Triton callbacks.
 
 Construct the dispatcher with `tvm_ffi.pack.func` and private graphs with
 `tvm_ffi.func`. `TridentGraphModule.compile` constructs signature-ordered
-parameter names and MLIR types plus a separate graph-ordered sequence of input paths. InputNode uses these
-parameter types for entry checks; Scope holds no static type table. Tuple types
+parameter names and MLIR types plus export input-name-to-path bindings for the
+importer. SCMNode uses these parameter types to downcast and bind packed inputs;
+Scope holds no static type table. Tuple types
 retain positional types; heterogeneous Arrays expose Any elements.
 Runtime Scope nodes require an `ir.Value`; their type comes from `value.type`.
 The root holds packed arguments, including for zero-argument functions, without
 extra type metadata. Children contain only materialized values.
 Do not store a node's own key or a parent pointer. Guard sources remain AST
-expressions and resolve from root parameter names into ordinary tuple paths. Use structural AST keys for deduplication within a candidate.
+expressions and resolve from root parameter names into ordinary tuple paths. Use structural AST keys for deduplication within a candidate and prefix sharing.
 Scope is itself the runtime input-tree node; its root represents the current
 binding version without a wrapper or separate SSA table. Pytree registrations
 load before export. Register each specialization with
-`Root.add(parse_guards(guards), input_types, graph_input_paths, graph_symbol,
-graph_input_types=main_input_types)`.
+`Root.add(parse_guards(guards), input_types, graph_symbol)`.
 `parse_guards` eagerly returns a tuple of filtered, deduplicated and stably
 priority-ordered GuardCode recipes; Root accepts the code sequence directly.
 The backend retains this one tree and extends it when adding a graph; do not
 mirror candidates or maintain a separate execution-symbol map.
 
-Represent the dispatcher with ordinary Root, InputNode, GuardNode and
-ExecutionNode classes, with Root inheriting Node. Every node implements
-`build(scope, fallback_block)` and returns its entry block. The shared
-`build_dispatcher(root, scope)` entry creates the `scf.execute_region no_inline`,
-entry and miss exit before building the root. Nodes append blocks to the
-successor's region and use ordinary IR builders directly, without an emitter or
+Represent the dispatcher with ordinary Root, SCMNode, GuardNode and
+ExecutionNode classes, with Root independent of Node. Each Node implements
+`build(scope, fallback_block)` and returns its entry block.
+`Root.build(scope)` creates the `scf.execute_region no_inline`, entry and miss
+exit before building its children, and returns the success and payload values.
+Nodes append blocks to the successor's region and use ordinary IR builders
+directly, without an emitter or
 centralized node-type switch. Persistent nodes contain no SSA,
 blocks or Scopes. Each emission constructs fresh Scope nodes from actual SSA
-values. Treat Scope nodes and their child maps as immutable. InputNode constructs a fresh bound
-parameter root after validation. Single-key `child` returns `(child, updated_scope)`;
-when present it returns the existing child and `self`. Otherwise it extracts the
+values. Treat Scope nodes and their child maps as immutable. SCMNode constructs a fresh bound
+parameter root by reading and downcasting packed inputs in its own entry block. It emits no separate
+arity or type-tag matching branches; inputs must align with the execution
+signature, and matching constraints belong to guards. Packed reads and downcasts
+retain their underlying assertions. Single-key `child` returns
+`(child, updated_scope)`; when present it returns the existing child and `self`. Otherwise it extracts the
 value using the Tuple position or Array element type, creates the child, and copies
 the current node's child map. `child` asserts an integer key and Array/Tuple parent
 when creating a node. Path traversal performs no implicit container casts;
 Any elements narrow only when a consumer requires a concrete type. Callers compose
 path updates through `read` or `extract`, sharing unchanged nodes. Consumers
 inherit an unchanged version and retain updated roots for direct container reads
-within their domain. Each Guard and execution leaf has its own local version.
+within their domain. Each Guard and execution function has its own local versions.
 Nested bind bodies inherit their parent's bindings; save the version after
 constructing bind inputs and restore it on normal or exceptional body exit.
 Do not propagate body-local bindings to parents or siblings. Consumers discard
@@ -530,23 +534,41 @@ Extend existing guard unit coverage for parsing and IR, and the local-call
 execution suite for observable short-circuit behavior; do not duplicate unchanged
 metadata lowering coverage.
 
-Append an independent InputNode, guard chain and ExecutionNode for each
-candidate. Keep that candidate's own graph input paths. Do not merge input
-schemas or guard prefixes across versions. Every check builds a complete Result
-and propagates failure before inspecting its boolean payload. A false check
-branches directly to the next candidate, which rereads and validates its inputs.
-Repeated checks, including side effects, execute separately in each candidate.
-Leave optimization of repeated IR to later passes without assuming elimination.
+Insert each candidate into an ordered prefix tree with ExecutionNode leaves.
+Reuse only the final SCMNode with exactly matching signature-ordered names and
+types, then only the final GuardNode with the same code key at each level.
+Append a branch when the trailing node does not match. Do not search earlier
+siblings: that could move a later execution ahead of intervening candidates.
+Keep guard priority and stable ordering unchanged, and FX input paths inside
+execution construction. Guards must be read-only and may not modify inputs or
+external state; repeated checks of the same input state may be shared.
+Every check builds a complete Result and propagates failure before inspecting
+its boolean payload. A false check skips its subtree to the next sibling or
+enclosing fallback. A true check enters its ordered children; exhausting those
+children reaches the same fallback. Do not cache runtime results across calls or
+reuse checks under different prefixes. Keep distinct checks' Scope updates local.
+The tree itself shares common prefixes before later IR optimization.
 
-Each execution leaf owns its graph symbol, input paths and graph parameter types.
-Read values directly and adapt Any inputs to the graph's declared parameter types
-before calling the graph with
-`tvm_ffi.monad.call`. Call zero-input graphs directly without a dummy input
-Result. Callers retain the returned Scope root explicitly; extraction never
-mutates the incoming version. Do not generate per-version adaptation wrappers. The normal pipeline handles Monad and ownership lowering
+Dispatcher and execution must accept the same original argument layout: count,
+signature order and container structure, including defaults, unused arguments
+and specialized constants. Keep execution as one private typed `tvm_ffi.func`
+with the original parameters; `lower-to-pack` supplies its packed entry. This
+preserves the shared layout and final ABI while allowing different function
+types before lowering. Even a graph without dynamic inputs retains all original
+parameters. Do not create an adaptation wrapper or a separate flat graph function.
+
+Each execution leaf owns only its graph symbol and forwards `scope.value`
+unchanged through `tvm_ffi.pack.call`, yielding its success and payload directly.
+It must not extract, filter, reorder or downcast graph arguments, or retain graph
+parameter types or paths. The backend supplies the importer with the same
+`input_types` used by SCMNode and export input-name-to-path bindings through
+`import_program`. Inside execution, read original parameters, narrow Any values
+to FX input types, and bind placeholders; constants and captured state retain
+export's initialization rules. Keep path reuse local to that function.
+The normal pipeline handles Monad and ownership lowering
 directly; there is no Guard dialect or guard conversion pass. The dispatcher
 accepts one borrowed `!tvm_ffi.pack.arguments` view and selects the first candidate
-whose inputs and guards match. Its execution ends the dispatch and returns its
+whose guards match. Its execution ends the dispatch and returns its
 result unchanged. Graph specialization rejection returns GuardMatch, which Python
 raises as RuntimeError. Exhaustion without a matching candidate returns GuardMiss
 and triggers compilation. Failed calls propagate their status without compiling.
