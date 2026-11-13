@@ -3,7 +3,7 @@
 
 """Context-free guard syntax and Result-based IR construction."""
 
-from .lowering import ExpressionBuilder as ExpressionBuilder
-from .syntax import Expression as Expression
+from .lowering import ExpressionContext as ExpressionContext
+from .nodes import Expression as Expression
 from .syntax import UnsupportedExpression as UnsupportedExpression
 from .syntax import parse_expression as parse_expression

@@ -18,7 +18,7 @@ from trident.core.execution_engine import ExecutionEngine
 from trident.core.passmanager import PassManager
 from trident.ffi import Exception
 from trident.guards.codes import ASTCode, GuardCode
-from trident.guards.expressions import ExpressionBuilder, parse_expression
+from trident.guards.expressions import ExpressionContext, parse_expression
 from trident.guards.scope import Scope
 from trident.guards.tree import Root
 from trident.ir import checked_call, constant, pure
@@ -333,19 +333,30 @@ class LocalCallTest(unittest.TestCase):
         cases = (
             ("and", "L['flag'] and L['xs'][0] == 7", False, False, True),
             ("comparison", "0 < len(L['xs']) < L['xs'][0]", False, False, True),
+            ("conditional", "L['xs'][0] if L['flag'] else 42", False, 42, 7),
+            ("empty", "not L['xs']", False, True, False),
             (
-                "compatibility",
-                "len(L['xs']) == 0 and L['unused'].storage_offset() == 0 and L['missing'] > 0",
+                "offset",
+                "len(L['xs']) == 0 and L['unused'].storage_offset() == 0 and len(L['xs']) <= 2",
+                False,
+                True,
+                False,
+            ),
+            (
+                "offset_conditional",
+                "L['xs'][0] == 7 if L['flag'] else L['unused'].storage_offset() + 1 != 2",
                 False,
                 True,
                 True,
             ),
-            ("conditional", "L['xs'][0] if L['flag'] else 42", False, 42, 7),
-            ("mixed_boolean", "True if L['flag'] else 1", False, 1, True),
-            ("mixed_conditional", "1 if L['flag'] else 'other'", False, "other", 1),
-            ("operand_and", "L['flag'] and 7", False, False, 7),
+            (
+                "offset_not",
+                "not (L['unused'].storage_offset() == 0)",
+                False,
+                False,
+                False,
+            ),
             ("or", "L['flag'] or L['xs'][0] == 7", True, True, True),
-            ("truth", "(0 if L['flag'] else 'other')", False, True, False),
         )
         with new_context() as context, ir.Location.unknown():
             register_all_passes()
@@ -366,9 +377,7 @@ class LocalCallTest(unittest.TestCase):
                     flag, xs = block.arguments
                     scope = Scope(flag, {"flag": Scope(flag), "xs": Scope(xs)})
                     expression = parse_expression(ast.parse(text, mode="eval").body)
-                    result = ExpressionBuilder(text, scope, context).build(
-                        expression, predicate=name == "truth"
-                    )
+                    result = expression.build(ExpressionContext(text, scope, context))
                     success, payload = tvm_ffi_d.monad_unpack(result)
                     tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
             self.assertTrue(module.operation.verify())

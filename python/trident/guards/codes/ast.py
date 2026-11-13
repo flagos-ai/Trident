@@ -13,7 +13,7 @@ from trident.core import ir
 
 from ..expressions import (
     Expression,
-    ExpressionBuilder,
+    ExpressionContext,
     UnsupportedExpression,
     parse_expression,
 )
@@ -54,11 +54,8 @@ class ASTCode(GuardCode):
 
     @override
     def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
-        return [
-            ExpressionBuilder(self.text, scope, context).build(
-                self.expression, predicate=True
-            )
-        ]
+        expression_context = ExpressionContext(self.text, scope, context)
+        return [expression_context.predicate(self.expression.build(expression_context))]
 
     @property
     def key(self) -> Hashable:

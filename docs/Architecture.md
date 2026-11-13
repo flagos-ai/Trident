@@ -372,8 +372,10 @@ TVM FFI and DLPack metadata operations retain memory-read effects. Machine exits
 yield payloads under their producer's dominance scope; borrowed CFG arguments
 cannot extend a producer's cleanup lifetime.
 
-Tensor identity and `_base` guards retain their existing conservative handling;
 DLPack does not expose Python wrapper identity or autograd view relationships.
+Tensor identity checks retain their warning and skipped validation. Comparisons
+depending on `_base` are locally relaxed as described below; other conditions
+in the same guard remain enforced.
 
 ## Triton kernels
 
@@ -580,40 +582,77 @@ references. Extraction Results remain fresh. Construction exceptions propagate;
 discard an importer and its scopes after a construction failure.
 
 Guard expressions are organized under `python/trident/guards/expressions/`.
-`syntax.py` translates Python AST once into immutable, context-free recipes.
-`codes` retains those recipes and structural AST deduplication keys alongside
-specialized regex-based metadata codes. Unsupported syntax is
-rejected during parsing. `compatibility.py` isolates historical unobservable
-checks, while `lowering.py` owns expression typing and Result construction.
-Each emission creates a fresh ExpressionBuilder with local type facts and Scope
-versions; recipes contain neither MLIR types nor SSA values. Type-dependent
-construction diagnostics include the original guard text.
+`syntax.py` translates Python AST once into context-free Expression subclasses
+defined as ordinary classes in `nodes.py`. Each subclass owns its payload type
+inference and Result construction. Nodes use explicit fields for their operands,
+operators, literals and input paths rather than a kind tag interpreted by a
+central builder. `codes` retains those recipes and structural AST deduplication
+keys alongside specialized regex-based metadata codes. Unsupported syntax is
+rejected while constructing the complete tree. `BaseExpression` and
+`StorageOffsetExpression` retain their receiver nodes; rank, size and stride
+also have concrete nodes rather than a method-string dispatch. `len(x.shape)`
+and `x.ndimension()` share RankExpression.
 
-Ordinary `and`/`or` expressions short circuit and return the selected operand.
-Conditional expressions construct each alternative inside its own SCF branch.
-Comparisons evaluate intermediate operands once and stop on the first false
-comparison. Branches with equal payload types retain that type; different types
-join through Any. Predicate consumers convert supported scalar and container
-values to Bool, including known heterogeneous alternatives. Arithmetic still
-requires statically numeric operands. Bare untyped input truth checks retain
-the existing container interpretation; arbitrary Python object truth protocols
-are unsupported. Tuple lengths use checked runtime `ffi.ArraySize`, including
-truth checks, rather than trusting the static input schema.
+`parse_expression` only constructs the recipe; there is no separate validation
+traversal. Base and offset nodes raise the private `_UnobservableMetadata`
+exception during construction or type inference. The exception carries a
+diagnostic message and an optional warning. ComparisonExpression handles it
+locally; the public Expression.build entry converts an unhandled exception to
+UnsupportedExpression. Parsing requires neither a Scope nor an IR context.
 
-Expressions containing `_base` or `storage_offset` instead retain their
-historical eager traversal, including repeated middle operands in comparison
-chains. Compatibility preparation produces an explicit evaluate-prefix-then-pass
-recipe: preceding computations still execute, failures still propagate, the
-first special item makes the whole expression true, and later operands are
-neither resolved nor built. `_base` retains its warning, and storage offsets
-remain unobserved. Tensor identity checks retain their warning and skipped
-validation. No storage-offset metadata or FFI behavior changes with this policy.
+Each emission calls `expression.build(ExpressionContext(...))`. The context in
+`lowering.py` holds local Scope versions and shared input access, ordered binds,
+scope restoration, length and truth conversion. It does not dispatch on node
+types. Nodes infer the types needed to declare bind and branch results without
+caching types or SSA values. The common build entry adds the original guard text
+to construction diagnostics. ASTCode converts the completed Result to a boolean
+through the context's predicate helper.
+
+Boolean guards use Bool operands and short circuit. Conditional expressions
+construct equally typed alternatives inside their own SCF branches. Comparisons
+evaluate intermediate operands once and stop on the first false comparison.
+There is no heterogeneous branch join or runtime alternative-type dispatch.
+Arithmetic requires statically numeric operands. Predicate consumers handle
+numeric values and containers; untyped input truth checks retain the existing
+container interpretation used by Dynamo's empty-sequence guards. Tuple lengths
+use checked runtime `ffi.ArraySize`, including truth checks, rather than trusting
+the static input schema.
+
+BaseExpression and StorageOffsetExpression raise `_UnobservableMetadata` through
+supported derived metadata, arithmetic and compound nodes. The first exception
+encountered during construction propagates to the enclosing comparison. The
+complete AST is parsed before construction, so unsupported sibling syntax still
+fails rather than being hidden by metadata relaxation.
+
+ComparisonExpression catches the metadata exception and relaxes the entire
+comparison to a successful boolean-true Result. There are no restrictions on
+the comparison operator, other operand or arithmetic wrapping. A comparison
+chain is one comparison node, so `1 < 0 < x.storage_offset()` also passes in its
+entirety. Encountered `_base` exceptions produce a RuntimeWarning at construction
+time. Standalone unobservable metadata fails when built rather than when parsed.
+
+A comparison remembers its insertion block's existing operations and Scope
+before construction. If metadata interrupts construction, lexical scopes unwind,
+then the comparison restores the Scope and erases its newly inserted operations
+in reverse order. This removes incomplete bind and branch regions before
+returning true, leaving verifiable IR without a separate validation traversal or
+preflight. Ordinary construction failures still propagate. Normal comparisons
+retain single evaluation of intermediate operands and short-circuit behavior;
+subsequent passes can clean up valid redundant IR.
+
+These are explicit guard relaxations, not equivalent constant folds. Surrounding
+boolean operators, negation and conditional expressions retain their ordinary
+semantics. Relaxation applies to the enclosing comparison node, not the whole
+guard. There is no eager prefix. Model storage-offset metadata, model computation
+and FFI behavior remain unchanged; subsequent MLIR passes perform ordinary
+constant and control-flow cleanup.
 
 All expression construction returns complete Results through one entry point;
 there is no parallel bare-value evaluator or purity shortcut. Operand construction
-uses ordered binds and consumer-local persistent Scope versions. Branch and bind
-exits restore the enclosing version, keeping local SSA out of siblings and
-parents. The canonicalizer removes binds over pure inputs. GuardCode's
+uses ordered binds and consumer-local persistent Scope versions. Standard
+context managers restore the enclosing version on normal and exceptional branch
+and bind exits, keeping local SSA out of siblings and parents. The canonicalizer
+removes binds over pure inputs. GuardCode's
 `build_result` converts the final expression to a boxed boolean Result. The
 dispatcher tree emits independent candidate checks and short-circuit branches
 directly into an execute-region CFG. Each execution leaf binds its graph inputs

@@ -25,7 +25,7 @@ from trident.guards.codes import (
     TypeIdCode,
 )
 from trident.guards.expressions import (
-    ExpressionBuilder,
+    ExpressionContext,
     UnsupportedExpression,
     parse_expression,
 )
@@ -56,12 +56,12 @@ class FakeGuard:
 
 
 class GuardExpressionTest(unittest.TestCase):
-    """IR generation, invalid comparisons and conservative view guards."""
+    """IR generation, invalid comparisons and local metadata guard policies."""
 
     def _build_expression(self, text: str) -> tuple[ir.Type, str]:
-        """Insert a guard expression into a textually parsed IR fixture."""
-        context = new_context()
-        with context, ir.Location.unknown(context):
+        """Parse without an IR context, then build and verify the recipe."""
+        expression = parse_expression(ast.parse(text, mode="eval").body)
+        with new_context() as context, ir.Location.unknown():
             module = ir.Module.parse(
                 """
                 module {
@@ -76,21 +76,16 @@ class GuardExpressionTest(unittest.TestCase):
             [block] = region.blocks
             *_, terminator = block.operations
             with ir.InsertionPoint(terminator):
-                code = ASTCode(text, ast.parse(text, mode="eval").body)
-                result = ExpressionBuilder(text, None, context).build(code.expression)
+                result = expression.build(ExpressionContext(text, None, context))
             self.assertTrue(module.operation.verify())
             result_type = result.type.payload_type
             module_text = str(module)
         return result_type, module_text
 
-    def test_comparison_reads_and_compatibility_prefix(self) -> None:
+    def test_comparison_reads_with_special_metadata(self) -> None:
         cases = (
             ("0 <= len(L['xs']) <= 2", 1),
-            (
-                "len(L['xs']) == 0 and L['unused'].storage_offset() == 0 and L['missing'] > 0",
-                1,
-            ),
-            ("len(L['xs']) == len(L['xs']) < L['unused'].storage_offset()", 3),
+            ("1 < len(L['xs']) < L['unused'].storage_offset()", 0),
         )
         for text, reads in cases:
             with (
@@ -152,6 +147,14 @@ class GuardExpressionTest(unittest.TestCase):
                 else:
                     self.assertIn("tvm_ffi.array.size", module_text)
 
+    def test_incompatible_conditional_branches(self) -> None:
+        text = "1 if True else 'other'"
+        with self.assertRaisesRegex(
+            AssertionError, "conditional guard branches must have the same type"
+        ) as caught:
+            self._build_expression(text)
+        self.assertIn(repr(text), str(caught.exception))
+
     def test_input_reads_reuse_local_bindings(self) -> None:
         for text in (
             "L['xs'][0] + L['xs'][0] == 2",
@@ -172,15 +175,12 @@ class GuardExpressionTest(unittest.TestCase):
                 with ir.InsertionPoint(block):
                     [argument] = block.arguments
                     root = Scope(argument, {"xs": Scope(argument)})
-                    builder = ExpressionBuilder(text, root, context)
-                    results = [
-                        builder.build(
-                            parse_expression(ast.parse(text, mode="eval").body)
-                        )
-                    ]
+                    expression_context = ExpressionContext(text, root, context)
+                    expression = parse_expression(ast.parse(text, mode="eval").body)
+                    results = [expression.build(expression_context)]
                     # Values produced in bind bodies must not escape via the cache.
-                    builder.build(
-                        parse_expression(ast.parse("L['xs'][0]", mode="eval").body)
+                    parse_expression(ast.parse("L['xs'][0]", mode="eval").body).build(
+                        expression_context
                     )
                     func.return_(results)
                 self.assertIsNone(root["xs"].get(0))
@@ -200,11 +200,11 @@ class GuardExpressionTest(unittest.TestCase):
             with ir.InsertionPoint(block):
                 [argument] = block.arguments
                 root = Scope(argument, {"xs": Scope(argument)})
-                builder = ExpressionBuilder(text, root, context)
+                expression_context = ExpressionContext(text, root, context)
                 expression = parse_expression(ast.parse(text, mode="eval").body)
                 with self.assertRaisesRegex(AssertionError, "len requires a container"):
-                    builder.build(expression)
-                self.assertIs(builder.scope, root)
+                    expression.build(expression_context)
+                self.assertIs(expression_context.scope, root)
                 self.assertIsNone(root["xs"].get(0))
                 self.assertEqual(ir.InsertionPoint.current.block, block)
             # A failed construction leaves incomplete IR; discard the module.
@@ -213,10 +213,24 @@ class GuardExpressionTest(unittest.TestCase):
         for text, message in (
             ("L['x'] is L['y'] is L['z']", "identity guard comparison must be binary"),
             ("1 in (1, 2)", "unsupported guard comparison operator"),
+            (
+                "L['x']._base.size()[0] + unsupported() == 0",
+                "unsupported guard syntax",
+            ),
         ):
             with (
                 self.subTest(text=text),
                 self.assertRaisesRegex(UnsupportedExpression, message),
+            ):
+                self._build_expression(text)
+
+    def test_invalid_unobservable_metadata(self) -> None:
+        for text in ("L['x']._base", "L['x'].storage_offset()"):
+            with (
+                self.subTest(text=text),
+                self.assertRaisesRegex(
+                    UnsupportedExpression, "requires a local comparison"
+                ),
             ):
                 self._build_expression(text)
 
@@ -272,10 +286,14 @@ class GuardExpressionTest(unittest.TestCase):
                     "arith.ori",
                 ),
             ),
-            ("mixed_select", "1 if True else 'other'", tvm_ffi_d.AnyType, ("scf.if",)),
             ("negation", "-1", tvm_ffi_d.IntType, ("arith.subi",)),
-            ("operand_or", "0 or 2.5", tvm_ffi_d.AnyType, ("scf.if",)),
             ("select", "1 if True else 2", tvm_ffi_d.IntType, ("scf.if",)),
+            (
+                "storage_offset_expression",
+                "L['x'].storage_offset() + 1 != 2",
+                tvm_ffi_d.BoolType,
+                ("tvm_ffi.constant.bool true",),
+            ),
             (
                 "string_equality",
                 "'name' == 'name'",
@@ -298,7 +316,7 @@ class GuardExpressionTest(unittest.TestCase):
                 self.assertNotIn("arith.constant", module)
                 self.assertNotIn("torch.aten.", module)
 
-    def test_tensor_base_fallback(self) -> None:
+    def test_tensor_base_comparison(self) -> None:
         with self.assertWarnsRegex(RuntimeWarning, "Tensor\\._base guard"):
             result_type, module = self._build_expression("L['x']._base.size()[0] == 1")
         self.assertIsInstance(result_type, tvm_ffi_d.BoolType)
@@ -431,15 +449,9 @@ class GuardParsingTest(unittest.TestCase):
         )
         for text in supported:
             with self.subTest(text=text):
-                parsed = self._assert_parsed(
+                self._assert_parsed(
                     FakeGuard("CONSTANT_MATCH", [text], "L['value']"),
                     (ASTCode,),
-                )
-                [code] = parsed
-                assert isinstance(code, ASTCode)
-                self.assertEqual(
-                    code.expression,
-                    parse_expression(ast.parse(text, mode="eval").body),
                 )
 
     def test_invalid_device(self) -> None:

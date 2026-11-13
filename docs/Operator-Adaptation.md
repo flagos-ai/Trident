@@ -60,9 +60,10 @@ For a new operator:
 
 When adapting a mutation, verify both input writeback and output storage alias
 on warmup and cached calls. Check specialization reuse so the repeated call
-cannot silently exercise warmup again. Use owned input tensors when testing
-cache reuse: `_base` guards conservatively force a miss. Non-contiguous inputs
-can retain their layout with `clone(memory_format=torch.preserve_format)`.
+cannot silently exercise warmup again. Comparisons depending on `_base` warn
+and pass because DLPack does not expose autograd view relationships; validate
+view and alias behavior explicitly. Owned non-contiguous inputs can retain their
+layout with `clone(memory_format=torch.preserve_format)`.
 When adapting a factory or clone, verify dtype/device and allocation behavior.
 Do not compare uninitialized factory contents. Multi-result calls return an
 FFI Array; retrieve each result with its semantic type. Python output container
@@ -481,22 +482,53 @@ Copy-on-write versions describe compile-time SSA
 bindings, not snapshots of runtime container contents.
 
 Guard expression syntax belongs in `guards/expressions/syntax.py`, which produces
-context-free recipes without emitting IR. `codes.parse_code` selects specialized
-regex templates before falling back to ASTCode; do not add Dynamo-category
-handlers. Each non-filtered code must parse independently, including codes beside
-shape checks. Add construction in the expression builder using shared scalar
-helpers; do not introduce a second bare-value
-expression evaluator. Ordinary boolean and conditional expressions short circuit,
-and comparison chains evaluate each intermediate value once. Construct branch
-Results inside their respective regions and retain Scope updates only within
-that region. Differently typed alternatives join through Any; arithmetic consumers
-still require numeric types.
-Historical `_base` and `storage_offset` behavior belongs in the compatibility
-preparation step. These expressions retain eager prefix evaluation and stop at
-the first special item, passing the whole check without reading later operands.
-Keep storage-offset metadata and FFI handling unchanged. Extend existing guard
-unit coverage for parsing and IR, and the local-call execution suite for observable
-short-circuit behavior; do not duplicate unchanged metadata lowering coverage.
+ordinary Expression subclasses without emitting IR. Parse the complete tree
+without a separate semantic validation traversal. Unobservable metadata raises a
+private exception during construction or type inference, handled locally by
+ComparisonExpression.
+`codes.parse_code` selects specialized regex templates before falling back to
+ASTCode; do not add Dynamo-category handlers. Each non-filtered code must parse
+independently, including codes beside shape checks. Add each expression's
+type inference and Result construction to its subclass in `nodes.py`,
+using shared scalar helpers. Special metadata policy belongs in
+ComparisonExpression; do not add a separate rewrite pass.
+Call `expression.build(context)` with an emission-local ExpressionContext; keep
+only shared binding, input and truth-conversion mechanics in the context.
+Do not add a central node-type switch or a second bare-value expression evaluator.
+Boolean guards require Bool operands and short circuit;
+conditional expressions require equally typed alternatives. Comparison chains
+evaluate each intermediate value once. Construct branch Results inside their
+respective regions and retain Scope updates only within that region. Infer the
+types needed to declare bind and branch results without a separate type cache
+or heterogeneous branch joins. Arithmetic consumers still require numeric types.
+Represent `_base` and `storage_offset` with BaseExpression and
+StorageOffsetExpression, retaining their receiver nodes. Use concrete rank,
+size and stride nodes, with shared tensor narrowing and Result construction.
+Type inference and construction of the special nodes raise the private
+`_UnobservableMetadata` exception, carrying a diagnostic message and optional
+warning. Keep all parser return types as Expression nodes. ComparisonExpression
+catches the first metadata exception encountered while building and relaxes the
+entire node to a successful boolean-true Result. Do not restrict the operator,
+other operand or arithmetic wrapping. Comparison chains are relaxed in their
+entirety, even when another comparison in the chain would be false. Encountered
+`_base` exceptions warn at construction time. The public Expression.build entry
+converts an unhandled metadata exception to UnsupportedExpression; standalone
+unobservable metadata is parsed but remains unsupported when built.
+
+Before constructing a comparison, save the Scope and the insertion block's
+existing operations. On a metadata exception, unwind lexical scopes, restore the
+saved Scope and erase newly inserted operations in reverse order before returning
+true. This discards incomplete bind and branch regions, keeping IR verifiable.
+Do not add a validation traversal, cached plan or preflight. Ordinary syntax and
+construction errors must propagate. Normal comparisons retain intermediate
+single evaluation and short-circuit semantics; surrounding boolean operators,
+negation and conditional expressions keep their normal behavior. Do not restore
+eager prefixes or whole-guard skips. Keep model storage-offset metadata and FFI
+handling unchanged; MLIR performs subsequent constant and control-flow cleanup.
+
+Extend existing guard unit coverage for parsing and IR, and the local-call
+execution suite for observable short-circuit behavior; do not duplicate unchanged
+metadata lowering coverage.
 
 Append an independent InputNode, guard chain and ExecutionNode for each
 candidate. Keep that candidate's own graph input paths. Do not merge input
