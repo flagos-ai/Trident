@@ -8,7 +8,9 @@ import unittest
 from trident.core import ir
 from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import constant, pure, value_type
+from trident.utils.monad import pure
+from trident.utils.types import value_type
+from trident.utils.values import constant
 
 from test.support.ir import new_context
 

@@ -23,10 +23,8 @@ from torch.export.graph_signature import (
     SymIntArgument,
     TensorArgument,
 )
-from torch.fx.experimental.symbolic_shapes import ShapeEnv
 from torch.utils import _pytree as pytree
 
-from trident import capi_utils
 from trident.core import (
     ir,
     passmanager,
@@ -39,7 +37,8 @@ from trident.core.dialects import (
 )
 from trident.core.execution_engine import ExecutionEngine
 from trident.ffi import Exception
-from trident.ir import array_type, value_type
+from trident.utils.runtime import find_runtime_libraries
+from trident.utils.types import array_type, value_type
 
 from . import pytree as _pytree  # noqa: F401 - Register scalar nodes before export.
 from .guards import parse_guards
@@ -47,22 +46,8 @@ from .guards.scope import Scope
 from .guards.tree import Root
 from .importer import TridentFxImporter
 
-
 if TYPE_CHECKING:
     from torch.export.dynamic_shapes import _DimHint
-
-
-def _convert_input(value: Any) -> Any:
-    if isinstance(value, torch.device):
-        return tvm_ffi.device(f"{value}")
-    elif isinstance(value, torch.dtype):
-        return tvm_ffi.convert(value)
-    else:
-        return value
-
-
-def _convert_output(value: Any) -> Any:
-    return torch.from_dlpack(value) if isinstance(value, tvm_ffi.Tensor) else value
 
 
 def _map_containers(value: Any, convert: Callable[[Any], Any]) -> Any:
@@ -117,69 +102,6 @@ class TridentGraphModule:
     def __name__(self) -> str:
         return self.fn.__name__
 
-    def _register_shape(
-        self,
-        value: Any,
-        fake_value: Any,
-        shape_env: ShapeEnv,
-        dimensions: dict[sympy.Symbol, torch.export.Dim | _DimHint],
-        dynamic_shapes: torch.export.ShapesCollection,
-    ) -> None:
-        if not isinstance(value, torch.Tensor):
-            return
-        assert isinstance(fake_value, torch.Tensor), (
-            "Dynamo placeholder for a Tensor input does not contain FakeTensor metadata"
-        )
-        assert value.dim() == fake_value.dim(), (
-            f"Dynamo FakeTensor has rank {fake_value.dim()}, but its input "
-            f"has rank {value.dim()}"
-        )
-        shape: dict[int, torch.export.Dim | _DimHint] = {}
-        for index, size in enumerate(fake_value.shape):
-            if not isinstance(size, torch.SymInt):
-                continue
-            expression = size.node.expr
-            symbols = expression.free_symbols
-            concrete_size = value.shape[index]
-            if not symbols:
-                assert expression.is_Integer is True, (
-                    f"Dynamo dimension {expression} is neither static nor symbolic"
-                )
-                assert operator.index(round(expression)) == concrete_size, (
-                    f"Dynamo dimension {expression} does not match input size "
-                    f"{concrete_size}"
-                )
-                continue
-            assert len(symbols) == 1, (
-                f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
-            )
-            [symbol] = symbols
-            coefficient = expression.coeff(symbol)
-            offset = expression.subs(symbol, 0)
-            assert (
-                coefficient.is_Integer is True
-                and coefficient > 0
-                and offset.is_Integer is True
-                and expression == coefficient * symbol + offset
-            ), f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
-            dimension = dimensions.get(symbol)
-            if dimension is None:
-                value_range = shape_env.var_to_range.get(symbol)
-                options: dict[str, int] = {}
-                if value_range is not None:
-                    if value_range.lower.is_Integer is True:
-                        options["min"] = operator.index(round(value_range.lower))
-                    if value_range.upper.is_Integer is True:
-                        options["max"] = operator.index(round(value_range.upper))
-                dimension = torch.export.Dim.AUTO(**options)
-                dimensions[symbol] = dimension
-            if coefficient != 1:
-                dimension = operator.index(round(coefficient)) * dimension
-            if offset != 0:
-                dimension = dimension + operator.index(round(offset))
-            shape[index] = dimension
-        dynamic_shapes[value] = shape
-
     def compile(self, *args: Any, **kwargs: Any) -> Any:
         """Export and import one specialization, then rebuild its dispatcher."""
         index = len(self._sub_modules)
@@ -199,13 +121,65 @@ class TridentGraphModule:
         dimensions: dict[sympy.Symbol, torch.export.Dim | _DimHint] = {}
         dynamic_shapes = torch.export.ShapesCollection()
 
-        pytree.tree_map(
-            lambda value, fake_value: self._register_shape(
-                value, fake_value, shape_env, dimensions, dynamic_shapes
-            ),
-            (args, kwargs),
-            (fake_args, fake_kwargs),
-        )
+        input_values, input_structure = pytree.tree_flatten((args, kwargs))
+        fake_values = input_structure.flatten_up_to((fake_args, fake_kwargs))
+        for value, fake_value in zip(input_values, fake_values, strict=True):
+            if not isinstance(value, torch.Tensor):
+                continue
+            assert isinstance(fake_value, torch.Tensor), (
+                "Dynamo placeholder for a Tensor input does not contain FakeTensor metadata"
+            )
+            assert value.dim() == fake_value.dim(), (
+                f"Dynamo FakeTensor has rank {fake_value.dim()}, but its input "
+                f"has rank {value.dim()}"
+            )
+            shape: dict[int, torch.export.Dim | _DimHint] = {}
+            for dimension_index, size in enumerate(fake_value.shape):
+                if not isinstance(size, torch.SymInt):
+                    continue
+                expression = size.node.expr
+                symbols = expression.free_symbols
+                concrete_size = value.shape[dimension_index]
+                if not symbols:
+                    assert expression.is_Integer is True, (
+                        f"Dynamo dimension {expression} is neither static nor symbolic"
+                    )
+                    assert operator.index(round(expression)) == concrete_size, (
+                        f"Dynamo dimension {expression} does not match input size "
+                        f"{concrete_size}"
+                    )
+                    continue
+                assert len(symbols) == 1, (
+                    f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
+                )
+                [symbol] = symbols
+                coefficient = expression.coeff(symbol)
+                offset = expression.subs(symbol, 0)
+                assert (
+                    coefficient.is_Integer is True
+                    and coefficient > 0
+                    and offset.is_Integer is True
+                    and expression == coefficient * symbol + offset
+                ), (
+                    f"cannot represent Dynamo dimension {expression} with torch.export.Dim"
+                )
+                dimension = dimensions.get(symbol)
+                if dimension is None:
+                    value_range = shape_env.var_to_range.get(symbol)
+                    options: dict[str, int] = {}
+                    if value_range is not None:
+                        if value_range.lower.is_Integer is True:
+                            options["min"] = operator.index(round(value_range.lower))
+                        if value_range.upper.is_Integer is True:
+                            options["max"] = operator.index(round(value_range.upper))
+                    dimension = torch.export.Dim.AUTO(**options)
+                    dimensions[symbol] = dimension
+                if coefficient != 1:
+                    dimension = operator.index(round(coefficient)) * dimension
+                if offset != 0:
+                    dimension = dimension + operator.index(round(offset))
+                shape[dimension_index] = dimension
+            dynamic_shapes[value] = shape
         exported_program: torch.export.ExportedProgram = torch.export.export(
             copy.deepcopy(exported_gm),
             args,
@@ -343,7 +317,7 @@ class TridentGraphModule:
         engine: ExecutionEngine = ExecutionEngine(
             combined,
             opt_level=3,
-            shared_libs=capi_utils.find_runtime_libraries(),
+            shared_libs=find_runtime_libraries(),
         )
         engine.initialize()
 
@@ -361,8 +335,26 @@ class TridentGraphModule:
 
         def invoke(*values: Any) -> Any:
             result = _map_containers(
-                fn(*(_map_containers(value, _convert_input) for value in values)),
-                _convert_output,
+                fn(
+                    *(
+                        _map_containers(
+                            value,
+                            lambda leaf: (
+                                tvm_ffi.device(f"{leaf}")
+                                if isinstance(leaf, torch.device)
+                                else tvm_ffi.convert(leaf)
+                                if isinstance(leaf, torch.dtype)
+                                else leaf
+                            ),
+                        )
+                        for value in values
+                    )
+                ),
+                lambda leaf: (
+                    torch.from_dlpack(leaf)
+                    if isinstance(leaf, tvm_ffi.Tensor)
+                    else leaf
+                ),
             )
 
             if isinstance(result, Exception):

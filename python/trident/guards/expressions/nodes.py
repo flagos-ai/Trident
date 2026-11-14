@@ -16,16 +16,15 @@ import torch
 from trident.core import ir
 from trident.core.dialects import scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import (
+from trident.utils.monad import BindScope, pure
+from trident.utils.types import value_type
+from trident.utils.values import (
     BINARY_ARITHMETIC,
-    BindScope,
     constant,
     equal,
     logical_not,
     native,
     negate,
-    pure,
-    value_type,
 )
 
 if TYPE_CHECKING:
@@ -297,10 +296,25 @@ class InputExpression(Expression):
         self.path: Final[list[int | str]] = path
 
     def infer_type(self, context: ExpressionContext) -> ir.Type:
-        return context.input_type(self.path)
+        assert context.scope is not None, "guard input requires a bound Scope"
+        type_: ir.Type = context.scope.type
+        scope: Scope | None = context.scope
+        for key in self.path:
+            scope = None if scope is None else scope.get(key)
+            if scope is not None:
+                type_ = scope.type
+            elif isinstance(type_, tvm_ffi_d.TupleType):
+                type_ = type_.types[key]
+            elif isinstance(type_, tvm_ffi_d.ArrayType):
+                type_ = type_.element_type
+            else:
+                type_ = tvm_ffi_d.AnyType.get()
+        return type_
 
     def _build(self, context: ExpressionContext) -> ir.Value:
-        return context.extract(self.path)
+        assert context.scope is not None, "guard input requires a bound Scope"
+        result, context.scope = context.scope.extract(self.path)
+        return result
 
 
 class LengthExpression(Expression):

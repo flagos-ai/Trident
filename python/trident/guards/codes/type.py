@@ -9,7 +9,7 @@ import re
 from typing_extensions import Self
 
 from trident.core import ir
-from trident.ir import constant
+from trident.utils.values import constant
 
 from ..scope import Scope
 from .base import GuardCode

@@ -180,36 +180,6 @@ def attn_jit(
     return attn_fwd(q, k, v, causal=causal, sm_scale=sm_scale)
 
 
-def attn_torch(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    causal: bool = False,
-    sm_scale: float | None = None,
-) -> torch.Tensor:
-    _, _, n_ctx, head_dim = q.shape
-    if sm_scale is None:
-        sm_scale = 1.0 / math.sqrt(head_dim)
-    mask: torch.Tensor = torch.tril(
-        torch.ones((n_ctx, n_ctx), device=q.device, dtype=torch.bool)
-    )
-    p: torch.Tensor = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-    if causal:
-        p[:, :, ~mask] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).to(q.dtype)
-    return torch.matmul(p, v)
-
-
-def attn_triton(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    causal: bool = False,
-    sm_scale: float | None = None,
-) -> torch.Tensor:
-    return attn_fwd(q, k, v, causal=causal, sm_scale=sm_scale)
-
-
 def keep(conf: triton.Config) -> bool:
     block_m: int = conf.kwargs["BLOCK_M"]
     block_n: int = conf.kwargs["BLOCK_N"]
@@ -235,8 +205,18 @@ def main() -> None:
     ).normal_(mean=0.0, std=0.5)
 
     for causal in [False, True]:
-        ref_out: torch.Tensor = attn_torch(q, k, v, causal=causal, sm_scale=sm_scale)
-        tri_out: torch.Tensor = attn_triton(q, k, v, causal=causal, sm_scale=sm_scale)
+        _, _, n_ctx, head_dim = q.shape
+        if sm_scale is None:
+            sm_scale = 1.0 / math.sqrt(head_dim)
+        mask: torch.Tensor = torch.tril(
+            torch.ones((n_ctx, n_ctx), device=q.device, dtype=torch.bool)
+        )
+        p: torch.Tensor = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+        if causal:
+            p[:, :, ~mask] = float("-inf")
+        p = torch.softmax(p.float(), dim=-1).to(q.dtype)
+        ref_out: torch.Tensor = torch.matmul(p, v)
+        tri_out: torch.Tensor = attn_fwd(q, k, v, causal=causal, sm_scale=sm_scale)
         jit_out: torch.Tensor = attn_jit(
             q=q, k=k, v=v, causal=causal, sm_scale=sm_scale
         )

@@ -11,7 +11,7 @@ from typing import Final
 from typing_extensions import Self
 
 from trident.core import ir
-from trident.ir import pure
+from trident.utils.monad import pure
 
 from ..scope import Scope
 

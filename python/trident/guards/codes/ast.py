@@ -10,6 +10,9 @@ from typing import Final
 from typing_extensions import Self, override
 
 from trident.core import ir
+from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.utils.guards import input_path
+from trident.utils.monad import BindScope
 
 from ..expressions import (
     Expression,
@@ -18,7 +21,6 @@ from ..expressions import (
     parse_expression,
 )
 from ..scope import Scope
-from ..source import input_source
 from .base import GuardCode
 
 
@@ -40,12 +42,12 @@ class ASTCode(GuardCode):
         if (
             isinstance(expression, ast.Compare)
             and len(expression.ops) == 1
-            and input_source(expression.left) is not None
+            and input_path(expression.left) is not None
         ):
             [operation], [comparator] = expression.ops, expression.comparators
             if (
                 isinstance(operation, ast.Eq)
-                and input_source(comparator) is None
+                and input_path(comparator) is None
                 or isinstance(operation, ast.Is)
                 and isinstance(comparator, ast.Constant)
                 and comparator.value is None
@@ -55,7 +57,16 @@ class ASTCode(GuardCode):
     @override
     def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
         expression_context = ExpressionContext(self.text, scope, context)
-        return [expression_context.predicate(self.expression.build(expression_context))]
+        result = self.expression.build(expression_context)
+        with expression_context.diagnostics():
+            type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+            with (
+                expression_context.local_scope(),
+                BindScope([type_], [result]) as bind_scope,
+            ):
+                [value] = bind_scope.arguments
+                bind_scope.yield_([expression_context.truth(value)])
+            return bind_scope.results
 
     @property
     def key(self) -> Hashable:

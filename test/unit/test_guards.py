@@ -30,7 +30,6 @@ from trident.guards.expressions import (
     parse_expression,
 )
 from trident.guards.scope import Scope
-from trident.guards.source import parse_source
 from trident.guards.tree import (
     ExecutionNode,
     GuardNode,
@@ -38,7 +37,7 @@ from trident.guards.tree import (
     Root,
     SCMNode,
 )
-from trident.ir import constant
+from trident.utils.values import constant
 
 from test.support.ir import new_context
 
@@ -428,7 +427,11 @@ class GuardParsingTest(unittest.TestCase):
     ) -> tuple[GuardCode, ...]:
         parsed = parse_guards([guard])
         self.assertEqual(tuple(type(item) for item in parsed), code_types)
-        source = parse_source(guard.name)
+        source = (
+            ast.parse(guard.name.removesuffix(".shape"), mode="eval").body
+            if guard.name
+            else None
+        )
         for code in parsed:
             self.assertEqual(
                 None if code.source is None else ast.dump(code.source),

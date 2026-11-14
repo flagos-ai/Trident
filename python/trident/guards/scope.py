@@ -8,7 +8,8 @@ from typing import Final
 
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import container_read, pure
+from trident.utils.containers import container_read
+from trident.utils.monad import pure
 
 
 class Scope:

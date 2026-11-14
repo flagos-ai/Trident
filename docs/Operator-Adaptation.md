@@ -12,23 +12,23 @@ import or lowering pipeline.
 
 `ffi/lib/aten/atengen.py` enumerates dispatcher schemas and generates registered
 `trident.aten.<name>[.<overload>]` wrappers. Do not edit generated wrappers.
-`TridentFxImporter._call_function` dispatches to `_build_aten`, which selects
-the applicable ATen overload, resolves schema arguments, fills defaults and
-converts layout and memory-format enums. `build_arguments` automatically converts
+`TridentFxImporter.visit` selects the applicable ATen overload directly in its
+ATen branch, resolves schema arguments, fills defaults and converts layout and
+memory-format enums. `build_arguments` automatically converts
 Python `torch.dtype` arguments to ATen's integer enum in the same ordered
 argument traversal, including nested list/tuple elements. Existing SSA dtype
 values and ordinary dtype constants retain their TVM FFI representation.
-The same current-node handler constructs metadata operations or emits a checked
-`tvm_ffi.FunctionCall`, returning the node's single Result, tuple of Results, or
-unit Result. Most ATen operators therefore need no individual import
-pattern. Tensor aliases and mutations follow the boxed ATen call directly; the
+The same branch constructs metadata operations or emits a checked
+`tvm_ffi.FunctionCall`, retaining the node's single Result, tuple of Results, or
+unit Result for binding before the next node. Most ATen operators therefore
+need no individual import pattern. Tensor aliases and mutations follow the boxed ATen call directly; the
 frontend does not functionalize the graph.
 
 Check membership in `torch._C._dispatch_get_all_op_names()` before emitting a
 registry call. A JIT schema alone does not establish dispatch support. Scalar
 shape arithmetic uses the shared semantic builders, including comparisons,
 floor division, remainder and boolean operations. Python builders in
-`python/trident/ir.py` own type unification, native extraction, conversion,
+`python/trident/utils/values.py` own type unification, native extraction, conversion,
 computation and result boxing. Extend their shared operation mappings rather
 than adding C++ scalar operations or lowering patterns. Temporary native SSA
 must be wrapped back into TVM FFI values before returning to the frontend.
@@ -101,8 +101,8 @@ operations. Every checked registry call must check lookup status, a non-null
 handle and call status before using its result.
 
 Stateless scalar arithmetic, boxing and leaf constants live in
-`python/trident/ir.py` and return ordinary values, as do schema and metadata
-helpers. The Python `power` builder handles nonnegative constant exponents;
+`python/trident/utils/values.py` and return ordinary values, as do schema and metadata
+helpers. The importer-local `_power` builder handles nonnegative constant exponents;
 source-level reductions compose the same scalar builders. Independent fallible
 construction helpers return complete Results.
 Callers consuming Results use `with BindScope(result_types, inputs) as scope`
@@ -113,14 +113,14 @@ Results after construction. Only these complete Results may leave the successful
 scope; do not return bare payloads. MLIR verification checks `monad.yield`
 termination and matching Result types.
 
-`trident.ir.checked_call` checks global lookup status, a non-null handle and call status,
+`trident.utils.monad.checked_call` checks global lookup status, a non-null handle and call status,
 returning a complete Result without consuming a callback. `build_arguments`
 constructs nested list/tuple arguments in order and returns Results, leaving
 operator execution and subsequent graph traversal to its caller. Keep pure
 argument prefixes iterative. `pure(value, result_type=...)` borrows one semantic
 payload and returns one independent Result. Wrap multiple payloads with separate
 calls. Infer the Result type from the value except at declared Any/Union
-boundaries, where `result_type` requests widening. `make_result_types` accepts
+boundaries, where `result_type` requests widening. Importer-local `_make_result_types` accepts
 CABI types directly; native scalar payloads and container elements are rejected.
 Use `constant` for all scalar constants and the shared arithmetic and metadata
 builders for frontend computations. Every ordinary builder returns TVM FFI
@@ -143,9 +143,10 @@ Decomposition automatically retains semantic exported references before releasin
 local owned references. Neither resource operations nor exits need attributes.
 
 `visit(nodes, graph_module, outputs, result_types=result_types)` consumes an FX
-iterator in a loop. Node handlers return ordinary structures containing Result
-leaves; the visitor binds them through local `BindScope` contexts, restores the
-structure and continues importing subsequent nodes in the successful scope. None
+iterator in a loop. Each dispatch branch constructs an ordinary structure
+containing Result leaves; the visitor binds them through local `BindScope`
+contexts, restores the structure and continues importing subsequent nodes in
+the successful scope. None
 Result payloads become Python `None`, consuming their corresponding block
 arguments. Traversal keeps its working mappings, as does `import_program`. Use a
 fresh importer for each program. Preserve ATen argument conversion, result
@@ -162,9 +163,9 @@ read payload in `pure` without caching Results. Neither traversal implicitly
 narrows Any/Union to a container. Wrap the Result in a sequence at multi-Result
 interface boundaries.
 Execution functions bind input paths
-in graph argument order; `trident.ir.container_read` owns direct typed container reads.
-`container_get` wraps semantic reads in Results for other frontend consumers. Guards use
-these shared builders directly and do not create or receive a graph importer.
+in graph argument order; `trident.utils.containers.container_read` owns direct typed container reads.
+Importer-local `_container_get` wraps semantic reads in Results. Guards use
+shared container and Result builders directly and do not depend on the graph importer.
 Input extraction constructs fresh complete Results at each call site; only
 payloads are cached in the returned Scope version. Explicit root and consumer-local payload bindings must remain lexically
 visible; MLIR verification checks SSA visibility. Automatic semantic management
@@ -393,14 +394,13 @@ select a kernel, but launch dimensions and runtime operands must use SSA values.
 
 `python/trident/importer.py` reuses the compiled Triton cache after warmup,
 imports `gpu.binary`, and emits `tvm_ffi.kernel_launch`.
-`TridentFxImporter._build_kernel` performs cache and autotuner lookup and
-delegates parameter contracts to `_kernel_specialization`. Its iterative
-`_build_launch` constructs clones in order, resolves grid operands and emits the
-launch; `_import_kernel_binary` installs the module-level binary once. The
-handler returns a dictionary of complete Results for cloned output tensors, or
-a unit Result for a launch without outputs; the graph visitor binds these leaves
-before importing subsequent nodes. Each source parameter has a constant or variable
-specialization attribute. The latter records native ABI type and optional
+The kernel branch in `TridentFxImporter.visit` performs cache and autotuner
+lookup, constructs parameter contracts and clones in order, resolves grid
+operands, installs the module-level binary once and emits the launch. It builds
+a dictionary of complete Results for cloned output tensors, or a unit Result
+for a launch without outputs, then binds these leaves before importing subsequent
+nodes. Each source parameter has a constant or variable specialization
+attribute. The latter records native ABI type and optional
 divisibility; constexpr operands are checked and omitted from the native kernel
 call. Functional wrapper outputs clone only the specified tensors before launch.
 
@@ -491,14 +491,14 @@ ordinary Expression subclasses without emitting IR. Parse the complete tree
 without a separate semantic validation traversal. Unobservable metadata raises a
 private exception during construction or type inference, handled locally by
 ComparisonExpression.
-`codes.parse_code` selects specialized regex templates before falling back to
+`parse_guards` selects specialized regex templates before falling back to
 ASTCode; do not add Dynamo-category handlers. Each non-filtered code must parse
 independently, including codes beside shape checks. Add each expression's
 type inference and Result construction to its subclass in `nodes.py`,
 using shared scalar helpers. Special metadata policy belongs in
 ComparisonExpression; do not add a separate rewrite pass.
 Call `expression.build(context)` with an emission-local ExpressionContext; keep
-only shared binding, input and truth-conversion mechanics in the context.
+only shared binding and truth-conversion mechanics in the context.
 Do not add a central node-type switch or a second bare-value expression evaluator.
 Boolean guards require Bool operands and short circuit;
 conditional expressions require equally typed alternatives. Comparison chains

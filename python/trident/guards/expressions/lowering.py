@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Final
 
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import BindScope, ScopeStack, checked_call, logical_not, pure
+from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
+from trident.utils.values import logical_not
 
 from ..scope import Scope
 
@@ -33,37 +34,6 @@ class ExpressionContext:
             yield
         except (AssertionError, NotImplementedError) as error:
             raise AssertionError(f"{error}; guard: {self.text!r}") from error
-
-    def predicate(self, result: ir.Value) -> ir.Value:
-        """Convert a complete expression Result to a boolean Result."""
-        with self.diagnostics():
-            type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
-            with self.local_scope(), BindScope([type_], [result]) as bind_scope:
-                [value] = bind_scope.arguments
-                bind_scope.yield_([self.truth(value)])
-            [result] = bind_scope.results
-            return result
-
-    def input_type(self, path: list[int | str]) -> ir.Type:
-        assert self.scope is not None, "guard input requires a bound Scope"
-        type_: ir.Type = self.scope.type
-        scope: Scope | None = self.scope
-        for key in path:
-            scope = None if scope is None else scope.get(key)
-            if scope is not None:
-                type_ = scope.type
-            elif isinstance(type_, tvm_ffi_d.TupleType):
-                type_ = type_.types[key]
-            elif isinstance(type_, tvm_ffi_d.ArrayType):
-                type_ = type_.element_type
-            else:
-                type_ = tvm_ffi_d.AnyType.get()
-        return type_
-
-    def extract(self, path: list[int | str]) -> ir.Value:
-        assert self.scope is not None, "guard input requires a bound Scope"
-        result, self.scope = self.scope.extract(path)
-        return result
 
     @contextmanager
     def local_scope(self) -> Generator[None, None, None]:

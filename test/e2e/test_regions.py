@@ -7,10 +7,10 @@ import unittest
 
 import torch
 import tvm_ffi
-from trident import capi_utils
 from trident.core import ir, register_all_passes
 from trident.core.execution_engine import ExecutionEngine
 from trident.core.passmanager import PassManager
+from trident.utils.runtime import find_runtime_libraries
 
 from test.support.cuda import assert_no_cuda_leak
 from test.support.ir import new_context
@@ -81,7 +81,7 @@ class RegionOwnershipTest(unittest.TestCase):
                 module.operation
             )
             engine = ExecutionEngine(
-                module, opt_level=3, shared_libs=capi_utils.find_runtime_libraries()
+                module, opt_level=3, shared_libs=find_runtime_libraries()
             )
             engine.initialize()
             for_loop = tvm_ffi.Function.__from_mlir_packed_safe_call__(

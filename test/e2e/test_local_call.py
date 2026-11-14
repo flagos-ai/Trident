@@ -10,7 +10,6 @@ from typing import TypeVar
 
 import torch
 import tvm_ffi
-from trident import capi_utils
 from trident.backend import TridentGraphModule
 from trident.core import ir, register_all_passes
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
@@ -21,11 +20,12 @@ from trident.guards.codes import ASTCode, GuardCode
 from trident.guards.expressions import ExpressionContext, parse_expression
 from trident.guards.scope import Scope
 from trident.guards.tree import Root
-from trident.ir import checked_call, constant, pure
+from trident.utils.monad import checked_call, pure
+from trident.utils.runtime import find_runtime_libraries
+from trident.utils.values import constant
 
 from test.support.cuda import assert_no_cuda_leak
 from test.support.ir import new_context
-
 
 _T = TypeVar("_T")
 
@@ -39,7 +39,7 @@ class LocalCallTest(unittest.TestCase):
             module.operation
         )
         engine = ExecutionEngine(
-            module, opt_level=3, shared_libs=capi_utils.find_runtime_libraries()
+            module, opt_level=3, shared_libs=find_runtime_libraries()
         )
         engine.initialize()
         return tuple(

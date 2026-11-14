@@ -26,10 +26,9 @@ The combined module, including the dispatcher, is lowered in one pipeline.
 `importer.py` maps FX nodes to SSA values. Tensors use `!tvm_ffi.tensor` and
 retain reference semantics. Graph traversal binds call results through one path;
 call dispatch handles scalar operations, ATen and higher-order operators. The
-current-node dispatcher delegates ATen, cond, kernel and scalar construction to
-dedicated methods; ATen construction owns schema selection and argument
-conversion. Checked-call helpers return complete Results; callers bind them
-explicitly. Private graph functions use Results internally and pack successful
+visitor constructs ATen, cond, kernel and scalar operations directly in their
+dispatch branches, including ATen schema selection and argument conversion.
+Checked-call helpers return complete Results; callers bind them explicitly. Private graph functions use Results internally and pack successful
 outputs at their `tvm_ffi.return` boundary. Graph rejection returns a successful
 GuardMatch payload; each execution leaf forwards the original argument pack
 through `tvm_ffi.pack.call`. An in-place ATen call operates on the original
@@ -42,7 +41,7 @@ by ATen's boxed schema. Multiple ATen results are retrieved from an FFI Array.
 
 SymInt, SymFloat and SymBool values use TVM FFI Int, Float and Bool throughout
 Python construction, including constants, symbol bindings and graph-node results.
-Shared Python arithmetic builders in `ir.py` own type unification and emit native
+Shared Python arithmetic builders in `utils/values.py` own type unification and emit native
 `arith` operations. They extract temporary native `i64`, `f64` and `i1` SSA values
 with `tvm_ffi.get`, widen operands and immediately wrap results with `tvm_ffi.to`.
 Bool-to-Int uses zero extension, Bool-to-Float uses unsigned conversion and
@@ -57,9 +56,10 @@ use example hints; unbound symbols produce an explicit import error.
 `torch.cond` imports its branches into `scf.if`, extracting only its predicate
 and retaining monadic Result values.
 
-`ir.py` shares scalar arithmetic builders, constants, metadata and Result
-construction with the guard frontend. Numeric constants use
-`tvm_ffi.constant.bool/int/float` directly. `make_result_types` wraps CABI
+`utils/values.py` shares scalar arithmetic and constant builders with the
+guard frontend; `utils/monad.py` owns Result construction and lexical scopes.
+Numeric constants use `tvm_ffi.constant.bool/int/float` directly.
+Importer-local `_make_result_types` wraps CABI
 payload types and supplies the None default for empty sequences.
 `pure(value, result_type=...)` accepts one semantic payload and returns one Result
 value. It infers the CABI Result type unless the caller declares a boundary
@@ -67,9 +67,9 @@ type, and widens semantic values at Any/Union boundaries. Neither Result nor
 container construction implicitly accepts native scalar types or values.
 Bind arguments retain their CABI types; consumers extract native scalars only
 within a local builder or at an interface requiring them. No-data success uses
-`pure(constant(None))` explicitly. Shared `checked_call` and
-`container_get` builders construct registry calls and typed container extraction
-without depending on the graph importer. The shared `BINARY_ARITHMETIC` operation
+`pure(constant(None))` explicitly. Shared `checked_call` constructs registry
+calls; importer-local `_container_get` wraps typed container extraction in
+Results. Guards use shared builders without depending on the graph importer. The shared `BINARY_ARITHMETIC` operation
 mappings also define the supported FX scalar operations; the importer only normalizes symbolic min/max
 aliases.
 Each asserting FFI call checks lookup success, a non-null handle and call success;
@@ -211,13 +211,14 @@ interfaces.
 
 ## Guards and containers
 
-`parse_guards` under `python/trident/guards/` converts Dynamo guard code lists
-directly into a tuple of `GuardCode` recipes. `codes.parse_code` tries specialized
+`parse_guards` in `python/trident/guards/parser.py` converts Dynamo guard code lists
+directly into a tuple of `GuardCode` recipes. The parser tries specialized
 regex templates before general AST expressions, without a Dynamo-category
 registry or wrapper objects. Support depends on each code's contents, including
 codes from previously unknown categories. Guard sources remain Python `ast.Subscript` expressions;
-there is no separate Local object. The context-free `source.py` module recognizes
-these expressions and converts them to lists of path components; Scope only
+there is no separate Local object. The context-free `utils/guards.py` module recognizes
+these expressions and converts them to lists of path components in a single
+`input_path` traversal, returning None for other syntax; Scope only
 manages materialized SSA bindings. `TridentGraphModule.compile` in
 `python/trident/backend.py` constructs a signature-ordered parameter-name-to-type
 mapping and export input-name-to-path bindings by traversing exported example
@@ -410,10 +411,10 @@ in the same guard remain enforced.
 
 `importer.py` resolves the compiled Triton kernel from its warmup cache,
 imports its cubin as `gpu.binary`, and emits `tvm_ffi.kernel_launch`.
-The kernel construction method resolves the cache, builds specialization
-attributes and assembles operands. Ordered launch construction clones functional
-outputs, inserts the binary and emits the launch, returning complete Results
-for its output tensors.
+The visitor's kernel branch resolves the cache, builds specialization
+attributes and assembles operands. It clones functional outputs, inserts the
+binary and emits the launch in order, retaining complete Results for its output
+tensors.
 Each specialization has a unique binary symbol. Operands retain semantic FFI
 values and carry constant or variable specialization attributes in source
 parameter order. Variable attributes record native ABI type and divisibility;
@@ -528,10 +529,10 @@ outputs exist. Independent effects after a call remain inside its continuation,
 so failure suppresses them without requiring a payload dependency. Execution
 leaves call private execution functions through `tvm_ffi.pack.call`. Function payloads are boxed into Any during monad lowering.
 
-`TridentFxImporter.visit` iterates over the original FX nodes. Node handlers
-construct only their current node and return its ordinary value structure, whose
-leaves may include complete Results. The visitor flattens this structure, binds
-its Result leaves, restores payloads in place, and continues the loop inside the
+`TridentFxImporter.visit` iterates over the original FX nodes and constructs
+the current node's ordinary value structure directly in its dispatch branches.
+The structure's leaves may include complete Results. The visitor flattens it,
+binds its Result leaves, restores payloads in place, and continues the loop inside the
 successful body. Unit Result leaves with a None payload restore to Python `None`,
 consuming their corresponding block argument. The visitor does not redispatch on
 the node target after binding. Local `BindScope` contexts keep nested insertion
@@ -556,7 +557,7 @@ actual call arguments; explicit Python None arguments retain their positions.
 Argument construction does not invoke an operator or traverse later FX nodes. Kernel clone, grid and
 launch construction likewise preserves its original order.
 
-The shared `trident.ir.Scope` abstraction manages one block's insertion point
+The shared `trident.utils.monad.Scope` abstraction manages one block's insertion point
 and exposes complete operation results. `BindScope` constructs one `MonadBindOp`;
 its `arguments` expose borrowed successful payloads in input order, including
 None payloads. Explicit `scope.yield_(results)` terminates only its own block;
@@ -629,8 +630,8 @@ locally; the public Expression.build entry converts an unhandled exception to
 UnsupportedExpression. Parsing requires neither a Scope nor an IR context.
 
 Each emission calls `expression.build(ExpressionContext(...))`. The context in
-`lowering.py` holds local Scope versions and shared input access, ordered binds,
-scope restoration, length and truth conversion. It does not dispatch on node
+`lowering.py` holds local Scope versions, ordered binds, scope restoration,
+length and truth conversion. It does not dispatch on node
 types. Nodes infer the types needed to declare bind and branch results without
 caching types or SSA values. The common build entry adds the original guard text
 to construction diagnostics. ASTCode converts the completed Result to a boolean
@@ -876,6 +877,17 @@ C/Python construction. The C++ payload parameter and accessor use
 LLVM storage; CABI membership does not imply compatibility with Any casts.
 
 ## Source layout and validation
+
+Cross-module Python helpers live under `python/trident/utils/`: `values` owns
+constants and scalar arithmetic, `types` owns type inference, `containers` owns
+direct container reads, `monad` owns Result builders and lexical scopes,
+`guards` owns Dynamo input-path syntax, and `runtime` owns runtime-library
+discovery. Import helpers directly from their responsibility-specific module;
+the package initializer does not re-export them. Helpers used only by one
+business module stay there: the importer owns container-get Results, result-type
+lists, constant powers and stateless FX/Triton conversions; the backend owns
+runtime container traversal. Guard parsing, expression behavior and input
+bindings stay in their existing business modules.
 
 `core/` contains the DLPack and TVM FFI dialects, lowering passes,
 C API and Python bindings. `ffi/` generates ATen wrappers from dispatcher schemas

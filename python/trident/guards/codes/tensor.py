@@ -17,15 +17,10 @@ from typing_extensions import Self, override
 from trident.core import ir
 from trident.core.dialects import arith
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import (
-    BINARY_ARITHMETIC,
-    constant,
-    equal,
-    tensor_device_fields,
-)
+from trident.utils.guards import input_path
+from trident.utils.values import BINARY_ARITHMETIC, constant, equal
 
 from ..scope import Scope
-from ..source import source_path
 from .base import GuardCode
 
 
@@ -113,7 +108,7 @@ class TensorDTypeCode(GuardCode):
     def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor, scope = scope.read(source_path(source))
+        tensor, scope = scope.read(input_path(source))
         if not isinstance(tensor.type, tvm_ffi_d.TensorType):
             tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
         metadata: list[ir.Value] = [
@@ -180,10 +175,13 @@ class TensorDeviceCode(GuardCode):
     def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor, scope = scope.read(source_path(source))
+        tensor, scope = scope.read(input_path(source))
         if not isinstance(tensor.type, tvm_ffi_d.TensorType):
             tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
-        device_type, device_index = tensor_device_fields(tensor)
+        device_type, device_index = (
+            tvm_ffi_d.to(arith.extsi(ir.IntegerType.get_signless(64), field))
+            for field in tvm_ffi_d.tensor_device(tensor)
+        )
         return BINARY_ARITHMETIC[operator.and_](
             equal(
                 device_type,
@@ -237,7 +235,7 @@ class TensorRankCode(GuardCode):
     def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor, scope = scope.read(source_path(source))
+        tensor, scope = scope.read(input_path(source))
         if not isinstance(tensor.type, tvm_ffi_d.TensorType):
             tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
         return equal(

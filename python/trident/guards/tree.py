@@ -12,7 +12,7 @@ from typing import Final
 from trident.core import ir
 from trident.core.dialects import cf, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import constant, native
+from trident.utils.values import constant, native
 
 from .codes import GuardCode
 from .scope import Scope

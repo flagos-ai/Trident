@@ -14,18 +14,11 @@ from trident.core.dialects import func, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.guards.scope import Scope
 from trident.importer import TridentFxImporter
-from trident.ir import (
-    BINARY_ARITHMETIC,
-    BindScope,
-    ScopeStack,
-    checked_call,
-    constant,
-    container_get,
-    make_result_types,
-    native,
-    power,
-    pure,
-)
+from trident.importer import _container_get as container_get
+from trident.importer import _make_result_types as make_result_types
+from trident.importer import _power as power
+from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
+from trident.utils.values import BINARY_ARITHMETIC, constant, native
 
 from test.support.ir import new_context
 

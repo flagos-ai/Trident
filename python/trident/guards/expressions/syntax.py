@@ -9,7 +9,8 @@ import ast
 
 import torch
 
-from ..source import input_source, source_path
+from trident.utils.guards import input_path
+
 from .nodes import (
     BaseExpression,
     BinaryExpression,
@@ -58,36 +59,8 @@ _UNARY: dict[type[ast.unaryop], UnaryOperator] = {
 
 def parse_expression(node: ast.expr) -> Expression:
     """Construct a complete recipe without an IR context or input values."""
-    return _parse_expression(node)
-
-
-def _parse_comparison(node: ast.Compare) -> Expression:
-    identity = any(isinstance(op, ast.Is) for op in node.ops)
-    if identity and len(node.ops) != 1:
-        raise UnsupportedExpression("identity guard comparison must be binary")
-    if any(type(op) not in _COMPARISON for op in node.ops):
-        raise UnsupportedExpression("unsupported guard comparison operator")
-    if identity:
-        [rhs] = node.comparators
-        left, right = input_source(node.left), input_source(rhs)
-        if not (isinstance(rhs, ast.Constant) and rhs.value is None) and not (
-            left is not None
-            and right is not None
-            and source_path(left) != source_path(right)
-        ):
-            raise UnsupportedExpression("unsupported identity guard operands")
-
-    return ComparisonExpression(
-        tuple(map(_parse_expression, (node.left, *node.comparators))),
-        tuple(_COMPARISON[type(op)] for op in node.ops),
-        text=ast.unparse(node),
-    )
-
-
-def _parse_expression(node: ast.expr) -> Expression:
-    source = input_source(node)
-    if source is not None:
-        return InputExpression(source_path(source))
+    if (path := input_path(node)) is not None:
+        return InputExpression(path)
     if isinstance(node, ast.Constant) and (
         node.value is None or isinstance(node.value, (bool, int, float, str))
     ):
@@ -100,26 +73,43 @@ def _parse_expression(node: ast.expr) -> Expression:
         ):
             return ConstantExpression(value)
         if node.attr == "_base":
-            return BaseExpression(_parse_expression(node.value))
+            return BaseExpression(parse_expression(node.value))
         if isinstance(node.value, ast.Attribute):
-            return _parse_expression(node.value)
+            return parse_expression(node.value)
     if isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
-        lhs, rhs = map(_parse_expression, (node.left, node.right))
+        lhs, rhs = map(parse_expression, (node.left, node.right))
         return BinaryExpression(lhs, rhs, _BINARY[type(node.op)])
     if isinstance(node, ast.BoolOp):
         return BooleanExpression(
-            tuple(map(_parse_expression, node.values)),
+            tuple(map(parse_expression, node.values)),
             "and" if isinstance(node.op, ast.And) else "or",
         )
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY:
-        operand = _parse_expression(node.operand)
+        operand = parse_expression(node.operand)
         return UnaryExpression(operand, _UNARY[type(node.op)])
     if isinstance(node, ast.IfExp):
         return SelectExpression(
-            *map(_parse_expression, (node.test, node.body, node.orelse))
+            *map(parse_expression, (node.test, node.body, node.orelse))
         )
     if isinstance(node, ast.Compare):
-        return _parse_comparison(node)
+        identity = any(isinstance(op, ast.Is) for op in node.ops)
+        if identity and len(node.ops) != 1:
+            raise UnsupportedExpression("identity guard comparison must be binary")
+        if any(type(op) not in _COMPARISON for op in node.ops):
+            raise UnsupportedExpression("unsupported guard comparison operator")
+        if identity:
+            [rhs] = node.comparators
+            left, right = input_path(node.left), input_path(rhs)
+            if not (isinstance(rhs, ast.Constant) and rhs.value is None) and not (
+                left is not None and right is not None and left != right
+            ):
+                raise UnsupportedExpression("unsupported identity guard operands")
+
+        return ComparisonExpression(
+            tuple(map(parse_expression, (node.left, *node.comparators))),
+            tuple(_COMPARISON[type(op)] for op in node.ops),
+            text=ast.unparse(node),
+        )
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         name = node.func.id
         if name == "device" and not node.args:
@@ -134,14 +124,15 @@ def _parse_expression(node: ast.expr) -> Expression:
                 pass
         if not node.keywords:
             if name in ("max", "min") and len(node.args) == 2:
-                lhs, rhs = map(_parse_expression, node.args)
+                lhs, rhs = map(parse_expression, node.args)
                 return BinaryExpression(lhs, rhs, "max" if name == "max" else "min")
             if name == "len" and len(node.args) == 1:
                 [argument] = node.args
                 shape = isinstance(argument, ast.Attribute) and argument.attr == "shape"
-                source = input_source(argument.value if shape else argument)
-                if source is not None:
-                    operand = InputExpression(source_path(source))
+                if (
+                    path := input_path(argument.value if shape else argument)
+                ) is not None:
+                    operand = InputExpression(path)
                     return (
                         RankExpression(operand) if shape else LengthExpression(operand)
                     )
@@ -163,17 +154,16 @@ def _parse_expression(node: ast.expr) -> Expression:
         and not call.keywords
     ):
         receiver = call.func.value
-        source = input_source(receiver)
         method = call.func.attr
-        if source is not None or (
+        if input_path(receiver) is not None or (
             isinstance(receiver, ast.Attribute) and receiver.attr == "_base"
         ):
             if method == "storage_offset" and index is None:
-                return StorageOffsetExpression(_parse_expression(receiver))
+                return StorageOffsetExpression(parse_expression(receiver))
             if method == "ndimension" and index is None:
-                return RankExpression(_parse_expression(receiver))
+                return RankExpression(parse_expression(receiver))
             if method in ("size", "stride") and index is not None:
-                operand = _parse_expression(receiver)
+                operand = parse_expression(receiver)
                 return (
                     SizeExpression(operand, index)
                     if method == "size"
