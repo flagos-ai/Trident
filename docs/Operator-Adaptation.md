@@ -131,7 +131,8 @@ immediately wrapped with `tvm_ffi.to`. Bind arguments remain CABI values.
 `BindScope` borrows its inputs; scope contexts restore insertion points on normal and exceptional exits.
 
 Use `ScopeStack` for FX traversal and other loops that accumulate a dynamic
-chain of binds: `stack.bind(result_types, inputs)` exposes payloads, and
+chain of binds: `stack.enter_scope(scope)` enters and tracks an existing Scope,
+`stack.bind(result_types, inputs)` creates a BindScope and exposes payloads, and
 `stack.yield_(values)` drains scopes in reverse order, forwards complete Results
 and restores insertion points. An empty stack forwards values unchanged. Child
 stacks leave parent scopes open. Use `BindScope` directly for a single bind.

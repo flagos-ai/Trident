@@ -19,6 +19,7 @@ from trident.importer import _make_result_types as make_result_types
 from trident.importer import _power as power
 from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
 from trident.utils.values import BINARY_ARITHMETIC, constant, native
+from typing_extensions import override
 
 from test.support.ir import new_context
 
@@ -42,6 +43,7 @@ class ImporterTest(unittest.TestCase):
                 super().__init__()
                 self.count = count
 
+            @override
             def forward(
                 self, value: list[torch.Tensor | None], bias: int = 3
             ) -> tuple[torch.Tensor, ...]:
@@ -512,6 +514,7 @@ class ImporterTest(unittest.TestCase):
 
     def test_frontend_scalar_values(self) -> None:
         class Scalars(torch.nn.Module):
+            @override
             def forward(
                 self, value: torch.Tensor
             ) -> tuple[torch.Tensor, int, bool, int]:
@@ -661,7 +664,7 @@ class ImporterTest(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "stop"),
                     ScopeStack() as stack,
                 ):
-                    scope = stack.push(BindScope(types, [pure(constant(1))]))
+                    scope = stack.enter_scope(BindScope(types, [pure(constant(1))]))
                     raise RuntimeError("stop")
                 self.assertEqual(ir.InsertionPoint.current.block, module.body)
                 self.assertEqual(len(scope.block.operations), 0)

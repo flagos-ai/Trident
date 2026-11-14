@@ -14,12 +14,9 @@ from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.utils.guards import input_path
 from trident.utils.monad import BindScope
 
-from ..expressions import (
-    Expression,
-    ExpressionContext,
-    UnsupportedExpression,
-    parse_expression,
-)
+from ..expressions.lowering import ExpressionContext
+from ..expressions.nodes import Expression, UnsupportedExpression
+from ..expressions.syntax import parse_expression
 from ..scope import Scope
 from .base import GuardCode
 
@@ -69,10 +66,12 @@ class ASTCode(GuardCode):
             return bind_scope.results
 
     @property
+    @override
     def key(self) -> Hashable:
         return ("ast", self._expression_key)
 
     @classmethod
+    @override
     def parse(
         cls,
         text: str,

@@ -15,12 +15,11 @@ from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
 
 def array_type(types: Sequence[ir.Type]) -> tvm_ffi_d.ArrayType:
-    elements = [*types]
-    element = tvm_ffi_d.AnyType.get()
-    if elements:
-        first, *remaining = elements
-        if all(type_ == first for type_ in remaining):
-            element = first
+    elements = set(types)
+    if len(elements) == 1:
+        (element,) = elements
+    else:
+        element = tvm_ffi_d.AnyType.get()
     return tvm_ffi_d.ArrayType.get(element)
 
 

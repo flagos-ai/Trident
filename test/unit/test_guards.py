@@ -24,11 +24,9 @@ from trident.guards.codes import (
     TensorRankCode,
     TypeIdCode,
 )
-from trident.guards.expressions import (
-    ExpressionContext,
-    UnsupportedExpression,
-    parse_expression,
-)
+from trident.guards.expressions.lowering import ExpressionContext
+from trident.guards.expressions.nodes import UnsupportedExpression
+from trident.guards.expressions.syntax import parse_expression
 from trident.guards.scope import Scope
 from trident.guards.tree import (
     ExecutionNode,

@@ -565,7 +565,9 @@ None payloads. Explicit `scope.yield_(results)` terminates only its own block;
 FX traversal uses a local `ScopeStack` to keep subsequent nodes inside successful
 bind bodies without recursive Python calls. Other iterative builders use a stack
 when they accumulate a dynamic chain of binds; single binds use `BindScope`
-directly. `stack.bind(result_types, inputs)` returns successful arguments, and
+directly. `stack.enter_scope(scope)` enters and tracks an existing Scope;
+`stack.bind(result_types, inputs)` creates a BindScope and returns successful
+arguments.
 `stack.yield_(values)` drains scopes from innermost outward, forwards complete
 results and immediately restores insertion points. An empty stack forwards values
 unchanged. Independent child stacks leave parent scopes open. Context exits

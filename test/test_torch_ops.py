@@ -17,6 +17,7 @@ from collections.abc import Callable
 import torch
 import torch.nn.functional as F
 import trident
+from typing_extensions import override
 
 
 # Each callable contains exactly one Torch operation. Constants and keyword
@@ -160,6 +161,7 @@ class TorchOpTest(unittest.TestCase):
     """Test methods are generated so failures identify the operator and device."""
 
     @classmethod
+    @override
     def tearDownClass(cls) -> None:
         # Matrix operations cache cuBLAS workspaces. Release them before the
         # existing tests check that no live CUDA allocations remain.

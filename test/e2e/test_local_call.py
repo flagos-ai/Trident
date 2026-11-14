@@ -17,12 +17,14 @@ from trident.core.execution_engine import ExecutionEngine
 from trident.core.passmanager import PassManager
 from trident.ffi import Exception
 from trident.guards.codes import ASTCode, GuardCode
-from trident.guards.expressions import ExpressionContext, parse_expression
+from trident.guards.expressions.lowering import ExpressionContext
+from trident.guards.expressions.syntax import parse_expression
 from trident.guards.scope import Scope
 from trident.guards.tree import Root
 from trident.utils.monad import checked_call, pure
 from trident.utils.runtime import find_runtime_libraries
 from trident.utils.values import constant
+from typing_extensions import override
 
 from test.support.cuda import assert_no_cuda_leak
 from test.support.ir import new_context
@@ -390,6 +392,7 @@ class LocalCallTest(unittest.TestCase):
         tvm_ffi.register_global_func("trident.test.guard.record", record, override=True)
 
         class RuntimeCode(GuardCode):
+            @override
             def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
                 if self.text == "failure":
                     return [

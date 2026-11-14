@@ -40,6 +40,7 @@ class DynamoAttributeAbsentCode(GuardCode):
         return constant(True)
 
     @classmethod
+    @override
     def parse(
         cls,
         text: str,
@@ -74,6 +75,7 @@ class RequiresGradCode(GuardCode):
         return constant(True)
 
     @classmethod
+    @override
     def parse(
         cls,
         text: str,
@@ -128,6 +130,7 @@ class TensorDTypeCode(GuardCode):
         )
 
     @property
+    @override
     def key(self) -> Hashable:
         return (
             "tensor-dtype",
@@ -136,6 +139,7 @@ class TensorDTypeCode(GuardCode):
         )
 
     @classmethod
+    @override
     def parse(
         cls,
         text: str,
@@ -194,6 +198,7 @@ class TensorDeviceCode(GuardCode):
         )
 
     @property
+    @override
     def key(self) -> Hashable:
         return (
             "tensor-device",
@@ -202,6 +207,7 @@ class TensorDeviceCode(GuardCode):
         )
 
     @classmethod
+    @override
     def parse(
         cls,
         text: str,
@@ -243,6 +249,7 @@ class TensorRankCode(GuardCode):
         )
 
     @property
+    @override
     def key(self) -> Hashable:
         return (
             "tensor-dim",
@@ -251,6 +258,7 @@ class TensorRankCode(GuardCode):
         )
 
     @classmethod
+    @override
     def parse(
         cls,
         text: str,

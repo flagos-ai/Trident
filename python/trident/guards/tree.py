@@ -9,6 +9,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from typing_extensions import override
+
 from trident.core import ir
 from trident.core.dialects import cf, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
@@ -42,6 +44,7 @@ class ExecutionNode(Node):
     def __init__(self, graph_symbol: str) -> None:
         self.graph_symbol: Final[str] = graph_symbol
 
+    @override
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
         entry: ir.Block = fallback_block.region.blocks.append()
         with ir.InsertionPoint(entry):
@@ -61,6 +64,7 @@ class GuardNode(Node):
         self.children: list[Node] = []
         self.code: Final[GuardCode] = code
 
+    @override
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
         blocks = fallback_block.region.blocks
         entry, matched, failed = blocks.append(), blocks.append(), blocks.append()
@@ -85,6 +89,7 @@ class SCMNode(Node):
         self.children: list[Node] = []
         self.input_types: Final[dict[str, ir.Type]] = dict(input_types)
 
+    @override
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
         entry: ir.Block = fallback_block.region.blocks.append()
         with ir.InsertionPoint(entry):

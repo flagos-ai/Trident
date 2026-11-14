@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import torch
+from typing_extensions import override
 
 from trident.core import ir
 from trident.core.dialects import scf
@@ -96,6 +97,7 @@ class BaseExpression(Expression):
     def __init__(self, operand: Expression) -> None:
         self.operand: Final[Expression] = operand
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return (self.operand,)
 
@@ -105,9 +107,11 @@ class BaseExpression(Expression):
             warning="Ignoring unobservable Tensor._base guard comparison",
         )
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         raise self._error()
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         raise self._error()
 
@@ -120,9 +124,11 @@ class BinaryExpression(Expression):
         self.rhs: Final[Expression] = rhs
         self.operation: Final[BinaryOperator] = operation
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return self.lhs, self.rhs
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         types: list[ir.Type] = [child.infer_type(context) for child in self.children()]
         assert all(
@@ -141,6 +147,7 @@ class BinaryExpression(Expression):
             return tvm_ffi_d.BoolType.get()
         return tvm_ffi_d.IntType.get()
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
             self.infer_type(context)
@@ -158,9 +165,11 @@ class BooleanExpression(Expression):
         self.operands: Final[tuple[Expression, ...]] = operands
         self.operation: Final[BooleanOperator] = operation
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return self.operands
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         assert all(
             isinstance(child.infer_type(context), tvm_ffi_d.BoolType)
@@ -168,6 +177,7 @@ class BooleanExpression(Expression):
         ), "boolean guards require Bool operands"
         return tvm_ffi_d.BoolType.get()
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
             self.infer_type(context)
@@ -210,12 +220,15 @@ class ComparisonExpression(Expression):
         self.operations: Final[tuple[ComparisonOperator, ...]] = operations
         self.text: Final[str] = text
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return self.operands
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         return tvm_ffi_d.BoolType.get()
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         block = ir.InsertionPoint.current.block
         existing: set[ir.Operation | ir.OpView] = set(block.operations)
@@ -284,9 +297,11 @@ class ConstantExpression(Expression):
     def __init__(self, value: LiteralValue) -> None:
         self.value: Final[LiteralValue] = value
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         return value_type(self.value)
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         return pure(constant(self.value))
 
@@ -295,6 +310,7 @@ class InputExpression(Expression):
     def __init__(self, path: list[int | str]) -> None:
         self.path: Final[list[int | str]] = path
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         assert context.scope is not None, "guard input requires a bound Scope"
         type_: ir.Type = context.scope.type
@@ -311,6 +327,7 @@ class InputExpression(Expression):
                 type_ = tvm_ffi_d.AnyType.get()
         return type_
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         assert context.scope is not None, "guard input requires a bound Scope"
         result, context.scope = context.scope.extract(self.path)
@@ -321,12 +338,15 @@ class LengthExpression(Expression):
     def __init__(self, operand: Expression) -> None:
         self.operand: Final[Expression] = operand
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return (self.operand,)
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         return tvm_ffi_d.IntType.get()
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
             self.infer_type(context)
@@ -343,12 +363,15 @@ class TensorMetadataExpression(Expression):
     def __init__(self, operand: Expression) -> None:
         self.operand: Final[Expression] = operand
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return (self.operand,)
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         return tvm_ffi_d.IntType.get()
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
             self.infer_type(context)
@@ -366,6 +389,7 @@ class TensorMetadataExpression(Expression):
 
 
 class RankExpression(TensorMetadataExpression):
+    @override
     def _metadata(self, tensor: ir.Value) -> ir.Value:
         return tvm_ffi_d.tensor_dim(tensor)
 
@@ -378,9 +402,11 @@ class SelectExpression(Expression):
         self.selected: Final[Expression] = selected
         self.alternative: Final[Expression] = alternative
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return self.predicate, self.selected, self.alternative
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         type_ = self.selected.infer_type(context)
         assert type_ == self.alternative.infer_type(context), (
@@ -388,6 +414,7 @@ class SelectExpression(Expression):
         )
         return type_
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
             self.infer_type(context)
@@ -417,6 +444,7 @@ class SizeExpression(TensorMetadataExpression):
         super().__init__(operand)
         self.index: Final[int] = index
 
+    @override
     def _metadata(self, tensor: ir.Value) -> ir.Value:
         return tvm_ffi_d.tensor_size(tensor, native(constant(self.index)))
 
@@ -425,15 +453,18 @@ class StorageOffsetExpression(Expression):
     def __init__(self, operand: Expression) -> None:
         self.operand: Final[Expression] = operand
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return (self.operand,)
 
     def _error(self) -> _UnobservableMetadata:
         return _UnobservableMetadata("storage_offset requires a local comparison")
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         raise self._error()
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         raise self._error()
 
@@ -443,6 +474,7 @@ class StrideExpression(TensorMetadataExpression):
         super().__init__(operand)
         self.index: Final[int] = index
 
+    @override
     def _metadata(self, tensor: ir.Value) -> ir.Value:
         return tvm_ffi_d.tensor_stride(tensor, native(constant(self.index)))
 
@@ -452,9 +484,11 @@ class UnaryExpression(Expression):
         self.operand: Final[Expression] = operand
         self.operation: Final[UnaryOperator] = operation
 
+    @override
     def children(self) -> tuple[Expression, ...]:
         return (self.operand,)
 
+    @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         if self.operation == "not":
             return tvm_ffi_d.BoolType.get()
@@ -463,6 +497,7 @@ class UnaryExpression(Expression):
             return tvm_ffi_d.IntType.get()
         return type_
 
+    @override
     def _build(self, context: ExpressionContext) -> ir.Value:
         result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
             self.infer_type(context)

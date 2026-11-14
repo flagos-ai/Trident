@@ -6,7 +6,7 @@ from __future__ import annotations
 import ast
 import re
 
-from typing_extensions import Self
+from typing_extensions import Self, override
 
 from trident.core import ir
 from trident.utils.values import constant
@@ -18,11 +18,13 @@ from .base import GuardCode
 class TypeIdCode(GuardCode):
     """A type-id template covered by the wrapper function signature."""
 
+    @override
     def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         """The ABI type tag and Torch signature cover this guard."""
         return constant(True)
 
     @classmethod
+    @override
     def parse(
         cls,
         text: str,

@@ -11,6 +11,8 @@ from contextlib import ExitStack
 from types import TracebackType
 from typing import Self, TypeVar
 
+from typing_extensions import override
+
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
@@ -64,9 +66,11 @@ class BindScope(Scope):
         return self.operation.arguments
 
     @property
+    @override
     def results(self) -> list[ir.Value]:
         return [*self.operation.outputs]
 
+    @override
     def yield_(self, values: Sequence[ir.Value]) -> None:
         with ir.InsertionPoint(self.block):
             tvm_ffi_d.monad_yield(values)
@@ -82,6 +86,7 @@ class ScopeStack(ExitStack):
         super().__init__()
         self._scopes: list[Scope] = []
 
+    @override
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -96,9 +101,10 @@ class ScopeStack(ExitStack):
     def bind(
         self, result_types: Sequence[ir.Type], inputs: Sequence[ir.Value]
     ) -> Sequence[ir.Value]:
-        return self.push(BindScope(result_types, inputs)).arguments
+        return self.enter_scope(BindScope(result_types, inputs)).arguments
 
-    def push(self, scope: _ScopeT) -> _ScopeT:
+    def enter_scope(self, scope: _ScopeT) -> _ScopeT:
+        """Enter a scope and retain it for ordered Result forwarding."""
         self.enter_context(scope)
         self._scopes.append(scope)
         return scope
