@@ -154,8 +154,7 @@ public:
             object);
         return dlpack::TensorDataOp::create(builder, loc, resultType, tensor);
       }
-      if (mlir::isa<tvm_ffi::BoolType, tvm_ffi::FloatType, tvm_ffi::IntType>(
-              input.getType())) {
+      if (mlir::isa<tvm_ffi::TVMFFINumericType>(input.getType())) {
         input = tvm_ffi::GetOp::create(builder, loc, input);
       }
       mlir::Type const inputType = input.getType();

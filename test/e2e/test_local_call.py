@@ -4,6 +4,7 @@
 """Execute local packed calls after monad and container lowering."""
 
 import ast
+import math
 import unittest
 from collections import Counter
 from typing import TypeVar
@@ -378,6 +379,51 @@ class LocalCallTest(unittest.TestCase):
                     self.assertIs(type(empty), type(empty_expected))
                     self.assertEqual(populated, populated_expected)
                     self.assertIs(type(populated), type(populated_expected))
+
+        assert_no_cuda_leak(
+            self, check, torch.device("cuda", torch.cuda.current_device())
+        )
+
+    def test_scalar_predicates(self) -> None:
+        # Runtime inputs keep IEEE truth checks observable through Guard lowering.
+        expressions = (
+            ("real_not", "not L['real']"),
+            ("real_truth", "7 if L['real'] else 9"),
+        )
+        with new_context() as context, ir.Location.unknown():
+            register_all_passes()
+            module = ir.Module.create()
+            for name, text in expressions:
+                with ir.InsertionPoint(module.body):
+                    function = tvm_ffi_d.FuncOp(
+                        name,
+                        ir.TypeAttr.get(
+                            ir.FunctionType.get(
+                                [tvm_ffi_d.FloatType.get()], [tvm_ffi_d.AnyType.get()]
+                            )
+                        ),
+                    )
+                with ir.InsertionPoint(function.add_entry_block()) as ip:
+                    [real] = ip.block.arguments
+                    scope = Scope(real, {"real": Scope(real)})
+                    expression = parse_expression(ast.parse(text, mode="eval").body)
+                    result = expression.build(ExpressionContext(text, scope, context))
+                    success, payload = tvm_ffi_d.monad_unpack(result)
+                    tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
+            self.assertTrue(module.operation.verify())
+            functions = self._compile_entries(
+                module, *(name for name, _ in expressions)
+            )
+
+        def check() -> None:
+            for real in (-0.0, 2.5, math.nan):
+                for function, (name, _), expected in zip(
+                    functions, expressions, (not real, 7 if real else 9), strict=True
+                ):
+                    with self.subTest(case=name, real=real):
+                        actual = function(real)
+                        self.assertIs(type(actual), type(expected))
+                        self.assertEqual(actual, expected)
 
         assert_no_cuda_leak(
             self, check, torch.device("cuda", torch.cuda.current_device())

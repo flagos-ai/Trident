@@ -33,11 +33,8 @@ from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
 from trident.utils.types import array_type, value_type
 from trident.utils.values import (
     BINARY_ARITHMETIC,
-    binary,
     constant,
-    logical_not,
     native,
-    negate,
 )
 
 from .guards.scope import Scope
@@ -105,15 +102,15 @@ def _power(base: ir.Value, exponent: int) -> ir.Value:
     if floating:
         # Preserve sequential floating-point multiplication and rounding.
         for _ in range(exponent):
-            result = binary(operator.mul, result, base)
+            result = tvm_ffi_d.arith_mul(result, base)
     else:
         # Squaring keeps the number of generated integer operations logarithmic.
         while exponent:
             if exponent & 1:
-                result = binary(operator.mul, result, base)
+                result = tvm_ffi_d.arith_mul(result, base)
             exponent >>= 1
             if exponent:
-                base = binary(operator.mul, base, base)
+                base = tvm_ffi_d.arith_mul(base, base)
     return result
 
 
@@ -158,7 +155,11 @@ def _scalar(node: torch.fx.Node, values: Sequence[ir.Value]) -> ir.Value:
         return _power(base, exponent)
     elif target in (operator.neg, operator.not_, torch.sym_not):
         (value,) = values
-        return negate(value) if target is operator.neg else logical_not(value)
+        return (
+            tvm_ffi_d.arith_neg(value)
+            if target is operator.neg
+            else tvm_ffi_d.arith_not(value)
+        )
     else:
         raise NotImplementedError(f"unsupported FX call: {target}")
 
@@ -426,9 +427,7 @@ class TridentFxImporter:
             return constant(float(expression))
         elif expression.func in operations:
             return reduce(
-                lambda lhs, rhs: BINARY_ARITHMETIC[operations[expression.func]](
-                    lhs, rhs
-                ),
+                BINARY_ARITHMETIC[operations[expression.func]],
                 (self.symbolic(argument) for argument in expression.args),
             )
         elif expression.func.__name__ in ("FloorDiv", "Mod", "PythonMod"):

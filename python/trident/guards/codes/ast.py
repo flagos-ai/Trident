@@ -55,15 +55,14 @@ class ASTCode(GuardCode):
     def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
         expression_context = ExpressionContext(self.text, scope, context)
         result = self.expression.build(expression_context)
-        with expression_context.diagnostics():
-            type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
-            with (
-                expression_context.local_scope(),
-                BindScope([type_], [result]) as bind_scope,
-            ):
-                [value] = bind_scope.arguments
-                bind_scope.yield_([expression_context.truth(value)])
-            return bind_scope.results
+        type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+        with (
+            expression_context.local_scope(),
+            BindScope([type_], [result]) as bind_scope,
+        ):
+            [value] = bind_scope.arguments
+            bind_scope.yield_([expression_context.truth(value)])
+        return bind_scope.results
 
     @property
     @override

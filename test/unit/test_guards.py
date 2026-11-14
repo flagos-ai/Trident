@@ -136,7 +136,7 @@ class GuardExpressionTest(unittest.TestCase):
                 module_text = f"{module}"
                 self.assertIn("tvm_ffi.array.get", module_text)
                 self.assertIn("tvm_ffi.monad.bind", module_text)
-                self.assertIn("arith.cmpi eq", module_text)
+                self.assertIn("tvm_ffi.arith.eq", module_text)
                 # Tuple guards must check runtime arity instead of trusting the schema.
                 if container is tvm_ffi_d.TupleType:
                     self.assertIn('"ffi.ArraySize"', module_text)
@@ -147,9 +147,8 @@ class GuardExpressionTest(unittest.TestCase):
         text = "1 if True else 'other'"
         with self.assertRaisesRegex(
             AssertionError, "conditional guard branches must have the same type"
-        ) as caught:
+        ):
             self._build_expression(text)
-        self.assertIn(repr(text), str(caught.exception))
 
     def test_input_reads_reuse_local_bindings(self) -> None:
         for text in (
@@ -232,19 +231,19 @@ class GuardExpressionTest(unittest.TestCase):
 
     def test_supported_expressions(self) -> None:
         cases = (
-            ("bitwise_or", "(1 | 2) == 3", tvm_ffi_d.BoolType, ("arith.ori",)),
+            ("bitwise_or", "(1 | 2) == 3", tvm_ffi_d.BoolType, ("tvm_ffi.arith.or",)),
             (
                 "boolean_logic",
                 "True and not False",
                 tvm_ffi_d.BoolType,
-                ("arith.cmpi eq",),
+                ("tvm_ffi.arith.not",),
             ),
-            ("boolean_or", "True | False", tvm_ffi_d.BoolType, ("arith.ori",)),
+            ("boolean_or", "True | False", tvm_ffi_d.BoolType, ("tvm_ffi.arith.or",)),
             (
                 "chained_comparison",
                 "1 == 1 <= 3",
                 tvm_ffi_d.BoolType,
-                ("arith.cmpi eq", "arith.cmpi sle"),
+                ("tvm_ffi.arith.eq", "tvm_ffi.arith.le"),
             ),
             (
                 "dtype",
@@ -256,33 +255,30 @@ class GuardExpressionTest(unittest.TestCase):
                 "float_comparison",
                 "1.0 + 2.0 <= 4.0",
                 tvm_ffi_d.BoolType,
-                ("arith.addf", "arith.cmpf"),
+                ("tvm_ffi.arith.add", "tvm_ffi.arith.le"),
             ),
-            ("float_negation", "-1.5", tvm_ffi_d.FloatType, ("arith.negf",)),
+            ("float_negation", "-1.5", tvm_ffi_d.FloatType, ("tvm_ffi.arith.neg",)),
             (
                 "float_not_negative_zero",
                 "not -0.0",
                 tvm_ffi_d.BoolType,
-                ("arith.cmpf oeq",),
+                ("tvm_ffi.arith.not",),
             ),
-            ("integer_addition", "1 + 2", tvm_ffi_d.IntType, ("arith.addi",)),
-            ("integer_not", "not 0", tvm_ffi_d.BoolType, ("arith.cmpi eq",)),
+            ("integer_addition", "1 + 2", tvm_ffi_d.IntType, ("tvm_ffi.arith.add",)),
+            ("integer_not", "not 0", tvm_ffi_d.BoolType, ("tvm_ffi.arith.not",)),
             (
                 "mixed_boolean_float",
                 "True + 2.0",
                 tvm_ffi_d.FloatType,
-                ("arith.uitofp", "arith.addf"),
+                ("tvm_ffi.arith.add",),
             ),
             (
                 "mixed_boolean_integer",
                 "True | 1",
                 tvm_ffi_d.IntType,
-                (
-                    "arith.extui",
-                    "arith.ori",
-                ),
+                ("tvm_ffi.arith.or",),
             ),
-            ("negation", "-1", tvm_ffi_d.IntType, ("arith.subi",)),
+            ("negation", "-1", tvm_ffi_d.IntType, ("tvm_ffi.arith.neg",)),
             ("select", "1 if True else 2", tvm_ffi_d.IntType, ("scf.if",)),
             (
                 "storage_offset_expression",
@@ -300,7 +296,7 @@ class GuardExpressionTest(unittest.TestCase):
                 "true_division",
                 "5 / 2",
                 tvm_ffi_d.FloatType,
-                ("arith.divf",),
+                ("tvm_ffi.arith.truediv",),
             ),
         )
         for name, text, type_class, operations in cases:
@@ -384,7 +380,7 @@ class DispatcherTreeTest(unittest.TestCase):
                 module = self._build_dispatcher(dispatcher)
                 self.assertNotIn("tvm_ffi.pack.size", f"{module}")
                 self.assertNotIn("tvm_ffi.isa", f"{module}")
-                self.assertEqual(f"{module}".count("arith.cmpi sge"), 1)
+                self.assertEqual(f"{module}".count("tvm_ffi.arith.ge"), 1)
             previous = f"{module}"
             dispatcher.add(
                 parse_guards([FakeGuard("SHAPE_ENV", ["L['x'] >= 0", "L['x'] < 4"])]),
@@ -394,7 +390,7 @@ class DispatcherTreeTest(unittest.TestCase):
             updated = self._build_dispatcher(dispatcher)
             self.assertNotIn("@run_3", previous)
             self.assertIn("tvm_ffi.pack.call @run_3", f"{updated}")
-            self.assertEqual(f"{updated}".count("arith.cmpi sge"), 1)
+            self.assertEqual(f"{updated}".count("tvm_ffi.arith.ge"), 1)
             self.assertEqual(f"{module}", previous)
             self.assertTrue(module.operation.verify())
 

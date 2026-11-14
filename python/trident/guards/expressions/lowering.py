@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Final
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
-from trident.utils.values import logical_not
+from trident.utils.values import constant
 
 from ..scope import Scope
 
@@ -27,13 +27,6 @@ class ExpressionContext:
         self.text: Final[str] = text
         self.scope: Scope | None = scope
         self.context: Final[ir.Context] = context
-
-    @contextmanager
-    def diagnostics(self) -> Generator[None, None, None]:
-        try:
-            yield
-        except (AssertionError, NotImplementedError) as error:
-            raise AssertionError(f"{error}; guard: {self.text!r}") from error
 
     @contextmanager
     def local_scope(self) -> Generator[None, None, None]:
@@ -68,13 +61,17 @@ class ExpressionContext:
         assert isinstance(value.type, tvm_ffi_d.ArrayType), "len requires a container"
         return pure(tvm_ffi_d.array_size(value))
 
-    def truth(self, value: ir.Value) -> ir.Value:
+    def truth(self, value: ir.Value, *, invert: bool = False) -> ir.Value:
+        """Convert a scalar or runtime container length to a Bool Result."""
         if isinstance(value.type, tvm_ffi_d.BoolType):
-            return pure(value)
-        if isinstance(
-            value.type, (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
-        ):
-            return pure(logical_not(logical_not(value)))
+            return pure(tvm_ffi_d.arith_not(value) if invert else value)
+        if isinstance(value.type, (tvm_ffi_d.FloatType, tvm_ffi_d.IntType)):
+            # Unordered not-equal preserves NaN truthiness and both zero signs.
+            return pure(
+                tvm_ffi_d.arith_not(value)
+                if invert
+                else tvm_ffi_d.arith_ne(value, constant(0))
+            )
         result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
             tvm_ffi_d.BoolType.get()
         )
@@ -83,6 +80,6 @@ class ExpressionContext:
             BindScope([result_type], [self.length(value)]) as bind_scope,
         ):
             [length] = bind_scope.arguments
-            bind_scope.yield_([pure(logical_not(logical_not(length)))])
+            bind_scope.yield_([self.truth(length, invert=invert)])
         [result] = bind_scope.results
         return result

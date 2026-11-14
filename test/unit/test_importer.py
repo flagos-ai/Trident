@@ -697,8 +697,10 @@ class ImporterTest(unittest.TestCase):
                             constant(lhs), constant(rhs)
                         )
                         self.assertIsInstance(result.type, expected)
-                with self.assertRaisesRegex(NotImplementedError, "scalar operation"):
+                with self.assertRaisesRegex(ir.MLIRError, "Operation creation failed"):
                     BINARY_ARITHMETIC[operator.and_](constant(1.0), constant(1))
+                with self.assertRaisesRegex(ir.MLIRError, "Operation creation failed"):
+                    BINARY_ARITHMETIC[operator.add](constant(None), constant(1))
                 for base, exponent, expected in (
                     (True, 0, tvm_ffi_d.IntType),
                     (1.5, 0, tvm_ffi_d.FloatType),

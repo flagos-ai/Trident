@@ -41,9 +41,12 @@ by ATen's boxed schema. Multiple ATen results are retrieved from an FFI Array.
 
 SymInt, SymFloat and SymBool values use TVM FFI Int, Float and Bool throughout
 Python construction, including constants, symbol bindings and graph-node results.
-Shared Python arithmetic builders in `utils/values.py` own type unification and emit native
-`arith` operations. They extract temporary native `i64`, `f64` and `i1` SSA values
-with `tvm_ffi.get`, widen operands and immediately wrap results with `tvm_ffi.to`.
+Python uses `tvm_ffi.arith.*` builders directly for known operations and the
+shared `BINARY_ARITHMETIC` mapping in `utils/values.py` for dynamic operator
+selection. The dialect infers and verifies result types and owns operand
+promotion. `lower-tvm-ffi-arith` extracts temporary native `i64`, `f64` and
+`i1` SSA values with `tvm_ffi.get`, widens operands, computes with `arith` and
+wraps results with `tvm_ffi.to`.
 Bool-to-Int uses zero extension, Bool-to-Float uses unsigned conversion and
 Int-to-Float uses signed conversion. Metadata builders likewise wrap
 native tensor metadata before returning it; dtype and device fields are exposed
@@ -56,8 +59,8 @@ use example hints; unbound symbols produce an explicit import error.
 `torch.cond` imports its branches into `scf.if`, extracting only its predicate
 and retaining monadic Result values.
 
-`utils/values.py` shares scalar arithmetic and constant builders with the
-guard frontend; `utils/monad.py` owns Result construction and lexical scopes.
+`utils/values.py` shares the scalar arithmetic mapping and constant builders
+with the guard frontend; `utils/monad.py` owns Result construction and lexical scopes.
 Numeric constants use `tvm_ffi.constant.bool/int/float` directly.
 Importer-local `_make_result_types` wraps CABI
 payload types and supplies the None default for empty sequences.
@@ -80,15 +83,19 @@ division uses floor semantics; integer remainder follows
 `a - floor(a / b) * b`. Supported arithmetic follows the runtime's 64-bit scalar
 ABI. Scalar add, subtract, multiply, min/max, comparisons, bitwise operations,
 shifts, true/floor division, remainder, negation, logical not and nonnegative
-constant integer powers are built in Python using native arithmetic and boxed
-results. `sum` composes scalar additions. Bool promotes to Int
+constant integer powers use semantic TVM FFI arithmetic. Python composes powers
+and reductions; individual arithmetic operations lower in C++. `sum` composes
+scalar additions. Bool promotes to Int
 for arithmetic, and either Float operand promotes numeric arithmetic/comparisons
 to Float; true division always returns Float. Bitwise Bool/Bool retains Bool;
 other bitwise operands, shifts, floor division and remainder require integral
-inputs. Comparisons return Bool. The Python `logical_not` builder accepts Bool,
-Int and Float and returns Bool with Python truth semantics: zero, including negative floating
-zero, is false; nonzero values, infinities and NaN are true. Container `not`
-extracts a length before applying the same Python builder.
+inputs. Comparisons return Bool. The `tvm_ffi.arith.not` operation accepts Bool,
+Int and Float and computes Python logical not. Its operand is falsy for zero,
+including negative floating zero, and truthy for nonzero values, infinities and
+NaN. Guard scalar `not` emits one such operation directly. Ordinary numeric
+truth conversion compares against zero with `tvm_ffi.arith.ne`, retaining unordered floating not-equal so
+NaN is truthy. Container predicates read the runtime length before applying
+the same conversion; Bool truth conversion forwards the value directly.
 Powers return Float for Float bases and Int otherwise, including exponent zero. Python builds integer powers by
 squaring; floating powers retain sequential multiplication order. Floating
 comparisons use ordered predicates except unordered not-equal; floating min/max
@@ -185,6 +192,15 @@ Type definitions and implementations are organized under TVM FFI IR `Base/`,
 implementations. Top-level files retain common ABI utilities, native Object,
 aggregate constraints and registration. `TVMFFITypeBase.td` and
 `TVMFFIOpBase.td` provide the shared TableGen hierarchy and operation base.
+Arithmetic operation definitions live in `Arith/TVMFFIOps.td`.
+
+The `IsNumeric` type trait marks Bool, Int and Float; `IsIntegral` marks
+Bool and Int, which also carry `IsNumeric`. ODS numeric constraints and C++
+classification share these traits. `TVMFFINumericType` and its derived
+`TVMFFIIntegralType` are classification views supporting `isa`/`dyn_cast`,
+not concrete type bases or additional registered types. These type traits
+classify operands; arithmetic operation traits separately select promotion
+and result inference.
 
 ## Reusable lowering entry points
 
@@ -198,7 +214,26 @@ alive through conversion; patterns and legality callbacks refer to it. After
 successful operation conversion, recursively replace nested type attributes with
 `mlir::AttrTypeReplacer`, as the standalone passes do.
 
-`populateLowerTensorMetadataPatterns` adds ordinary rewrite patterns.
+`populateLowerArithPatterns` and `populateLowerTensorMetadataPatterns`
+add ordinary rewrite patterns. Arithmetic operations compose native promotion
+traits for numeric, integral, bitwise or Float computation with an independent
+Bool-result trait for comparisons and logical not. A shared trait implementation
+provides `InferTypeOpInterface` result inference and verification, including
+operand checks during Python builder construction. ODS retains operand and
+result constraints. TableGen bases organize binary, comparison and unary families;
+integral operations explicitly select their promotion trait and operand constraint.
+Each promotion trait directly implements `getArithType()`, returning
+`FailureOr<Type>` and failing for invalid or empty operands without emitting
+diagnostics. Result inference and lowering share this method and propagate failure.
+A C++ rewrite base shares native extraction, promotion and result boxing.
+Concrete patterns select the native computation; comparisons share predicate
+selection. This follows the operation-family structure used by
+[LLVM Arith](https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td)
+and the reusable scalar conversion patterns in
+[Torch-MLIR](https://github.com/llvm/torch-mlir/blob/main/lib/Conversion/TorchToArith/TorchToArith.cpp).
+`!tvm_ffi.bool`, `!tvm_ffi.int` and `!tvm_ffi.float` are the arithmetic types;
+Any/Union must be explicitly narrowed before arithmetic. Native scalar operands
+and inconsistent declared result types are rejected.
 `populateLowerToPackConversionPatterns` and
 `populateTVMFFIToFuncConversionPatterns` add patterns and target legality.
 DLPack-to-LLVM, TVMFFI-to-GPU and TVMFFI-to-LLVM retain their existing population
@@ -438,7 +473,9 @@ Success means the launch path was taken, not asynchronous execution completed.
 The Python frontend has already emitted the guard CFG when the lowering pipeline
 starts. The pipeline performs these lowering steps:
 
-1. Run `lower-kernel-launch` to remove specialization attributes and construct
+1. Run `lower-tvm-ffi-arith` to expand semantic scalar operations before
+   canonicalization exposes native constants and predicates. Run
+   `lower-kernel-launch` to remove specialization attributes and construct
    guarded native launches with Monad success/rejection Results. Then run
    `convert-tvm-ffi-to-gpu` for stream lookup and GPU launches.
 2. Run the canonicalizer before `lower-tvm-ffi-monad`. Each bind input produced
@@ -635,13 +672,15 @@ Each emission calls `expression.build(ExpressionContext(...))`. The context in
 `lowering.py` holds local Scope versions, ordered binds, scope restoration,
 length and truth conversion. It does not dispatch on node
 types. Nodes infer the types needed to declare bind and branch results without
-caching types or SSA values. The common build entry adds the original guard text
-to construction diagnostics. ASTCode converts the completed Result to a boolean
+caching types or SSA values. Construction errors propagate directly.
+ASTCode converts the completed Result to a boolean
 through the context's predicate helper.
 
-Boolean guards use Bool operands and short circuit. Conditional expressions
-construct equally typed alternatives inside their own SCF branches. Comparisons
-evaluate intermediate operands once and stop on the first false comparison.
+Boolean guards use Bool operands and short circuit. Boolean branches consume
+the bound Bool directly without another truth-conversion bind. Conditional
+expressions construct equally typed alternatives inside their own SCF branches.
+Comparisons evaluate intermediate operands once and stop on the first false
+comparison.
 There is no heterogeneous branch join or runtime alternative-type dispatch.
 Arithmetic requires statically numeric operands. Predicate consumers handle
 numeric values and containers; untyped input truth checks retain the existing

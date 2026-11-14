@@ -10,6 +10,7 @@
 #define TRIDENT_CORE_DIALECT_TVMFFI_IR_TVMFFIOPS_TD_
 
 include "trident/core/Dialect/TVMFFI/IR/TVMFFIOpBase.td"
+include "trident/core/Dialect/TVMFFI/IR/Arith/TVMFFIOps.td"
 
 class TVMFFI_TensorIndexedMetadataOp<string mnemonic>
     : TVMFFI_Op<mnemonic, [MemoryEffects<[MemRead]>,
@@ -569,7 +570,7 @@ def TVMFFI_ToOp
         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Convert a native scalar to a TVM FFI semantic value";
   let arguments = (ins AnyTypeOf<[F64, I1, I64]> : $value);
-  let results = (outs AnyTypeOf<[TVMFFI_BoolType, TVMFFI_FloatType, TVMFFI_IntType]> : $result);
+  let results = (outs TVMFFI_NumericType : $result);
   let hasFolder = 1;
   let hasVerifier = 1;
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";

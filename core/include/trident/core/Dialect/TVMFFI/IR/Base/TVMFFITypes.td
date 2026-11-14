@@ -12,10 +12,12 @@
 
 include "trident/core/Dialect/TVMFFI/IR/TVMFFITypeBase.td"
 
+// Integral types carry both traits: Integral is a subset of Numeric.
 def TVMFFI_BoolType
     : TVMFFIStaticTypeIndex_Type<"Bool", "bool", 2,
                          [DeclareTypeInterfaceMethods<
-                             TVMFFI_NativeTypeInterface>]>;
+                             TVMFFI_NativeTypeInterface>,
+                          TVMFFI_IsIntegral, TVMFFI_IsNumeric]>;
 def TVMFFI_C_AnyType
     : TVMFFICBaseABI_Type<"CAny", "c.any", [TVMFFI_Contains]>;
 def TVMFFI_C_ArrayType
@@ -54,11 +56,13 @@ def TVMFFI_DeviceType
 def TVMFFI_FloatType
     : TVMFFIStaticTypeIndex_Type<"Float", "float", 3,
                          [DeclareTypeInterfaceMethods<
-                             TVMFFI_NativeTypeInterface>]>;
+                             TVMFFI_NativeTypeInterface>,
+                          TVMFFI_IsNumeric]>;
 def TVMFFI_IntType
     : TVMFFIStaticTypeIndex_Type<"Int", "int", 1,
                          [DeclareTypeInterfaceMethods<
-                             TVMFFI_NativeTypeInterface>], [{
+                             TVMFFI_NativeTypeInterface>,
+                          TVMFFI_IsIntegral, TVMFFI_IsNumeric], [{
     static ::mlir::Value build(::mlir::OpBuilder &builder,
                                ::mlir::Location loc, int64_t value);
     static ::mlir::Value build(::mlir::OpBuilder &builder,

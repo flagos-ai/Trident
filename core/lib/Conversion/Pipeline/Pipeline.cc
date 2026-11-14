@@ -11,6 +11,7 @@
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerArith.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerKernelLaunch.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
@@ -42,6 +43,7 @@ class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
   void runOnOperation() final {
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
+    pm.addPass(tvm_ffi::createLowerArith());
     // Materialize lexical cleanup before inlining can merge its block scopes.
     pm.addPass(tvm_ffi::createLowerKernelLaunch());
     pm.addPass(createConvertTVMFFIToGPU());

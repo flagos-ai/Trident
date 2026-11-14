@@ -23,9 +23,7 @@ from trident.utils.values import (
     BINARY_ARITHMETIC,
     constant,
     equal,
-    logical_not,
     native,
-    negate,
 )
 
 if TYPE_CHECKING:
@@ -75,11 +73,10 @@ class Expression(ABC):
     """A reusable recipe containing no emission-local types or SSA values."""
 
     def build(self, context: ExpressionContext) -> ir.Value:
-        with context.diagnostics():
-            try:
-                return self._build(context)
-            except _UnobservableMetadata as error:
-                raise UnsupportedExpression(f"{error}") from None
+        try:
+            return self._build(context)
+        except _UnobservableMetadata as error:
+            raise UnsupportedExpression(f"{error}") from None
 
     @abstractmethod
     def infer_type(self, context: ExpressionContext) -> ir.Type:
@@ -187,24 +184,18 @@ class BooleanExpression(Expression):
             return predicate._build(context)
         with context.operands([predicate], result_type) as (stack, values):
             [value] = values
-            truth = context.truth(value)
-            with context.local_scope(), BindScope([result_type], [truth]) as bind_scope:
-                [condition] = bind_scope.arguments
-                branch: scf.IfOp = scf.IfOp(
-                    native(condition), [result_type], has_else=True
-                )
-                tail = BooleanExpression(tuple(remaining), self.operation)
-                selected, other = (
-                    (branch.then_block, branch.else_block)
-                    if self.operation == "and"
-                    else (branch.else_block, branch.then_block)
-                )
-                with context.local_scope(), ir.InsertionPoint(selected):
-                    scf.yield_([tail._build(context)])
-                with ir.InsertionPoint(other):
-                    scf.yield_([pure(value)])
-                bind_scope.yield_(branch.results)
-            [result] = stack.yield_(bind_scope.results)
+            branch: scf.IfOp = scf.IfOp(native(value), [result_type], has_else=True)
+            tail = BooleanExpression(tuple(remaining), self.operation)
+            selected, other = (
+                (branch.then_block, branch.else_block)
+                if self.operation == "and"
+                else (branch.else_block, branch.then_block)
+            )
+            with context.local_scope(), ir.InsertionPoint(selected):
+                scf.yield_([tail._build(context)])
+            with ir.InsertionPoint(other):
+                scf.yield_([pure(value)])
+            [result] = stack.yield_(branch.results)
             return result
 
 
@@ -505,17 +496,10 @@ class UnaryExpression(Expression):
         with context.operands(self.children(), result_type) as (stack, values):
             [value] = values
             if self.operation == "not":
-                truth = context.truth(value)
-                with (
-                    context.local_scope(),
-                    BindScope([result_type], [truth]) as bind_scope,
-                ):
-                    [value] = bind_scope.arguments
-                    bind_scope.yield_([pure(logical_not(value))])
-                [result] = bind_scope.results
+                result = context.truth(value, invert=True)
             else:
                 if self.operation == "neg":
-                    value = negate(value)
+                    value = tvm_ffi_d.arith_neg(value)
                 result = pure(value)
             [result] = stack.yield_([result])
             return result

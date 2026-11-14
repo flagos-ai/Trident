@@ -39,6 +39,16 @@ template <typename ConcreteType>
 class HasStaticTypeIndex
     : public ::mlir::TypeTrait::TraitBase<ConcreteType, HasStaticTypeIndex> {};
 
+/// Marks Bool/Int types; integral types also carry IsNumeric.
+template <typename ConcreteType>
+class IsIntegral
+    : public ::mlir::TypeTrait::TraitBase<ConcreteType, IsIntegral> {};
+
+/// Marks Bool/Int/Float types accepted by scalar arithmetic.
+template <typename ConcreteType>
+class IsNumeric : public ::mlir::TypeTrait::TraitBase<ConcreteType, IsNumeric> {
+};
+
 template <typename ConcreteType>
 class TVMFFIABI : public ::mlir::TypeTrait::TraitBase<ConcreteType, TVMFFIABI> {
 };
@@ -94,6 +104,22 @@ public:
 class TVMFFICOpaqueABIType : public TVMFFICABIType {
 public:
   using TVMFFICABIType::TVMFFICABIType;
+
+  static bool classof(::mlir::Type type);
+};
+
+/// An IsNumeric classification view; concrete types retain their ABI base.
+class TVMFFINumericType : public TVMFFICBaseABIType {
+public:
+  using TVMFFICBaseABIType::TVMFFICBaseABIType;
+
+  static bool classof(::mlir::Type type);
+};
+
+/// An IsIntegral classification view, also representing a numeric type.
+class TVMFFIIntegralType final : public TVMFFINumericType {
+public:
+  using TVMFFINumericType::TVMFFINumericType;
 
   static bool classof(::mlir::Type type);
 };

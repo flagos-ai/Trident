@@ -7,108 +7,41 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable
-from functools import partial
 from typing import Any
 
 import torch
 import tvm_ffi as runtime
 
 from trident.core import ir
-from trident.core.dialects import arith
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
 
 _NUMERIC_SCALAR_TYPES = (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
 
 
-def _is_signless_integer(type_: ir.Type, width: int) -> bool:
-    return (
-        isinstance(type_, ir.IntegerType) and type_.is_signless and type_.width == width
-    )
-
-
-# Entries contain integer and floating-point implementations, in that order.
-_BINARY_ARITHMETIC: dict[
-    Callable[..., Any],
-    tuple[
-        Callable[[ir.Value, ir.Value], ir.Value] | None,
-        Callable[[ir.Value, ir.Value], ir.Value] | None,
-    ],
-] = {
-    max: (arith.maxsi, arith.maximumf),
-    min: (arith.minsi, arith.minimumf),
-    operator.add: (arith.addi, arith.addf),
-    operator.and_: (arith.andi, None),
-    operator.eq: (
-        partial(arith.cmpi, arith.CmpIPredicate.eq),
-        partial(arith.cmpf, arith.CmpFPredicate.OEQ),
-    ),
-    operator.floordiv: (arith.floordivsi, None),
-    operator.ge: (
-        partial(arith.cmpi, arith.CmpIPredicate.sge),
-        partial(arith.cmpf, arith.CmpFPredicate.OGE),
-    ),
-    operator.gt: (
-        partial(arith.cmpi, arith.CmpIPredicate.sgt),
-        partial(arith.cmpf, arith.CmpFPredicate.OGT),
-    ),
-    operator.le: (
-        partial(arith.cmpi, arith.CmpIPredicate.sle),
-        partial(arith.cmpf, arith.CmpFPredicate.OLE),
-    ),
-    operator.lshift: (arith.shli, None),
-    operator.lt: (
-        partial(arith.cmpi, arith.CmpIPredicate.slt),
-        partial(arith.cmpf, arith.CmpFPredicate.OLT),
-    ),
-    operator.mod: (
-        lambda lhs, rhs: arith.subi(lhs, arith.muli(arith.floordivsi(lhs, rhs), rhs)),
-        None,
-    ),
-    operator.mul: (arith.muli, arith.mulf),
-    operator.ne: (
-        partial(arith.cmpi, arith.CmpIPredicate.ne),
-        partial(arith.cmpf, arith.CmpFPredicate.UNE),
-    ),
-    operator.or_: (arith.ori, None),
-    operator.rshift: (arith.shrsi, None),
-    operator.sub: (arith.subi, arith.subf),
-    operator.truediv: (None, arith.divf),
-    operator.xor: (arith.xori, None),
-}
-
-
-def binary(operation: Any, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
-    assert all(isinstance(value.type, _NUMERIC_SCALAR_TYPES) for value in (lhs, rhs)), (
-        "scalar operands must use TVM FFI types"
-    )
-    values = (native(lhs), native(rhs))
-    integer, floating = _BINARY_ARITHMETIC[operation]
-    use_float = operation is operator.truediv or any(
-        isinstance(value.type, ir.F64Type) for value in values
-    )
-    builder = floating if use_float else integer
-    if builder is None:
-        raise NotImplementedError(f"unsupported scalar operation: {operation}")
-    keep_bool = operation in (operator.and_, operator.or_, operator.xor) and all(
-        _is_signless_integer(value.type, 1) for value in values
-    )
-    operands: list[ir.Value] = []
-    for value in values:
-        if use_float and not isinstance(value.type, ir.F64Type):
-            value = (
-                arith.uitofp(ir.F64Type.get(), value)
-                if _is_signless_integer(value.type, 1)
-                else arith.sitofp(ir.F64Type.get(), value)
-            )
-        elif not keep_bool and _is_signless_integer(value.type, 1):
-            value = arith.extui(ir.IntegerType.get_signless(64), value)
-        operands.append(value)
-    return tvm_ffi_d.to(builder(*operands))
-
-
+# Result inference and numeric promotion belong to the TVM FFI dialect.
 BINARY_ARITHMETIC: dict[
     Callable[..., Any], Callable[[ir.Value, ir.Value], ir.Value]
-] = {operation: partial(binary, operation) for operation in _BINARY_ARITHMETIC}
+] = {
+    max: tvm_ffi_d.arith_max,
+    min: tvm_ffi_d.arith_min,
+    operator.add: tvm_ffi_d.arith_add,
+    operator.and_: tvm_ffi_d.arith_and,
+    operator.eq: tvm_ffi_d.arith_eq,
+    operator.floordiv: tvm_ffi_d.arith_floordiv,
+    operator.ge: tvm_ffi_d.arith_ge,
+    operator.gt: tvm_ffi_d.arith_gt,
+    operator.le: tvm_ffi_d.arith_le,
+    operator.lshift: tvm_ffi_d.arith_lshift,
+    operator.lt: tvm_ffi_d.arith_lt,
+    operator.mod: tvm_ffi_d.arith_mod,
+    operator.mul: tvm_ffi_d.arith_mul,
+    operator.ne: tvm_ffi_d.arith_ne,
+    operator.or_: tvm_ffi_d.arith_or,
+    operator.rshift: tvm_ffi_d.arith_rshift,
+    operator.sub: tvm_ffi_d.arith_sub,
+    operator.truediv: tvm_ffi_d.arith_truediv,
+    operator.xor: tvm_ffi_d.arith_xor,
+}
 
 
 def constant(value: Any) -> ir.Value:
@@ -155,27 +88,14 @@ def equal(lhs: ir.Value, rhs: ir.Value) -> ir.Value:
     if isinstance(lhs.type, _NUMERIC_SCALAR_TYPES) and isinstance(
         rhs.type, _NUMERIC_SCALAR_TYPES
     ):
-        return binary(operator.eq, lhs, rhs)
+        return tvm_ffi_d.arith_eq(lhs, rhs)
     else:
         return tvm_ffi_d.to(tvm_ffi_d.eq(lhs, rhs))
 
 
-def logical_not(value: ir.Value) -> ir.Value:
-    """Compare against zero, preserving NaN truthiness and signed-zero behavior."""
-    return equal(value, constant(0))
-
-
 def native(value: ir.Value) -> ir.Value:
-    """Extract a temporary native scalar for arithmetic or a dialect interface."""
+    """Extract a temporary native scalar for a dialect interface."""
     assert isinstance(value.type, _NUMERIC_SCALAR_TYPES), (
         "scalar must use a TVM FFI type"
     )
     return tvm_ffi_d.get(value)
-
-
-def negate(value: ir.Value) -> ir.Value:
-    return (
-        tvm_ffi_d.to(arith.negf(native(value)))
-        if isinstance(value.type, tvm_ffi_d.FloatType)
-        else binary(operator.sub, constant(0), value)
-    )

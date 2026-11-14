@@ -48,8 +48,8 @@ class DynamicTest(unittest.TestCase):
             module, *_ = reshape._sub_modules
             text = str(module)
             self.assertIn("tvm_ffi.tensor.size", text)
-            self.assertIn("arith.floordivsi", text)
-            self.assertIn("arith.muli", text)
+            self.assertIn("tvm_ffi.arith.floordiv", text)
+            self.assertIn("tvm_ffi.arith.mul", text)
             self.assertNotIn("!torch.", text)
             self.assertEqual(len(reshape._sub_modules), 1)
 

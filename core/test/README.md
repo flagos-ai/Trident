@@ -33,6 +33,7 @@ adding a file for each type, arity or operator name.
 | --- | --- |
 | `DLPack/IR/ops`, `TVMFFI/IR/types*` | Public type spellings and representative type parameter constraints |
 | `TVMFFI/IR/ops*` | Scalar/registry operations, containers, reference types, cleanup regions and kernel syntax/verifiers |
+| `TVMFFI/IR/arith-invalid`, `Transforms/lower-arith` | Numeric operand/result contracts, Bool/Int/Float promotion and native arithmetic data flow |
 | `TVMFFI/IR/casts*` | Widening, membership, subsets, identity parsing/folding and incompatible casts |
 | `TVMFFI/IR/result*` | Local calls, variadic Results, bind/yield, unpack inference and packed return shape |
 | `Transforms/lower-monad` | Result construction/unpack, continuations, independent input/output arities, local call attributes and CFG signature conversion |

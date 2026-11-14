@@ -27,14 +27,51 @@ frontend does not functionalize the graph.
 Check membership in `torch._C._dispatch_get_all_op_names()` before emitting a
 registry call. A JIT schema alone does not establish dispatch support. Scalar
 shape arithmetic uses the shared semantic builders, including comparisons,
-floor division, remainder and boolean operations. Python builders in
-`python/trident/utils/values.py` own type unification, native extraction, conversion,
-computation and result boxing. Extend their shared operation mappings rather
-than adding C++ scalar operations or lowering patterns. Temporary native SSA
-must be wrapped back into TVM FFI values before returning to the frontend.
-Bool-to-Float conversion must be unsigned. The Python `logical_not` builder
-compares against zero using ordered floating equality, so NaN remains truthy
-and both floating zeros are falsy.
+floor division, remainder and boolean operations. The shared `BINARY_ARITHMETIC`
+mapping in `python/trident/utils/values.py` selects `tvm_ffi.arith.*` builders for
+dynamic source operators; call the dialect builder directly when the operation
+is known.
+Extend the dialect's shared TableGen operation families, result inference and
+`lower-tvm-ffi-arith` patterns when adding scalar operations; keep promotion
+and native extraction out of Python. The pass emits `tvm_ffi.get`, native `arith`
+and `tvm_ffi.to`. The operation families use these rules:
+
+| `tvm_ffi.arith.*` family | Operand and result types |
+| --- | --- |
+| `add`, `sub`, `mul`, `min`, `max`, `neg` | Bool promotes to Int; any Float operand promotes computation and result to Float |
+| `and`, `or`, `xor` | Integral operands; Bool/Bool returns Bool, otherwise Int |
+| `eq`, `ge`, `gt`, `le`, `lt`, `ne`, `not` | Numeric promotion for computation; Bool result |
+| `floordiv`, `mod`, `lshift`, `rshift` | Integral operands promoted to Int; Int result |
+| `truediv` | Numeric operands promoted to Float; Float result |
+
+Use the `IsNumeric` and `IsIntegral` type traits for numeric classification,
+with the trait-backed ODS constraints and C++ `TVMFFINumericType` /
+`TVMFFIIntegralType` views. Bool and Int carry both traits; Float carries only
+`IsNumeric`. Operation promotion traits remain independent of this classification.
+
+Any/Union operands require explicit narrowing. Native operands and inconsistent
+declared result types fail verification. Python builders infer result types
+through `InferTypeOpInterface`, so callers need no promotion or extraction code.
+Choose the numeric, integral, bitwise or Float promotion trait in ODS and compose
+`ArithBoolResult` for comparisons and logical not. The promotion traits share
+the interface's inference implementation and validate operands during builder
+construction; ODS constraints also check parsed operations.
+Bool-to-Float conversion must be unsigned. `tvm_ffi.arith.not` compares against
+zero using ordered floating equality, so NaN remains truthy and both floating
+zeros are falsy.
+Guard scalar `not` uses this operation directly. Ordinary numeric
+truth conversion uses `tvm_ffi.arith.ne` against zero, whose unordered floating
+predicate preserves NaN truthiness. Container predicates first read the runtime
+length; Bool-only short-circuit branches use their bound predicates directly.
+
+For example, `tvm_ffi.arith.add` accepts a Bool and a Float directly:
+
+```mlir
+%sum = tvm_ffi.arith.add %flag, %value : (!tvm_ffi.bool, !tvm_ffi.float) -> !tvm_ffi.float
+```
+
+Run `trident-core-opt --lower-tvm-ffi-arith` to inspect its scalar expansion.
+The standard `trident-lowering-pipeline` includes this pass before canonicalization.
 Metadata reads use `tvm_ffi.tensor.size`,
 `stride`, `dim`, `device`, `dtype` or `storage_offset`. Dtype values must be
 converted to ATen's integer enum when the schema expects it.
@@ -123,7 +160,9 @@ calls. Infer the Result type from the value except at declared Any/Union
 boundaries, where `result_type` requests widening. Importer-local `_make_result_types` accepts
 CABI types directly; native scalar payloads and container elements are rejected.
 Use `constant` for all scalar constants and the shared arithmetic and metadata
-builders for frontend computations. Every ordinary builder returns TVM FFI
+builders for frontend computations. Arithmetic builders emit semantic operations
+without testing or aligning operand types in Python; dialect inference and
+verification provide the numeric contract. Every ordinary builder returns TVM FFI
 values, and symbol/value tables store those values without native extraction.
 `native`/`tvm_ffi.get` is limited to temporary local arithmetic, metadata
 adaptation and native SCF/CF/GPU interfaces; local arithmetic results are

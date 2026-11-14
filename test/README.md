@@ -56,7 +56,7 @@ and destination can be reversed independently of view aliasing.
 | `e2e/test_specialization.py` | Device, dtype and string specialization, including string storage boundaries and Unicode |
 | `e2e/test_kernel_launch.py` | Triton execution, specialization rejection and cleanup |
 | `e2e/test_regions.py` | Packed region execution, zero/multiple iterations, replacement/identity payloads and loop allocation cleanup |
-| `e2e/test_local_call.py` | Executable packed-call success/failure, ordered dispatch, argument adaptation, terminal execution, shared read-only guard prefixes and ordered fallback, expression short-circuiting and typed conditional results, erased boundaries and tensor payload ownership |
+| `e2e/test_local_call.py` | Executable packed-call success/failure, ordered dispatch, argument adaptation, terminal execution, shared read-only guard prefixes and ordered fallback, expression short-circuiting, IEEE scalar truth checks and typed conditional results, erased boundaries and tensor payload ownership |
 
 Lit owns textual parsing/verifier diagnostics, pass-local lowering, reference
 ordering and representative cross-pass integration. Python binding construction

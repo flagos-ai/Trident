@@ -28,6 +28,12 @@ def TVMFFI_ExceptionValue : AnyTypeOf<[TVMFFI_C_ExceptionType, TVMFFI_ExceptionT
 def TVMFFI_FunctionValue : AnyTypeOf<[TVMFFI_C_FunctionType, TVMFFI_FunctionType], "TVM FFI function value"> {
   let builderCall = "::trident::tvm_ffi::FunctionType::get($_builder.getContext())";
 }
+def TVMFFI_IntegralType : Type<
+  CPred<"$_self.hasTrait<::mlir::TypeTrait::IsIntegral>()">,
+  "TVM FFI Bool or Int">;
+def TVMFFI_NumericType : Type<
+  CPred<"$_self.hasTrait<::mlir::TypeTrait::IsNumeric>()">,
+  "TVM FFI Bool, Float or Int">;
 def TVMFFI_StrValue : AnyTypeOf<[TVMFFI_C_StrType, TVMFFI_StrType], "TVM FFI str value"> {
   let builderCall = "::trident::tvm_ffi::StrType::get($_builder.getContext())";
 }
