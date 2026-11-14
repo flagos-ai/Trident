@@ -43,7 +43,11 @@ const std::string &ExceptionObj::GetKind() const & { return kind_; }
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
 
-  refl::ObjectDef<ExceptionObj>().def(refl::init<const std::string &>());
+  refl::ObjectDef<ExceptionObj>()
+      .def(refl::init<const std::string &>())
+      .def("get_kind", [](const Exception &exception) -> tvm::ffi::String {
+        return exception.GetKind();
+      });
 
   refl::GlobalDef()
       .def("trident.ffi.Exception",

@@ -9,23 +9,18 @@ import re
 from collections.abc import Hashable
 from functools import reduce
 from typing import Final
-from typing_extensions import Self, override
 
 import torch
 import tvm_ffi
+from typing_extensions import Self, override
 
 from trident.core import ir
 from trident.core.dialects import arith
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.input import InputTable
-from trident.ir import (
-    BINARY_ARITHMETIC,
-    constant,
-    equal,
-    tensor_device_fields,
-)
+from trident.utils.guards import input_path
+from trident.utils.values import BINARY_ARITHMETIC, constant, equal
 
-from ..local import Local
+from ..scope import Scope
 from .base import GuardCode
 
 
@@ -33,14 +28,14 @@ class DynamoAttributeAbsentCode(GuardCode):
     def __init__(
         self,
         text: str,
-        source: Local,
+        source: ast.Subscript,
         attribute: str,
     ) -> None:
         super().__init__(text, source)
         self.attribute: Final[str] = attribute
 
     @override
-    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
+    def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         # Private Dynamo attributes are not represented by the TVM FFI ABI.
         return constant(True)
 
@@ -48,12 +43,12 @@ class DynamoAttributeAbsentCode(GuardCode):
     def parse(
         cls,
         text: str,
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> Self | None:
         if source is None:
             return None
         match = re.fullmatch(
-            rf"\s*hasattr\(\s*{source.regex}\s*,\s*"
+            rf"\s*hasattr\(\s*{re.escape(ast.unparse(source))}\s*,\s*"
             rf"(?P<quote>['\"])(?P<attribute>_dynamo_[A-Za-z0-9_]*)"
             rf"(?P=quote)\s*\)\s*==\s*False\s*",
             text,
@@ -67,14 +62,14 @@ class RequiresGradCode(GuardCode):
     def __init__(
         self,
         text: str,
-        source: Local,
+        source: ast.Subscript,
         expected: bool,
     ) -> None:
         super().__init__(text, source)
         self.expected: Final[bool] = expected
 
     @override
-    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
+    def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         # The tensor ABI does not expose autograd state.
         return constant(True)
 
@@ -82,12 +77,12 @@ class RequiresGradCode(GuardCode):
     def parse(
         cls,
         text: str,
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> Self | None:
         if source is None:
             return None
         match = re.fullmatch(
-            rf"\s*{source.regex}\s*\.requires_grad\s*==\s*"
+            rf"\s*{re.escape(ast.unparse(source))}\s*\.requires_grad\s*==\s*"
             rf"(?P<value>True|False)\s*",
             text,
         )
@@ -98,12 +93,10 @@ class RequiresGradCode(GuardCode):
 
 
 class TensorDTypeCode(GuardCode):
-    requires_input = True
-
     def __init__(
         self,
         text: str,
-        source: Local,
+        source: ast.Subscript,
         expected: str,
         dtype: torch.dtype,
     ) -> None:
@@ -112,12 +105,13 @@ class TensorDTypeCode(GuardCode):
         self.dtype: Final[torch.dtype] = dtype
 
     @override
-    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
+    def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor = source.resolve(tree)
-        assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-        metadata = [
+        tensor, scope = scope.read(input_path(source))
+        if not isinstance(tensor.type, tvm_ffi_d.TensorType):
+            tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
+        metadata: list[ir.Value] = [
             tvm_ffi_d.to(arith.extui(ir.IntegerType.get_signless(64), field))
             for field in tvm_ffi_d.tensor_dtype(tensor)
         ]
@@ -135,18 +129,22 @@ class TensorDTypeCode(GuardCode):
 
     @property
     def key(self) -> Hashable:
-        return ("tensor-dtype", self.source, self.expected)
+        return (
+            "tensor-dtype",
+            None if self.source is None else ast.dump(self.source),
+            self.expected,
+        )
 
     @classmethod
     def parse(
         cls,
         text: str,
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> Self | None:
         if source is None:
             return None
         match = re.fullmatch(
-            rf"\s*str\(\s*{source.regex}\s*\.dtype\s*\)\s*==\s*"
+            rf"\s*str\(\s*{re.escape(ast.unparse(source))}\s*\.dtype\s*\)\s*==\s*"
             rf"(?P<quote>['\"])(?P<dtype>torch\.[A-Za-z_][A-Za-z0-9_]*)"
             rf"(?P=quote)\s*",
             text,
@@ -162,12 +160,10 @@ class TensorDTypeCode(GuardCode):
 
 
 class TensorDeviceCode(GuardCode):
-    requires_input = True
-
     def __init__(
         self,
         text: str,
-        source: Local,
+        source: ast.Subscript,
         expected: str,
         device: torch.device,
     ) -> None:
@@ -176,12 +172,16 @@ class TensorDeviceCode(GuardCode):
         self.device: Final[torch.device] = device
 
     @override
-    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
+    def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor = source.resolve(tree)
-        assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
-        device_type, device_index = tensor_device_fields(tensor)
+        tensor, scope = scope.read(input_path(source))
+        if not isinstance(tensor.type, tvm_ffi_d.TensorType):
+            tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
+        device_type, device_index = (
+            tvm_ffi_d.to(arith.extsi(ir.IntegerType.get_signless(64), field))
+            for field in tvm_ffi_d.tensor_device(tensor)
+        )
         return BINARY_ARITHMETIC[operator.and_](
             equal(
                 device_type,
@@ -195,18 +195,22 @@ class TensorDeviceCode(GuardCode):
 
     @property
     def key(self) -> Hashable:
-        return ("tensor-device", self.source, self.expected)
+        return (
+            "tensor-device",
+            None if self.source is None else ast.dump(self.source),
+            self.expected,
+        )
 
     @classmethod
     def parse(
         cls,
         text: str,
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> Self | None:
         if source is None:
             return None
         match = re.fullmatch(
-            rf"\s*str\(\s*{source.regex}\s*\.device\s*\)\s*==\s*"
+            rf"\s*str\(\s*{re.escape(ast.unparse(source))}\s*\.device\s*\)\s*==\s*"
             rf"(?P<quote>['\"])(?P<device>[^'\"]+)(?P=quote)\s*",
             text,
         )
@@ -218,41 +222,44 @@ class TensorDeviceCode(GuardCode):
 
 
 class TensorRankCode(GuardCode):
-    requires_input = True
-
     def __init__(
         self,
         text: str,
-        source: Local,
+        source: ast.Subscript,
         expected: int,
     ) -> None:
         super().__init__(text, source)
         self.expected: Final[int] = expected
 
     @override
-    def build(self, tree: InputTable, context: ir.Context) -> ir.Value:
+    def build(self, scope: Scope, context: ir.Context) -> ir.Value:
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
-        tensor = source.resolve(tree)
-        assert tensor is not None, f"guard source cannot be resolved: {self.text!r}"
+        tensor, scope = scope.read(input_path(source))
+        if not isinstance(tensor.type, tvm_ffi_d.TensorType):
+            tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
         return equal(
             tvm_ffi_d.to(tvm_ffi_d.tensor_dim(tensor)), constant(self.expected)
         )
 
     @property
     def key(self) -> Hashable:
-        return ("tensor-dim", self.source, self.expected)
+        return (
+            "tensor-dim",
+            None if self.source is None else ast.dump(self.source),
+            self.expected,
+        )
 
     @classmethod
     def parse(
         cls,
         text: str,
-        source: Local | None,
+        source: ast.Subscript | None,
     ) -> Self | None:
         if source is None:
             return None
         match = re.fullmatch(
-            rf"\s*{source.regex}\s*\.ndimension\(\s*\)\s*==\s*"
+            rf"\s*{re.escape(ast.unparse(source))}\s*\.ndimension\(\s*\)\s*==\s*"
             rf"(?P<rank>\d+)\s*",
             text,
         )

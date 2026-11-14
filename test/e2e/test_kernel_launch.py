@@ -15,13 +15,13 @@ from test.support.cuda import assert_no_cuda_leak
 
 
 @triton.jit
-def increment_kernel(value: tl.tensor, BLOCK: tl.constexpr):
+def increment_kernel(value: tl.tensor, BLOCK: tl.constexpr) -> None:
     offsets = tl.arange(0, BLOCK)
     tl.store(value + offsets, tl.load(value + offsets) + 1)
 
 
 @triton.jit
-def shift_kernel(value: tl.tensor, BLOCK: tl.constexpr, MODE: tl.constexpr):
+def shift_kernel(value: tl.tensor, BLOCK: tl.constexpr, MODE: tl.constexpr) -> None:
     offsets = tl.arange(0, BLOCK)
     delta = 1 if MODE == "increment" else -1
     tl.store(value + offsets, tl.load(value + offsets) + delta)
@@ -54,15 +54,17 @@ class KernelLaunchTest(unittest.TestCase):
                     return ir.WalkResult.ADVANCE
 
                 with compiled.ctx:
-                    compiled._sub_modules[0].operation.walk(collect)
+                    module, *_ = compiled._sub_modules
+                    module.operation.walk(collect)
                     self.assertEqual(len(launches), 1)
-                    attributes = list(launches[0].attributes["specializations"])
-                    attributes[0] = ir.Attribute.parse(
+                    [launch] = launches
+                    _, *remaining_attributes = launch.attributes["specializations"]
+                    attribute = ir.Attribute.parse(
                         "#tvm_ffi.variable_specialization<kind = !llvm.ptr, "
                         "divisibility = 9223372036854775808>"
                     )
-                    launches[0].attributes["specializations"] = ir.ArrayAttr.get(
-                        attributes
+                    launch.attributes["specializations"] = ir.ArrayAttr.get(
+                        [attribute, *remaining_attributes]
                     )
                     compiled.executor = compiled.stub_compile()
                 reject_first = False
@@ -71,13 +73,11 @@ class KernelLaunchTest(unittest.TestCase):
             for phase in ("first", "cached"):
                 with self.subTest(phase=phase):
                     value.zero_()
-                    first, second = compiled(value)
-                    torch.testing.assert_close(first, torch.ones_like(value))
-                    torch.testing.assert_close(second, first)
-                    self.assertEqual(first.data_ptr(), second.data_ptr())
-                    # Rejection must suppress the in-place effect before retry.
-                    torch.testing.assert_close(value, torch.ones_like(value))
-            self.assertEqual(len(compiled._sub_modules), 2)
+                    with self.assertRaisesRegex(RuntimeError, "GuardMatch"):
+                        compiled(value)
+                    # Rejection suppresses later effects and never recompiles.
+                    torch.testing.assert_close(value, torch.zeros_like(value))
+            self.assertEqual(len(compiled._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
@@ -97,10 +97,8 @@ class KernelLaunchTest(unittest.TestCase):
                             value, torch.full_like(value, initial + 1)
                         )
             self.assertEqual(len(increment._sub_modules), 1)
-            self.assertIn(
-                "!tvm_ffi.monad.result<!tvm_ffi.none>",
-                f"{increment._sub_modules[0]}",
-            )
+            module, *_ = increment._sub_modules
+            self.assertIn("!tvm_ffi.monad.result<!tvm_ffi.none>", f"{module}")
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

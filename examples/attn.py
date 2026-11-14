@@ -135,7 +135,7 @@ def attn_fwd(
     assert q.shape == k.shape == v.shape, "q, k, v must share shape"
     assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous()
 
-    head_dim = q.shape[-1]
+    batch, heads, n_ctx, head_dim = q.shape
     assert head_dim in {16, 32, 64, 128, 256}
 
     if sm_scale is None:
@@ -143,26 +143,26 @@ def attn_fwd(
 
     o: torch.Tensor = torch.empty_like(q)
     m: torch.Tensor = torch.empty(
-        (q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32
+        (batch, heads, n_ctx), device=q.device, dtype=torch.float32
     )
     stage: int = 3 if causal else 1
 
     _attn_fwd[
         lambda meta: (
-            triton.cdiv(q.shape[2], meta["BLOCK_M"]),
-            q.shape[0] * q.shape[1],
+            triton.cdiv(n_ctx, meta["BLOCK_M"]),
+            batch * heads,
             1,
         )
     ](
         sm_scale,
         m,
-        q.shape[0],
-        q.shape[1],
+        batch,
+        heads,
         q,
         k,
         v,
         o,
-        N_CTX=q.shape[2],
+        N_CTX=n_ctx,
         HEAD_DIM=head_dim,
         STAGE=stage,
     )
@@ -180,44 +180,11 @@ def attn_jit(
     return attn_fwd(q, k, v, causal=causal, sm_scale=sm_scale)
 
 
-def attn_torch(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    causal: bool = False,
-    sm_scale: float | None = None,
-) -> torch.Tensor:
-    n_ctx: int = q.shape[2]
-    if sm_scale is None:
-        sm_scale = 1.0 / math.sqrt(q.shape[-1])
-    mask: torch.Tensor = torch.tril(
-        torch.ones((n_ctx, n_ctx), device=q.device, dtype=torch.bool)
-    )
-    p: torch.Tensor = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-    if causal:
-        p[:, :, ~mask] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).to(q.dtype)
-    return torch.matmul(p, v)
-
-
-def attn_triton(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    causal: bool = False,
-    sm_scale: float | None = None,
-) -> torch.Tensor:
-    return attn_fwd(q, k, v, causal=causal, sm_scale=sm_scale)
-
-
 def keep(conf: triton.Config) -> bool:
     block_m: int = conf.kwargs["BLOCK_M"]
     block_n: int = conf.kwargs["BLOCK_N"]
-    return not (
-        torch.cuda.get_device_capability()[0] == 9
-        and block_m * block_n < 128 * 128
-        and conf.num_warps == 8
-    )
+    major, _ = torch.cuda.get_device_capability()
+    return not (major == 9 and block_m * block_n < 128 * 128 and conf.num_warps == 8)
 
 
 def main() -> None:
@@ -238,8 +205,18 @@ def main() -> None:
     ).normal_(mean=0.0, std=0.5)
 
     for causal in [False, True]:
-        ref_out: torch.Tensor = attn_torch(q, k, v, causal=causal, sm_scale=sm_scale)
-        tri_out: torch.Tensor = attn_triton(q, k, v, causal=causal, sm_scale=sm_scale)
+        _, _, n_ctx, head_dim = q.shape
+        if sm_scale is None:
+            sm_scale = 1.0 / math.sqrt(head_dim)
+        mask: torch.Tensor = torch.tril(
+            torch.ones((n_ctx, n_ctx), device=q.device, dtype=torch.bool)
+        )
+        p: torch.Tensor = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+        if causal:
+            p[:, :, ~mask] = float("-inf")
+        p = torch.softmax(p.float(), dim=-1).to(q.dtype)
+        ref_out: torch.Tensor = torch.matmul(p, v)
+        tri_out: torch.Tensor = attn_fwd(q, k, v, causal=causal, sm_scale=sm_scale)
         jit_out: torch.Tensor = attn_jit(
             q=q, k=k, v=v, causal=causal, sm_scale=sm_scale
         )

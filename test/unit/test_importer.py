@@ -1,30 +1,24 @@
 # Part of the Trident project, under the MIT License.
 # SPDX-License-Identifier: MIT
 
-"""Python frontend construction, diagnostics and uncached input extraction."""
+"""Python frontend construction, diagnostics and domain-local input extraction."""
 
 import operator
 import unittest
+from typing import cast
 
 import sympy
 import torch
 from trident.core import ir
 from trident.core.dialects import func, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.guards.scope import Scope
 from trident.importer import TridentFxImporter
-from trident.input import InputNodeBuilder, InputTableBuilder
-from trident.ir import (
-    BINARY_ARITHMETIC,
-    BindScope,
-    ScopeStack,
-    checked_call,
-    constant,
-    container_get,
-    make_result_types,
-    native,
-    power,
-    pure,
-)
+from trident.importer import _container_get as container_get
+from trident.importer import _make_result_types as make_result_types
+from trident.importer import _power as power
+from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
+from trident.utils.values import BINARY_ARITHMETIC, constant, native
 
 from test.support.ir import new_context
 
@@ -48,16 +42,35 @@ class ImporterTest(unittest.TestCase):
                 super().__init__()
                 self.count = count
 
-            def forward(self, value: torch.Tensor):
-                return tuple(value + index for index in range(self.count))
+            def forward(
+                self, value: list[torch.Tensor | None], bias: int = 3
+            ) -> tuple[torch.Tensor, ...]:
+                return tuple(
+                    cast(torch.Tensor, value[0]) + index for index in range(self.count)
+                )
 
         for count in (0, 1, 2):
             with self.subTest(outputs=count), new_context() as context:
-                program = torch.export.export(Outputs(count), (torch.ones(2),))
+                program = torch.export.export(Outputs(count), ([torch.ones(2), None],))
+                input_types = {
+                    "value": tvm_ffi_d.ArrayType.get(tvm_ffi_d.AnyType.get()),
+                    "bias": tvm_ffi_d.IntType.get(),
+                }
                 importer = TridentFxImporter(context=context, specialization_id=0)
-                function = importer.import_program(program, func_name="graph")
+                function = importer.import_program(
+                    program,
+                    func_name="graph",
+                    input_types=input_types,
+                    input_paths={
+                        program.graph_signature.input_specs[0].arg.name: ["value", 0]
+                    },
+                )
                 self.assertIsInstance(function, tvm_ffi_d.FuncOp)
                 self.assertEqual(function.sym_visibility.value, "private")
+                self.assertEqual(
+                    list(function.function_type.value.inputs),
+                    list(input_types.values()),
+                )
                 self.assertEqual(
                     list(function.function_type.value.results),
                     [tvm_ffi_d.AnyType.get()],
@@ -208,29 +221,36 @@ class ImporterTest(unittest.TestCase):
             tensor = tvm_ffi_d.TensorType.get()
             array = tvm_ffi_d.ArrayType.get(tensor)
             unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
-            builder = InputTableBuilder(
-                [("values", InputNodeBuilder(array, [InputNodeBuilder(tensor)]))],
-                ["values"],
-            )
             with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([array], []))
+                function = func.FuncOp("test", ([array, tensor], []))
                 block = function.add_entry_block()
             with ir.InsertionPoint(block):
-                table = builder.build(block.arguments)
-                first = table.extract(("values", 0))
-                second = table.extract(("values", 0))
-                self.assertNotEqual(first[0], second[0])
-                with BindScope([unit], first) as scope:
-                    extracted = table.extract(("values", 0))
-                    with BindScope([unit], extracted) as nested:
-                        nested.yield_([pure(constant(None))])
-                        nested_results = nested.results
+                values, tensor_value = block.arguments
+                scope = Scope(
+                    values, {"values": Scope(values, {1: Scope(tensor_value)})}
+                )
+                first_result, local_scope = scope.extract(["values", 0])
+                second_result, reused_scope = local_scope.extract(["values", 0])
+                self.assertNotEqual(first_result, second_result)
+                self.assertIs(reused_scope, local_scope)
+                self.assertIsNone(scope["values"].get(0))
+                self.assertIs(local_scope["values"][1], scope["values"][1])
+                with BindScope([unit], [pure(constant(None))]) as bind_scope:
+                    value, local_scope = scope.read(["values", 0])
+                    self.assertIsNone(scope["values"].get(0))
+                    self.assertIs(local_scope["values"][1], scope["values"][1])
+                    with BindScope([unit], [pure(constant(None))]) as nested_bind_scope:
+                        inherited, _ = local_scope.read(["values", 0])
+                        self.assertEqual(inherited, value)
+                        inner_value, _ = scope.read(["values", 0])
+                        self.assertNotEqual(inner_value, value)
+                        nested_bind_scope.yield_([pure(constant(None))])
+                        nested_results = nested_bind_scope.results
+                    bind_scope.yield_(nested_results)
 
-                    scope.yield_(nested_results)
-
-                extracted = table.extract(("values", 0))
-                with BindScope([unit], extracted) as scope:
-                    scope.yield_([pure(constant(None))])
+                extracted_result, _ = scope.extract(["values", 0])
+                with BindScope([unit], [extracted_result]) as bind_scope:
+                    bind_scope.yield_([pure(constant(None))])
 
                 func.return_([])
 
@@ -242,27 +262,31 @@ class ImporterTest(unittest.TestCase):
             module = ir.Module.create()
             tensor = tvm_ffi_d.TensorType.get()
             array = tvm_ffi_d.ArrayType.get(tensor)
+            nested_array = tvm_ffi_d.ArrayType.get(array)
             unit = tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
-            builder = InputTableBuilder(
-                [("values", InputNodeBuilder(array, [InputNodeBuilder(tensor)]))],
-                ["values"],
-            )
             with ir.InsertionPoint(module.body):
-                function = func.FuncOp("test", ([array], []))
+                function = func.FuncOp("test", ([nested_array], []))
                 block = function.add_entry_block()
             with ir.InsertionPoint(block):
-                table = builder.build(block.arguments)
+                [values] = block.arguments
+                scope = Scope(values, {"values": Scope(values)})
                 predicate = constant(True)
                 branch = scf.IfOp(native(predicate), [], has_else=True)
                 for child in (branch.then_block, branch.else_block):
                     with ir.InsertionPoint(child):
-                        values = table.extract(("values", 0))
-                        with BindScope([unit], values) as scope:
-                            scope.yield_([pure(constant(None))])
+                        with BindScope([unit], [pure(constant(None))]) as bind_scope:
+                            value, local_scope = scope.read(["values", 0, 0])
+                            reused, reused_scope = local_scope.read(["values", 0, 0])
+                            self.assertEqual(reused, value)
+                            self.assertIs(reused_scope, local_scope)
+                            other, local_scope = local_scope.read(["values", 0, 1])
+                            self.assertNotEqual(other, value)
+                            self.assertIsNone(scope["values"].get(0))
+                            bind_scope.yield_([pure(constant(None))])
                         scf.yield_([])
                 func.return_([])
 
-            self.assertEqual(self._extraction_count(module), 2)
+            self.assertEqual(self._extraction_count(module), 6)
             self.assertTrue(module.operation.verify())
 
     def test_container_array_operations(self) -> None:
@@ -401,8 +425,9 @@ class ImporterTest(unittest.TestCase):
                         with BindScope([none_result], results) as bound:
                             bound_arguments = bound.arguments
                             self.assertEqual(len(bound_arguments), count)
+                            *_, last_argument = bound_arguments
                             self.assertIsInstance(
-                                bound_arguments[-1].type, tvm_ffi_d.NoneType
+                                last_argument.type, tvm_ffi_d.NoneType
                             )
                             bound.yield_(
                                 [pure(constant(None), result_type=none_result)]
@@ -471,7 +496,8 @@ class ImporterTest(unittest.TestCase):
             with ir.InsertionPoint(importer.module.body):
                 function = func.FuncOp("semantic", ([tensor, string], []))
                 with ir.InsertionPoint(function.add_entry_block()):
-                    checked_call("test.identity", [function.arguments[0]], tensor)
+                    tensor_value, _ = function.arguments
+                    checked_call("test.identity", [tensor_value], tensor)
                     pure(tvm_ffi_d.exception("GuardMatch"))
                     importer.build_arguments(
                         [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
@@ -486,8 +512,10 @@ class ImporterTest(unittest.TestCase):
 
     def test_frontend_scalar_values(self) -> None:
         class Scalars(torch.nn.Module):
-            def forward(self, value: torch.Tensor):
-                size = value.shape[0]
+            def forward(
+                self, value: torch.Tensor
+            ) -> tuple[torch.Tensor, int, bool, int]:
+                size, *_ = value.shape
                 return value, (size + 1) ** 2, size > 3, value.stride(0)
 
         with new_context() as context:
@@ -497,7 +525,14 @@ class ImporterTest(unittest.TestCase):
                 dynamic_shapes={"value": {0: torch.export.Dim("size", min=2)}},
             )
             importer = TridentFxImporter(context=context, specialization_id=0)
-            importer.import_program(program, func_name="scalars")
+            importer.import_program(
+                program,
+                func_name="scalars",
+                input_types={"value": tvm_ffi_d.TensorType.get()},
+                input_paths={
+                    program.graph_signature.input_specs[0].arg.name: ["value"]
+                },
+            )
             self.assertTrue(importer.module.operation.verify())
             scalar_types = (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
             self.assertTrue(importer.symbols)
@@ -552,7 +587,8 @@ class ImporterTest(unittest.TestCase):
                 for target in (boxed, tvm_ffi_d.AnyType.get(), union):
                     with self.subTest(target=target):
                         result_types = make_result_types([target])
-                        result = pure(value, result_type=result_types[0])
+                        [result_type] = result_types
+                        result = pure(value, result_type=result_type)
                         operation = result.owner.opview
                         self.assertEqual(operation.value.type, target)
                         widened = operation.value
@@ -606,17 +642,13 @@ class ImporterTest(unittest.TestCase):
                                 self.assertEqual(ir.InsertionPoint.current.block, child)
                                 # Draining an empty stack forwards without another terminator.
                                 self.assertEqual(inner.yield_(results), results)
+                            *_, operation = child.operations
                             self.assertEqual(
-                                list(child.operations)[-1].operation.name,
-                                "tvm_ffi.monad.bind",
+                                operation.operation.name, "tvm_ffi.monad.bind"
                             )
                             scf.yield_(results)
-                    self.assertEqual(
-                        list(ir.InsertionPoint.current.block.operations)[
-                            -1
-                        ].operation.name,
-                        "scf.if",
-                    )
+                    *_, operation = ir.InsertionPoint.current.block.operations
+                    self.assertEqual(operation.operation.name, "scf.if")
                     results = outer.yield_(conditional.results)
                     self.assertEqual(ir.InsertionPoint.current.block, block)
                 func.return_(results)

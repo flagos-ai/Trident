@@ -58,7 +58,8 @@ class FactoryTest(unittest.TestCase):
                         self.assertNotEqual(result.data_ptr(), 0)
                         self.assertNotEqual(result.data_ptr(), x.data_ptr())
                         results.append(result)
-                self.assertNotEqual(results[0].data_ptr(), results[1].data_ptr())
+                first, repeated = results
+                self.assertNotEqual(first.data_ptr(), repeated.data_ptr())
                 self.assertEqual(len(compiled._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())

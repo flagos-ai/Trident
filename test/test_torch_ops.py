@@ -19,78 +19,6 @@ import torch.nn.functional as F
 import trident
 
 
-def make_inputs(kind: str, device: str, dtype: torch.dtype, seed: int) -> tuple:
-    generator = torch.Generator().manual_seed(seed)
-
-    def rand(*shape: int) -> torch.Tensor:
-        return torch.randn(shape, generator=generator).to(device=device, dtype=dtype)
-
-    def indices(values: list) -> torch.Tensor:
-        return torch.tensor(values, device=device, dtype=torch.int64)
-
-    match kind:
-        case "unary":
-            return (rand(3, 4),)
-        case "positive":
-            return (rand(3, 4).abs() + 0.5,)
-        case "binary":
-            return rand(3, 4), rand(3, 4)
-        case "broadcast":
-            return rand(3, 4), rand(4)
-        case "comparison":
-            x, y = rand(3, 4), rand(4)
-            # Include equal, less-than and greater-than values in every case.
-            x[0] = y
-            x[1] = y - 1
-            x[2] = y + 1
-            return x, y
-        case "divisor":
-            return rand(3, 4), rand(4).abs() + 0.5
-        case "boolean":
-            return rand(3, 4) > 0, rand(3, 4) > 0
-        case "boolean_unary":
-            x = rand(3, 4) > 0
-            x[0] = False
-            x[1] = True
-            return (x,)
-        case "where":
-            return rand(3, 4) > 0, rand(3, 4), rand(4)
-        case "noncontiguous":
-            return (rand(4, 3).transpose(0, 1),)
-        case "singleton":
-            return (rand(1, 3, 1, 4),)
-        case "expand":
-            return (rand(3, 1),)
-        case "matrix":
-            return rand(3, 5), rand(5, 4)
-        case "batched_matrix":
-            return rand(2, 3, 5), rand(2, 5, 4)
-        case "addmm":
-            return rand(3, 4), rand(3, 5), rand(5, 4)
-        case "vector":
-            return rand(5), rand(5)
-        case "index_select":
-            return rand(3, 4), indices([3, 1, 1, 0])
-        case "gather":
-            return rand(3, 4), indices([[3, 0], [1, 1], [0, 2]])
-        case "scatter":
-            return rand(3, 4), indices([[3, 0], [1, 2], [0, 2]]), rand(3, 2)
-        case "embedding":
-            return indices([[0, 3, 1], [4, 1, 0]]), rand(5, 4)
-        case "linear":
-            return rand(2, 5), rand(4, 5), rand(4)
-        case "conv1d":
-            return rand(2, 3, 8), rand(4, 3, 3), rand(4)
-        case "conv2d":
-            return rand(2, 3, 6, 6), rand(4, 3, 3, 3), rand(4)
-        case "image":
-            return (rand(2, 3, 6, 6),)
-        case "layer_norm":
-            return rand(2, 3, 4), rand(4), rand(4)
-        case _:
-            raise ValueError(f"Unknown input fixture: {kind}")
-
-
 # Each callable contains exactly one Torch operation. Constants and keyword
 # arguments exercise common overloads without introducing a multi-op model.
 # (name, callable, input fixture)
@@ -215,8 +143,16 @@ CASES = (
     ("full_like", lambda x: torch.full_like(x, 2.5), "unary"),
     ("zeros", lambda x: torch.zeros((3, 4), device=x.device, dtype=x.dtype), "unary"),
     ("ones", lambda x: torch.ones((3, 4), device=x.device, dtype=x.dtype), "unary"),
-    ("full", lambda x: torch.full((3, 4), -1.5, device=x.device, dtype=x.dtype), "unary"),
-    ("arange", lambda x: torch.arange(0, 8, 2, device=x.device, dtype=x.dtype), "unary"),
+    (
+        "full",
+        lambda x: torch.full((3, 4), -1.5, device=x.device, dtype=x.dtype),
+        "unary",
+    ),
+    (
+        "arange",
+        lambda x: torch.arange(0, 8, 2, device=x.device, dtype=x.dtype),
+        "unary",
+    ),
 )
 
 
@@ -247,22 +183,104 @@ def make_test(
         compiled = trident.jit(operation, dynamic=False)
         for seed in (17, 29):
             with self.subTest(seed=seed):
-                args = make_inputs(kind, device, dtype, seed)
+                generator = torch.Generator().manual_seed(seed)
+
+                def rand(*shape: int) -> torch.Tensor:
+                    return torch.randn(shape, generator=generator).to(
+                        device=device, dtype=dtype
+                    )
+
+                def indices(values: list) -> torch.Tensor:
+                    return torch.tensor(values, device=device, dtype=torch.int64)
+
+                match kind:
+                    case "unary":
+                        args = (rand(3, 4),)
+                    case "positive":
+                        args = (rand(3, 4).abs() + 0.5,)
+                    case "binary":
+                        args = rand(3, 4), rand(3, 4)
+                    case "broadcast":
+                        args = rand(3, 4), rand(4)
+                    case "comparison":
+                        x, y = rand(3, 4), rand(4)
+                        # Include equal, less-than and greater-than values in every case.
+                        x[0] = y
+                        x[1] = y - 1
+                        x[2] = y + 1
+                        args = x, y
+                    case "divisor":
+                        args = rand(3, 4), rand(4).abs() + 0.5
+                    case "boolean":
+                        args = rand(3, 4) > 0, rand(3, 4) > 0
+                    case "boolean_unary":
+                        x = rand(3, 4) > 0
+                        x[0] = False
+                        x[1] = True
+                        args = (x,)
+                    case "where":
+                        args = rand(3, 4) > 0, rand(3, 4), rand(4)
+                    case "noncontiguous":
+                        args = (rand(4, 3).transpose(0, 1),)
+                    case "singleton":
+                        args = (rand(1, 3, 1, 4),)
+                    case "expand":
+                        args = (rand(3, 1),)
+                    case "matrix":
+                        args = rand(3, 5), rand(5, 4)
+                    case "batched_matrix":
+                        args = rand(2, 3, 5), rand(2, 5, 4)
+                    case "addmm":
+                        args = rand(3, 4), rand(3, 5), rand(5, 4)
+                    case "vector":
+                        args = rand(5), rand(5)
+                    case "index_select":
+                        args = rand(3, 4), indices([3, 1, 1, 0])
+                    case "gather":
+                        args = rand(3, 4), indices([[3, 0], [1, 1], [0, 2]])
+                    case "scatter":
+                        args = rand(3, 4), indices([[3, 0], [1, 2], [0, 2]]), rand(3, 2)
+                    case "embedding":
+                        args = indices([[0, 3, 1], [4, 1, 0]]), rand(5, 4)
+                    case "linear":
+                        args = rand(2, 5), rand(4, 5), rand(4)
+                    case "conv1d":
+                        args = rand(2, 3, 8), rand(4, 3, 3), rand(4)
+                    case "conv2d":
+                        args = rand(2, 3, 6, 6), rand(4, 3, 3, 3), rand(4)
+                    case "image":
+                        args = (rand(2, 3, 6, 6),)
+                    case "layer_norm":
+                        args = rand(2, 3, 4), rand(4), rand(4)
+                    case _:
+                        raise ValueError(f"Unknown input fixture: {kind}")
                 expected = operation(*args)
                 actual = compiled(*args)
                 torch.testing.assert_close(actual, expected)
 
     test.__doc__ = f"{name} matches eager PyTorch on {device} ({dtype})."
     if device == "cuda":
-        test = unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")(test)
+        test = unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")(
+            test
+        )
     return test
 
 
 # A small low-precision matrix for commonly used GPU operations, in addition
 # to the complete CPU/CUDA float32 suite above.
 LOW_PRECISION_OPS = {
-    "add", "mul", "div", "relu", "gelu", "silu", "softmax", "layer_norm",
-    "mm", "bmm", "linear", "conv2d",
+    "add",
+    "mul",
+    "div",
+    "relu",
+    "gelu",
+    "silu",
+    "softmax",
+    "layer_norm",
+    "mm",
+    "bmm",
+    "linear",
+    "conv2d",
 }
 
 for _name, _operation, _kind in CASES:

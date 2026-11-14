@@ -23,6 +23,31 @@ func.func @execute_capture(%input: !tvm_ffi.tensor) {
   return
 }
 
+// A region export retains before the producer's dominance scope is cleaned.
+// CHECK-LABEL: func.func @execute_cfg(
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = scf.execute_region -> !tvm_ffi.c.tensor
+// CHECK: %[[CLONE:[a-zA-Z0-9_]+]] = tvm_ffi.tensor.clone
+// CHECK: cf.cond_br
+// CHECK: tvm_ffi.ObjectIncRef %[[BORROWED:[a-zA-Z0-9_]+]]
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[CLONE]]
+// CHECK-NEXT: scf.yield %[[BORROWED]]
+// CHECK: tvm_ffi.ObjectIncRef %[[CLONE]]
+// CHECK-NEXT: tvm_ffi.ObjectDecRef %[[CLONE]]
+// CHECK-NEXT: scf.yield %[[CLONE]]
+// CHECK: tvm_ffi.ObjectDecRef %[[RESULT]]
+// LLVM-LABEL: llvm.func @execute_cfg(
+func.func @execute_cfg(%condition: i1, %input: !tvm_ffi.tensor) {
+  %result = scf.execute_region -> !tvm_ffi.tensor {
+    %clone = tvm_ffi.tensor.clone %input : !tvm_ffi.tensor -> !tvm_ffi.tensor
+    cf.cond_br %condition, ^left(%clone : !tvm_ffi.tensor), ^right
+  ^left(%borrowed: !tvm_ffi.tensor):
+    scf.yield %borrowed : !tvm_ffi.tensor
+  ^right:
+    scf.yield %clone : !tvm_ffi.tensor
+  }
+  return
+}
+
 // A converted loop entry argument flows through independently converted nested
 // branch yields and the loop yield. Each boundary retains before local cleanup.
 // CHECK-LABEL: func.func @for_nested_if(

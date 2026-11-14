@@ -10,7 +10,7 @@ ATen call order, tensor aliases, and mutations are preserved.
 from __future__ import annotations
 
 import operator
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import cached_property, reduce
 from typing import Any, TypeAlias, cast
 
@@ -28,24 +28,19 @@ from torch.utils import _pytree as pytree
 from trident.core import ir
 from trident.core.dialects import arith, cf, gpu, scf
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-
-from .ir import (
+from trident.utils.containers import container_read
+from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
+from trident.utils.types import array_type, value_type
+from trident.utils.values import (
     BINARY_ARITHMETIC,
-    BindScope,
-    ScopeStack,
-    array_type,
-    checked_call,
+    binary,
     constant,
-    container_create,
-    container_get,
     logical_not,
-    make_result_types,
     native,
     negate,
-    power,
-    pure,
-    value_type,
 )
+
+from .guards.scope import Scope
 
 ImportedValue: TypeAlias = (
     ir.Value
@@ -57,30 +52,125 @@ ImportedValue: TypeAlias = (
 )
 
 
+def _constant_value_attribute(value: Any, name: str) -> ir.Attribute:
+    if isinstance(value, tuple):
+        return ir.ArrayAttr.get(
+            [
+                _constant_value_attribute(element, f"{name}[{index}]")
+                for index, element in enumerate(value)
+            ]
+        )
+    elif isinstance(value, bool):
+        return ir.BoolAttr.get(value)
+    elif isinstance(value, int):
+        assert -(1 << 63) <= value < (1 << 63), (
+            f"constexpr specialization {name!r} does not fit in i64: {value}"
+        )
+        return ir.IntegerAttr.get(ir.IntegerType.get_signless(64), value)
+    elif isinstance(value, float):
+        return ir.FloatAttr.get_f64(value)
+    elif isinstance(value, str):
+        return ir.StringAttr.get(value)
+    else:
+        raise NotImplementedError(
+            f"unsupported constexpr specialization {name!r}: {value!r}"
+        )
+
+
+def _container_get(
+    container: ir.Value, index: int | ir.Value, target: ir.Type
+) -> list[ir.Value]:
+    if isinstance(container.type, (tvm_ffi_d.TupleType, tvm_ffi_d.ArrayType)):
+        return [pure(container_read(container, index, target))]
+    else:
+        return checked_call(
+            "ffi.ArrayGetItem",
+            [container, constant(index) if isinstance(index, int) else index],
+            target,
+        )
+
+
+def _make_result_types(payload_types: Iterable[ir.Type]) -> list[ir.Type]:
+    """Wrap TVM FFI payload types, using None for an empty sequence."""
+    return [tvm_ffi_d.ResultType.get(type_) for type_ in payload_types] or [
+        tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get())
+    ]
+
+
+def _power(base: ir.Value, exponent: int) -> ir.Value:
+    """Build a nonnegative constant power using the runtime's scalar widths."""
+    assert isinstance(exponent, int) and exponent >= 0
+    floating = isinstance(base.type, tvm_ffi_d.FloatType)
+    result = constant(1.0 if floating else 1)
+    if floating:
+        # Preserve sequential floating-point multiplication and rounding.
+        for _ in range(exponent):
+            result = binary(operator.mul, result, base)
+    else:
+        # Squaring keeps the number of generated integer operations logarithmic.
+        while exponent:
+            if exponent & 1:
+                result = binary(operator.mul, result, base)
+            exponent >>= 1
+            if exponent:
+                base = binary(operator.mul, base, base)
+    return result
+
+
+def _resolve_triton_binder_value(
+    name: str,
+    value: Any,
+) -> Any:
+    if isinstance(value, torch.fx.Node):
+        assert "val" in value.meta, (
+            f"Triton binder argument {name} node {value.name} "
+            "does not contain metadata value"
+        )
+        return (
+            triton.MockTensor(dtype=metadata_value.dtype)
+            if isinstance(metadata_value := value.meta["val"], torch.Tensor)
+            else _resolve_triton_binder_value(name, metadata_value)
+        )
+    elif isinstance(value, (torch.SymInt, torch.SymFloat, torch.SymBool)):
+        return _resolve_triton_binder_value(name, value.node.hint)
+    elif isinstance(value, tuple):
+        items = tuple(_resolve_triton_binder_value(name, item) for item in value)
+        return type(value)(*items) if hasattr(value, "_fields") else items
+    elif isinstance(value, list):
+        return [_resolve_triton_binder_value(name, item) for item in value]
+    elif isinstance(value, dict):
+        return {
+            key: _resolve_triton_binder_value(name, item) for key, item in value.items()
+        }
+    else:
+        return value
+
+
+def _scalar(node: torch.fx.Node, values: Sequence[ir.Value]) -> ir.Value:
+    target = {torch.sym_max: max, torch.sym_min: min}.get(node.target, node.target)
+    if target in BINARY_ARITHMETIC:
+        return BINARY_ARITHMETIC[target](*values)
+    elif target is torch.sym_sum:
+        return reduce(BINARY_ARITHMETIC[operator.add], values, constant(0))
+    elif target is operator.pow:
+        [base] = values
+        _, exponent = node.args
+        return _power(base, exponent)
+    elif target in (operator.neg, operator.not_, torch.sym_not):
+        (value,) = values
+        return negate(value) if target is operator.neg else logical_not(value)
+    else:
+        raise NotImplementedError(f"unsupported FX call: {target}")
+
+
 class TridentFxImporter:
     def __init__(self, *, context: ir.Context, specialization_id: int) -> None:
-        self.context = context
-        self.specialization_id = specialization_id
+        self.context: ir.Context = context
+        self.specialization_id: int = specialization_id
         with context, ir.Location.unknown(context):
-            self.module = ir.Module.create()
+            self.module: ir.Module = ir.Module.create()
         self.values: dict[torch.fx.Node, ImportedValue] = {}
-        self.symbols: dict[Any, ir.Value] = {}
-
-    def _aten_argument(
-        self, node: torch.fx.Node, index: int, parameter: torch.Argument
-    ) -> Any:
-        if index < len(node.args):
-            argument = node.args[index]
-        elif parameter.name in node.kwargs:
-            argument = node.kwargs[parameter.name]
-        elif parameter.has_default_value():
-            argument = parameter.default_value
-        else:
-            raise ValueError(f"missing argument {parameter.name} for {node.target}")
-        if isinstance(argument, (torch.layout, torch.memory_format)):
-            return self._convert_torch_enum(argument)
-        else:
-            return argument
+        self.symbols: dict[sympy.Basic, ir.Value] = {}
 
     def _bind(self, node: torch.fx.Node, value: ImportedValue) -> None:
         self.values[node] = value
@@ -102,531 +192,9 @@ class TridentFxImporter:
                         tvm_ffi_d.tensor_size(value, native(constant(index)))
                     )
 
-    def _build_aten(self, node: torch.fx.Node) -> ImportedValue:
-        name = node.target._schema.name.removeprefix("aten::")
-        if name in {
-            "_assert_scalar",
-            "dim",
-            "sym_numel",
-            "sym_size",
-            "sym_storage_offset",
-            "sym_stride",
-        }:
-            return self._build_aten_special(node, name)
-        return self._build_aten_call(node)
-
-    def _build_aten_call(self, node: torch.fx.Node) -> ImportedValue:
-        target = node.target
-        assert isinstance(target, torch._ops.OpOverload)
-        schema = target._schema
-        scalar_arguments = [
-            index
-            for index, argument in enumerate(node.args)
-            if index < len(schema.arguments)
-            and schema.arguments[index].type.kind() == "TensorType"
-            and isinstance(
-                argument.meta.get("val")
-                if isinstance(argument, torch.fx.Node)
-                else argument,
-                (bool, int, float, torch.SymInt, torch.SymFloat, torch.SymBool),
-            )
-        ]
-        if scalar_arguments and "Scalar" in target.overloadpacket.overloads():
-            candidate = target.overloadpacket.Scalar._schema
-            if all(
-                index < len(candidate.arguments)
-                and candidate.arguments[index].name == schema.arguments[index].name
-                and candidate.arguments[index].type.kind()
-                in ("NumberType", "IntType", "FloatType", "BoolType")
-                for index in scalar_arguments
-            ):
-                schema = candidate
-        arguments = [
-            self._aten_argument(node, index, parameter)
-            for index, parameter in enumerate(schema.arguments)
-        ]
-        metadata = node.meta.get("val")
-        payload_types = [
-            value_type(value)
-            for value in ((metadata,) if len(schema.returns) == 1 else metadata or ())
-        ]
-        result_types = make_result_types(payload_types)
-        with BindScope(result_types, self.build_arguments(arguments)) as scope:
-            payloads = scope.arguments
-            name = schema.name.removeprefix("aten::")
-            registry_name = f"trident.aten.{name}" + (
-                f".{schema.overload_name}" if schema.overload_name else ""
-            )
-            call = checked_call(
-                registry_name,
-                payloads[: len(arguments)],
-                value_type(metadata),
-            )
-            if len(schema.returns) == 1:
-                scope.yield_(call)
-                bound_results = scope.results
-            else:
-                with BindScope(result_types, call) as extraction:
-                    [array] = extraction.arguments
-                    extraction.yield_(self._build_results(array, payload_types))
-                scope.yield_(extraction.results)
-                bound_results = scope.results
-        if len(schema.returns) <= 1:
-            [result] = bound_results
-            return result
-        else:
-            return tuple(bound_results)
-
-    def _build_aten_special(self, node: torch.fx.Node, name: str) -> ImportedValue:
-        arguments = node.args[:1] if name == "_assert_scalar" else node.args
-        values = [self.argument(value) for value in arguments]
-        operations = {
-            "dim": tvm_ffi_d.tensor_dim,
-            "sym_size": tvm_ffi_d.tensor_size,
-            "sym_storage_offset": tvm_ffi_d.tensor_storage_offset,
-            "sym_stride": tvm_ffi_d.tensor_stride,
-        }
-        if operation := operations.get(name):
-            return tvm_ffi_d.to(
-                operation(values[0], *[native(value) for value in values[1:]])
-            )
-        if name == "sym_numel":
-            [tensor], [argument] = values, arguments
-            return reduce(
-                BINARY_ARITHMETIC[operator.mul],
-                (
-                    tvm_ffi_d.to(tvm_ffi_d.tensor_size(tensor, native(constant(index))))
-                    for index in range(argument.meta["val"].dim())
-                ),
-                constant(1),
-            )
-        assert name == "_assert_scalar"
-        [condition] = values
-        _, *messages = node.args
-        message, *_ = messages or ["FX assertion failed"]
-        cf.assert_(native(condition), message)
-        return constant(None)
-
-    def _build_cond(self, node: torch.fx.Node) -> ImportedValue:
-        predicate, true_graph, false_graph, operands = node.args
-        branch_types = make_result_types(
-            value_type(element) for element in node.meta["val"]
-        )
-        with BindScope(
-            branch_types, self.build_arguments([*operands, predicate])
-        ) as scope:
-            payloads = scope.arguments
-            *operand_values, condition = payloads
-            conditional = scf.IfOp(native(condition), branch_types, has_else=True)
-
-            for block, graph in (
-                (conditional.then_block, true_graph),
-                (conditional.else_block, false_graph),
-            ):
-                child = self.values[graph]
-                assert isinstance(child, torch.fx.GraphModule)
-                importer = TridentFxImporter(
-                    context=self.context,
-                    specialization_id=self.specialization_id,
-                )
-                importer.module = self.module
-                with ir.InsertionPoint(block):
-                    placeholders = [
-                        n for n in child.graph.nodes if n.op == "placeholder"
-                    ]
-                    for placeholder, operand in zip(
-                        placeholders, operand_values, strict=True
-                    ):
-                        importer._bind(placeholder, operand)
-                    output = next(n for n in child.graph.nodes if n.op == "output")
-                    (outputs,) = output.args
-                    yielded = importer.visit(
-                        iter(child.graph.nodes),
-                        child,
-                        outputs,
-                        result_types=branch_types,
-                    )
-                    scf.yield_(yielded)
-            scope.yield_(conditional.results)
-            bound_results = scope.results
-        if node.meta["val"]:
-            return tuple(bound_results)
-        else:
-            [result] = bound_results
-            return result
-
-    def _build_kernel(self, node: torch.fx.Node) -> ImportedValue:
-        loc = ir.Location.current
-        knodes = cast(dict[str, Any], node.kwargs["kwargs"])
-        constant_args_idx: int = node.kwargs["constant_args_idx"]
-        constant_args = cast(
-            dict[str, Any],
-            torch._higher_order_ops.triton_kernel_wrap.kernel_side_table.get_constant_args(
-                constant_args_idx
-            ),
-        )
-        kernel_idx: int = node.kwargs["kernel_idx"]
-        function: triton.KernelInterface = (
-            torch._higher_order_ops.triton_kernel_wrap.kernel_side_table.get_kernel(
-                kernel_idx
-            )
-        )
-        device = triton.runtime.driver.active.get_current_device()
-        configs: list[triton.Config] = getattr(function, "configs", [])
-        best_config: triton.Config | None = getattr(function, "best_config", None)
-        while not isinstance(function, triton.JITFunction):
-            function = function.fn
-        kernel_cache, kernel_key_cache, _, _, binder = function.device_caches[device]
-        binder_values = {**knodes, **constant_args}
-        binder_args = {
-            parameter.name: TridentFxImporter._resolve_triton_binder_value(
-                parameter.name, binder_values[parameter.name]
-            )
-            for parameter in function.params
-            if parameter.name in binder_values
-        }
-        config_kwargs = {} if best_config is None else best_config.all_kwargs()
-        runtime_kwargs = {
-            "debug": binder_args.get("debug", function.debug)
-            or triton.knobs.runtime.debug,
-            "instrumentation_mode": triton.knobs.compilation.instrumentation_mode,
-        }
-        bound_arguments, specialization, options = binder(
-            **binder_args, **config_kwargs, **runtime_kwargs
-        )
-        key: str = triton.runtime.jit.compute_cache_key(
-            kernel_key_cache, specialization, options
-        )
-        kernel: triton.compiler.CompiledKernel | None = kernel_cache.get(key)
-        assert kernel is not None, (
-            f"failed to get compiled Triton kernel for {node.name}"
-        )
-        grids = node.kwargs["grid"]
-        if configs and best_config is not None:
-            grid = grids[configs.index(best_config)]
-        else:
-            [grid] = grids
-        arguments = cast(dict[str, Any], node.kwargs["kwargs"])
-        output_names: list[str] = node.kwargs.get("tensors_to_clone", [])
-        specifications: dict[str, tuple[ir.Attribute, Any]] = {}
-        for parameter, (triton_type, descriptor), (
-            compiled_name,
-            compiled_type,
-        ) in zip(
-            function.params,
-            specialization,
-            kernel.src.signature.items(),
-            strict=True,
-        ):
-            name = parameter.name
-            assert (compiled_name, compiled_type) == (name, triton_type), (
-                f"compiled Triton signature does not match its source parameter order: expected {(name, triton_type)!r}, got {(compiled_name, compiled_type)!r}"
-            )
-            specialization_attr = self._kernel_specialization(
-                name, triton_type, descriptor
-            )
-            if name in arguments:
-                operand = arguments[name]
-            elif name in bound_arguments:
-                operand = bound_arguments[name]
-            else:
-                raise RuntimeError(
-                    f"missing runtime argument for {name} of type {triton_type}"
-                )
-            specifications[name] = (specialization_attr, operand)
-
-        result_types = make_result_types(
-            tvm_ffi_d.TensorType.get() for _ in output_names
-        )
-        with BindScope(
-            result_types,
-            self.build_arguments([value for _, value in specifications.values()]),
-        ) as scope:
-            payloads = scope.arguments
-            operands = {
-                name: (attribute, value)
-                for (name, (attribute, _)), value in zip(
-                    specifications.items(),
-                    payloads[: len(specifications)],
-                    strict=True,
-                )
-            }
-            yielded = self._build_launch(
-                kernel, node, loc, operands, output_names, grid
-            )
-            scope.yield_(yielded)
-            bound_results = scope.results
-        if output_names:
-            return dict(zip(output_names, bound_results, strict=True))
-        else:
-            [result] = bound_results
-            return result
-
-    def _build_launch(
-        self,
-        kernel: triton.compiler.CompiledKernel,
-        node: torch.fx.Node,
-        loc: ir.Location,
-        operands: dict[str, tuple[ir.Attribute, ir.Value]],
-        names: Sequence[str],
-        grid: Sequence[Any],
-    ) -> list[ir.Value]:
-        result_types = make_result_types(tvm_ffi_d.TensorType.get() for _ in names)
-        operands = {**operands}
-        with ScopeStack() as stack:
-            for name in names:
-                attribute, value = operands[name]
-                [tensor] = stack.bind(
-                    result_types,
-                    checked_call(
-                        "trident.aten.clone",
-                        [value, constant(None)],
-                        tvm_ffi_d.TensorType.get(),
-                    ),
-                )
-                operands[name] = (attribute, tensor)
-            dimensions = stack.bind(result_types, self.build_arguments(grid))
-            launched = tvm_ffi_d.kernel_launch(
-                tvm_ffi_d.ResultType.get(tvm_ffi_d.NoneType.get()),
-                self._import_kernel_binary(kernel, node, loc),
-                *(native(value) for value in dimensions),
-                native(constant(kernel.metadata.num_warps * kernel.metadata.warp_size)),
-                native(constant(1)),
-                native(constant(1)),
-                [value for _, value in operands.values()],
-                ir.ArrayAttr.get([attribute for attribute, _ in operands.values()]),
-                dynamic_shared_memory_size=arith.trunci(
-                    ir.IntegerType.get_signless(32),
-                    native(constant(kernel.metadata.shared)),
-                    loc=loc,
-                ),
-                loc=loc,
-            )
-            stack.bind(result_types, [launched])
-            outputs = [operands[name][1] for name in names]
-            return stack.yield_([pure(value) for value in outputs or [constant(None)]])
-
-    def _build_results(
-        self, array: ir.Value, types: Sequence[ir.Type]
-    ) -> list[ir.Value]:
-        result_types = make_result_types(types)
-
-        with ScopeStack() as stack:
-            values: list[ir.Value] = []
-            for index, type_ in enumerate(types):
-                values.extend(
-                    stack.bind(result_types, container_get(array, index, type_))
-                )
-            return stack.yield_([pure(value) for value in values or [constant(None)]])
-
-    def _build_scalar(self, node: torch.fx.Node) -> ImportedValue:
-        arguments = node.args
-        if node.target is torch.sym_sum and len(arguments) == 1:
-            [argument] = arguments
-            if isinstance(argument, (tuple, list)):
-                arguments = argument
-        if node.target is operator.pow:
-            base, exponent = node.args
-            if not isinstance(exponent, int) or exponent < 0:
-                raise NotImplementedError(
-                    "symbolic integer power requires a nonnegative constant exponent"
-                )
-            arguments = (base,)
-        if not any(
-            isinstance(
-                self.values[value] if isinstance(value, torch.fx.Node) else value,
-                (tuple, list),
-            )
-            for value in arguments
-        ):
-            return self._scalar(node, [self.argument(value) for value in arguments])
-        result_types = [tvm_ffi_d.ResultType.get(value_type(node.meta["val"]))]
-        with BindScope(result_types, self.build_arguments(arguments)) as scope:
-            payloads = scope.arguments
-            yielded = [pure(self._scalar(node, payloads), result_type=result_types[0])]
-            scope.yield_(yielded)
-            bound_results = scope.results
-        [result] = bound_results
-        return result
-
-    def _call_function(self, node: torch.fx.Node) -> ImportedValue:
-        target = node.target
-        if target is operator.getitem:
-            aggregate, index = node.args
-            imported = self.values[aggregate]
-            if not isinstance(imported, ir.Value):
-                return imported[index]
-            else:
-                [result] = container_get(imported, index, value_type(node.meta["val"]))
-                return result
-        elif isinstance(target, torch._ops.OpOverload):
-            return self._build_aten(node)
-        elif isinstance(target, torch._ops.HigherOrderOperator):
-            if target.__name__ in (
-                "triton_kernel_wrapper_functional",
-                "triton_kernel_wrapper_mutation",
-            ):
-                return self._build_kernel(node)
-            elif target.__name__ == "cond":
-                return self._build_cond(node)
-            else:
-                raise NotImplementedError(
-                    f"unsupported higher-order FX operation: {target}"
-                )
-        else:
-            return self._build_scalar(node)
-
-    @staticmethod
-    def _constant_value_attribute(value: Any, name: str) -> ir.Attribute:
-        if isinstance(value, tuple):
-            return ir.ArrayAttr.get(
-                [
-                    TridentFxImporter._constant_value_attribute(
-                        element, f"{name}[{index}]"
-                    )
-                    for index, element in enumerate(value)
-                ]
-            )
-        elif isinstance(value, bool):
-            return ir.BoolAttr.get(value)
-        elif isinstance(value, int):
-            assert -(1 << 63) <= value < (1 << 63), (
-                f"constexpr specialization {name!r} does not fit in i64: {value}"
-            )
-            return ir.IntegerAttr.get(ir.IntegerType.get_signless(64), value)
-        elif isinstance(value, float):
-            return ir.FloatAttr.get_f64(value)
-        elif isinstance(value, str):
-            return ir.StringAttr.get(value)
-        else:
-            raise NotImplementedError(
-                f"unsupported constexpr specialization {name!r}: {value!r}"
-            )
-
     @cached_property
     def _convert_torch_enum(self) -> tvm_ffi.Function:
         return tvm_ffi.get_global_func("trident.runtime.torch_enum_to_int")
-
-    def _import_kernel_binary(
-        self,
-        kernel: triton.compiler.CompiledKernel,
-        node: torch.fx.Node,
-        loc: ir.Location,
-    ) -> ir.Attribute:
-        """Install a specialization's binary once and return its kernel symbol."""
-        cubin = kernel.asm["cubin"]
-        binary_name = f"_trident_s{self.specialization_id}_{node.name}"
-        module_op = self.module.operation
-        module_op.attributes["gpu.container_module"] = ir.UnitAttr.get()
-        if all(
-            not isinstance(op, gpu.BinaryOp) or op.sym_name != binary_name
-            for op in self.module.body.operations
-        ):
-            cubin_mlir: str = "".join(f"\\{byte:02X}" for byte in cubin)
-            gpu_object = ir.Attribute.parse(
-                f'#gpu.object<#nvvm.target<chip = "sm_{kernel.metadata.target.arch}">, '
-                f'"{cubin_mlir}">'
-            )
-            with ir.InsertionPoint(self.module.body):
-                gpu.binary(
-                    binary_name,
-                    ir.ArrayAttr.get([gpu_object]),
-                    offloading_handler=ir.Attribute.parse("#gpu.select_object"),
-                    loc=loc,
-                )
-        return ir.Attribute.parse(f"@{binary_name}::@{kernel.metadata.name}")
-
-    @staticmethod
-    def _kernel_specialization(
-        name: str, triton_type: str, descriptor: Any
-    ) -> ir.Attribute:
-        """Translate a bound Triton parameter into its runtime launch contract."""
-        if triton_type == "constexpr":
-            constexpr_value = TridentFxImporter._constant_value_attribute(
-                descriptor, name
-            )
-            specialization_attr = ir.Attribute.parse(
-                f"#tvm_ffi.constant_specialization<value = {constexpr_value}>"
-            )
-        else:
-            if triton_type.startswith("*"):
-                abi_type = "!llvm.ptr"
-            elif triton_type in {
-                "i1",
-                "i16",
-                "i32",
-                "i64",
-                "i8",
-                "u1",
-                "u16",
-                "u32",
-                "u64",
-                "u8",
-            }:
-                abi_type = f"i{triton_type[1:]}"
-            elif triton_type in {"fp32", "fp64"}:
-                abi_type = f"f{triton_type[2:]}"
-            else:
-                raise RuntimeError(f"unsupported Triton argument type: {triton_type}")
-            divisibility = ", divisibility = 16" if descriptor == "D" else ""
-            specialization_attr = ir.Attribute.parse(
-                f"#tvm_ffi.variable_specialization<kind = {abi_type}{divisibility}>"
-            )
-        return specialization_attr
-
-    @staticmethod
-    def _resolve_triton_binder_value(
-        name: str,
-        value: Any,
-    ) -> Any:
-        if isinstance(value, torch.fx.Node):
-            assert "val" in value.meta, (
-                f"Triton binder argument {name} node {value.name} "
-                "does not contain metadata value"
-            )
-            return (
-                triton.MockTensor(dtype=metadata_value.dtype)
-                if isinstance(metadata_value := value.meta["val"], torch.Tensor)
-                else TridentFxImporter._resolve_triton_binder_value(
-                    name, metadata_value
-                )
-            )
-        elif isinstance(value, (torch.SymInt, torch.SymFloat, torch.SymBool)):
-            return TridentFxImporter._resolve_triton_binder_value(name, value.node.hint)
-        elif isinstance(value, tuple):
-            items = tuple(
-                TridentFxImporter._resolve_triton_binder_value(name, item)
-                for item in value
-            )
-            return type(value)(*items) if hasattr(value, "_fields") else items
-        elif isinstance(value, list):
-            return [
-                TridentFxImporter._resolve_triton_binder_value(name, item)
-                for item in value
-            ]
-        elif isinstance(value, dict):
-            return {
-                key: TridentFxImporter._resolve_triton_binder_value(name, item)
-                for key, item in value.items()
-            }
-        else:
-            return value
-
-    def _scalar(self, node: torch.fx.Node, values: Sequence[ir.Value]) -> ir.Value:
-        target = {torch.sym_max: max, torch.sym_min: min}.get(node.target, node.target)
-        if target in BINARY_ARITHMETIC:
-            return BINARY_ARITHMETIC[target](*values)
-        elif target is torch.sym_sum:
-            return reduce(BINARY_ARITHMETIC[operator.add], values, constant(0))
-        elif target is operator.pow:
-            [base] = values
-            _, exponent = node.args
-            return power(base, exponent)
-        elif target in (operator.neg, operator.not_, torch.sym_not):
-            (value,) = values
-            return negate(value) if target is operator.neg else logical_not(value)
-        else:
-            raise NotImplementedError(f"unsupported FX call: {target}")
 
     def argument(self, value: Any) -> ir.Value:
         """Import a non-container value without opening a failure scope."""
@@ -663,7 +231,7 @@ class TridentFxImporter:
             self.values[value] if isinstance(value, torch.fx.Node) else value
             for value in arguments
         ]
-        result_types = make_result_types(
+        result_types = _make_result_types(
             self.argument_type(value) for value in arguments
         )
 
@@ -683,9 +251,29 @@ class TridentFxImporter:
                         element_types, self.build_arguments(argument)
                     ) as elements:
                         elements_arguments = elements.arguments
-                        yielded = container_create(
-                            elements_arguments[: len(argument)], type_
+                        container_elements = (
+                            list(elements_arguments) if argument else []
                         )
+                        container_types = (
+                            type_.types
+                            if isinstance(type_, tvm_ffi_d.TupleType)
+                            else [type_.element_type] * len(container_elements)
+                        )
+                        container_elements = [
+                            tvm_ffi_d.upcast(target, element)
+                            for element, target in zip(
+                                container_elements, container_types, strict=True
+                            )
+                        ]
+                        if isinstance(type_, tvm_ffi_d.TupleType):
+                            container = tvm_ffi_d.tuple_construct(
+                                type_, container_elements
+                            )
+                        else:
+                            container = tvm_ffi_d.array_create(
+                                type_, container_elements
+                            )
+                        yielded = [pure(container)]
                         elements.yield_(yielded)
                         elements_results = elements.results
                     current = elements_results
@@ -696,15 +284,17 @@ class TridentFxImporter:
             return stack.yield_([pure(value) for value in values or [constant(None)]])
 
     def import_program(
-        self, program: torch.export.ExportedProgram, *, func_name: str
+        self,
+        program: torch.export.ExportedProgram,
+        *,
+        func_name: str,
+        input_types: Mapping[str, ir.Type],
+        input_paths: Mapping[str, list[int | str]],
     ) -> tvm_ffi_d.FuncOp:
-        producers = {node.name: node for node in program.graph.nodes}
-        inputs = [
-            spec
-            for spec in program.graph_signature.input_specs
-            if spec.kind == InputKind.USER_INPUT
-            and not isinstance(spec.arg, ConstantArgument)
-        ]
+        """Build execution with the original signature and bind FX inputs locally."""
+        producers: dict[str, torch.fx.Node] = {
+            node.name: node for node in program.graph.nodes
+        }
         outputs = [
             spec
             for spec in program.graph_signature.output_specs
@@ -715,10 +305,7 @@ class TridentFxImporter:
             ir.Location.unknown(self.context),
             ir.InsertionPoint(self.module.body),
         ):
-            input_types = [
-                value_type(producers[spec.arg.name].meta["val"]) for spec in inputs
-            ]
-            payload_types = [
+            payload_types: list[ir.Type] = [
                 value_type(
                     spec.arg.value
                     if isinstance(spec.arg, ConstantArgument)
@@ -729,11 +316,13 @@ class TridentFxImporter:
             any_type = tvm_ffi_d.AnyType.get()
             function = tvm_ffi_d.FuncOp(
                 func_name,
-                ir.TypeAttr.get(ir.FunctionType.get(input_types, [any_type])),
+                ir.TypeAttr.get(
+                    ir.FunctionType.get(list(input_types.values()), [any_type])
+                ),
                 sym_visibility=ir.StringAttr.get("private"),
             )
             block = function.add_entry_block()
-            result_types = make_result_types(payload_types)
+            result_types = _make_result_types(payload_types)
             with ir.InsertionPoint(block):
                 output_values = [
                     spec.arg.value
@@ -741,15 +330,22 @@ class TridentFxImporter:
                     else producers[spec.arg.name]
                     for spec in outputs
                 ]
-                block_arguments = block.arguments
+                parameters: dict[str, Scope] = {
+                    name: Scope(value)
+                    for name, value in zip(input_types, block.arguments, strict=True)
+                }
                 initial_values: list[Any] = []
-                user_arguments = iter(block_arguments)
                 for spec in program.graph_signature.input_specs:
                     if (
                         not isinstance(spec.arg, ConstantArgument)
                         and spec.kind == InputKind.USER_INPUT
                     ):
-                        initial_values.append(next(user_arguments))
+                        name, *keys = input_paths[spec.arg.name]
+                        value, parameters[name] = parameters[name].read(keys)
+                        target = value_type(producers[spec.arg.name].meta["val"])
+                        if value.type != target:
+                            value = tvm_ffi_d.downcast(target, value)
+                        initial_values.append(value)
                     else:
                         state = (
                             program.state_dict
@@ -767,7 +363,7 @@ class TridentFxImporter:
                     initialization_arguments = initialization.arguments
                     for spec, value in zip(
                         program.graph_signature.input_specs,
-                        initialization_arguments[: len(initial_values)],
+                        initialization_arguments if initial_values else (),
                         strict=True,
                     ):
                         self._bind(producers[spec.arg.name], value)
@@ -779,38 +375,44 @@ class TridentFxImporter:
                     )
                     initialization.yield_(yielded)
                     initialization_results = initialization.results
-                tvm_ffi_d.return_(*self._pack_graph_results(initialization_results))
+                packed_any_type = tvm_ffi_d.AnyType.get()
+                packed_result_type = tvm_ffi_d.ResultType.get(packed_any_type)
+                with BindScope(
+                    [packed_result_type], initialization_results
+                ) as packed_outputs:
+                    packed_outputs_arguments = packed_outputs.arguments
+                    packed_values = packed_outputs_arguments
+                    if len(packed_values) == 1:
+                        [packed_payload] = packed_values
+                    else:
+                        packed_payload = tvm_ffi_d.tuple_construct(
+                            tvm_ffi_d.TupleType.get(
+                                [packed_value.type for packed_value in packed_values]
+                            ),
+                            packed_values,
+                        )
+                    packed_outputs.yield_(
+                        [pure(packed_payload, result_type=packed_result_type)]
+                    )
+                    packed_outputs_results = packed_outputs.results
+                [packed_result] = packed_outputs_results
+                packed_success, packed_payload = tvm_ffi_d.monad_unpack(packed_result)
+                packed_success = tvm_ffi_d.to(packed_success)
+                packed_outcome = scf.IfOp(
+                    native(packed_success), [packed_any_type], has_else=True
+                )
+                with ir.InsertionPoint(packed_outcome.then_block):
+                    scf.yield_([packed_payload])
+                with ir.InsertionPoint(packed_outcome.else_block):
+                    packed_rejection = tvm_ffi_d.exception("GuardMatch")
+                    scf.yield_([tvm_ffi_d.upcast(packed_any_type, packed_rejection)])
+                [packed_result] = packed_outcome.results
+                packed_return = [tvm_ffi_d.constant_bool(True), packed_result]
+                tvm_ffi_d.return_(*packed_return)
         return function
 
-    @staticmethod
-    def _pack_graph_results(results: Sequence[ir.Value]) -> list[ir.Value]:
-        """Pack graph outputs and translate specialization rejection at the exit."""
-        any_type = tvm_ffi_d.AnyType.get()
-        result_type = tvm_ffi_d.ResultType.get(any_type)
-        with BindScope([result_type], results) as outputs:
-            outputs_arguments = outputs.arguments
-            values = outputs_arguments
-            payload = (
-                values[0]
-                if len(values) == 1
-                else tvm_ffi_d.tuple_construct(
-                    tvm_ffi_d.TupleType.get([value.type for value in values]), values
-                )
-            )
-            outputs.yield_([pure(payload, result_type=result_type)])
-            outputs_results = outputs.results
-        success, payload = tvm_ffi_d.monad_unpack(outputs_results[0])
-        success = tvm_ffi_d.to(success)
-        outcome = scf.IfOp(native(success), [any_type], has_else=True)
-        with ir.InsertionPoint(outcome.then_block):
-            scf.yield_([payload])
-        with ir.InsertionPoint(outcome.else_block):
-            rejection = tvm_ffi_d.exception("GuardMatch")
-            scf.yield_([tvm_ffi_d.upcast(any_type, rejection)])
-        return [tvm_ffi_d.constant_bool(True), outcome.results[0]]
-
-    def symbolic(self, expression: Any) -> ir.Value:
-        operations = {
+    def symbolic(self, expression: sympy.Basic) -> ir.Value:
+        operations: dict[type[sympy.Basic], Callable[..., Any]] = {
             sympy.Add: operator.add,
             sympy.Max: max,
             sympy.Min: min,
@@ -840,7 +442,7 @@ class TridentFxImporter:
         elif expression.func is sympy.Pow:
             base, exponent = expression.args
             if exponent.is_Integer and exponent >= 0:
-                return power(self.symbolic(base), operator.index(exponent))
+                return _power(self.symbolic(base), operator.index(exponent))
         raise NotImplementedError(
             f"unbound symbolic FX expression: {expression}; refusing to use a concrete hint"
         )
@@ -853,7 +455,7 @@ class TridentFxImporter:
         *,
         result_types: Sequence[ir.Type],
     ) -> list[ir.Value]:
-        """Bind Result leaves while keeping subsequent nodes in their success scope."""
+        """Import each FX node and bind its Results before visiting the next node."""
         with ScopeStack() as stack:
             for node in nodes:
                 if node.op in ("placeholder", "output"):
@@ -869,7 +471,594 @@ class TridentFxImporter:
                     else:
                         value = self.argument(value)
                 elif node.op == "call_function":
-                    value = self._call_function(node)
+                    target = node.target
+                    if target is operator.getitem:
+                        aggregate, index = node.args
+                        imported = self.values[aggregate]
+                        if not isinstance(imported, ir.Value):
+                            value = imported[index]
+                        else:
+                            [value] = _container_get(
+                                imported, index, value_type(node.meta["val"])
+                            )
+                    elif isinstance(target, torch._ops.OpOverload):
+                        name = target._schema.name.removeprefix("aten::")
+                        if name in {
+                            "_assert_scalar",
+                            "dim",
+                            "sym_numel",
+                            "sym_size",
+                            "sym_storage_offset",
+                            "sym_stride",
+                        }:
+                            arguments = node.args
+                            if name == "_assert_scalar":
+                                condition, *_ = arguments
+                                arguments = (condition,)
+                            values = [self.argument(value) for value in arguments]
+                            operations = {
+                                "dim": tvm_ffi_d.tensor_dim,
+                                "sym_size": tvm_ffi_d.tensor_size,
+                                "sym_storage_offset": tvm_ffi_d.tensor_storage_offset,
+                                "sym_stride": tvm_ffi_d.tensor_stride,
+                            }
+                            if operation := operations.get(name):
+                                tensor, *indices = values
+                                value = tvm_ffi_d.to(
+                                    operation(
+                                        tensor,
+                                        *(native(value) for value in indices),
+                                    )
+                                )
+                            elif name == "sym_numel":
+                                [tensor], [argument] = (
+                                    values,
+                                    arguments,
+                                )
+                                value = reduce(
+                                    BINARY_ARITHMETIC[operator.mul],
+                                    (
+                                        tvm_ffi_d.to(
+                                            tvm_ffi_d.tensor_size(
+                                                tensor,
+                                                native(constant(index)),
+                                            )
+                                        )
+                                        for index in range(argument.meta["val"].dim())
+                                    ),
+                                    constant(1),
+                                )
+                            else:
+                                assert name == "_assert_scalar"
+                                [condition] = values
+                                _, *messages = node.args
+                                message, *_ = messages or ["FX assertion failed"]
+                                cf.assert_(native(condition), message)
+                                value = constant(None)
+                        else:
+                            target = node.target
+                            assert isinstance(target, torch._ops.OpOverload)
+                            schema = target._schema
+                            scalar_arguments = [
+                                index
+                                for index, argument in enumerate(node.args)
+                                if index < len(schema.arguments)
+                                and schema.arguments[index].type.kind() == "TensorType"
+                                and isinstance(
+                                    argument.meta.get("val")
+                                    if isinstance(argument, torch.fx.Node)
+                                    else argument,
+                                    (
+                                        bool,
+                                        int,
+                                        float,
+                                        torch.SymInt,
+                                        torch.SymFloat,
+                                        torch.SymBool,
+                                    ),
+                                )
+                            ]
+                            if (
+                                scalar_arguments
+                                and "Scalar" in target.overloadpacket.overloads()
+                            ):
+                                candidate = target.overloadpacket.Scalar._schema
+                                if all(
+                                    index < len(candidate.arguments)
+                                    and candidate.arguments[index].name
+                                    == schema.arguments[index].name
+                                    and candidate.arguments[index].type.kind()
+                                    in (
+                                        "NumberType",
+                                        "IntType",
+                                        "FloatType",
+                                        "BoolType",
+                                    )
+                                    for index in scalar_arguments
+                                ):
+                                    schema = candidate
+                            arguments: list[Any] = []
+                            for index, parameter in enumerate(schema.arguments):
+                                if index < len(node.args):
+                                    argument = node.args[index]
+                                elif parameter.name in node.kwargs:
+                                    argument = node.kwargs[parameter.name]
+                                elif parameter.has_default_value():
+                                    argument = parameter.default_value
+                                else:
+                                    raise ValueError(
+                                        f"missing argument {parameter.name} for {node.target}"
+                                    )
+                                if isinstance(
+                                    argument, (torch.layout, torch.memory_format)
+                                ):
+                                    argument = self._convert_torch_enum(argument)
+                                arguments.append(argument)
+                            metadata = node.meta.get("val")
+                            payload_types = [
+                                value_type(value)
+                                for value in (
+                                    (metadata,)
+                                    if len(schema.returns) == 1
+                                    else metadata or ()
+                                )
+                            ]
+                            aten_result_types = _make_result_types(payload_types)
+                            with BindScope(
+                                aten_result_types, self.build_arguments(arguments)
+                            ) as scope:
+                                payloads = scope.arguments
+                                name = schema.name.removeprefix("aten::")
+                                registry_name = f"trident.aten.{name}" + (
+                                    f".{schema.overload_name}"
+                                    if schema.overload_name
+                                    else ""
+                                )
+                                call = checked_call(
+                                    registry_name,
+                                    payloads if arguments else (),
+                                    value_type(metadata),
+                                )
+                                if len(schema.returns) == 1:
+                                    scope.yield_(call)
+                                    bound_results = scope.results
+                                else:
+                                    with BindScope(
+                                        aten_result_types, call
+                                    ) as extraction:
+                                        [array] = extraction.arguments
+                                        extracted_result_types = _make_result_types(
+                                            payload_types
+                                        )
+
+                                        with ScopeStack() as extracted_stack:
+                                            values: list[ir.Value] = []
+                                            for (
+                                                index,
+                                                type_,
+                                            ) in enumerate(payload_types):
+                                                values.extend(
+                                                    extracted_stack.bind(
+                                                        extracted_result_types,
+                                                        _container_get(
+                                                            array,
+                                                            index,
+                                                            type_,
+                                                        ),
+                                                    )
+                                                )
+                                            results = extracted_stack.yield_(
+                                                [
+                                                    pure(value)
+                                                    for value in values
+                                                    or [constant(None)]
+                                                ]
+                                            )
+                                        extraction.yield_(results)
+                                    scope.yield_(extraction.results)
+                                    bound_results = scope.results
+                            if len(schema.returns) <= 1:
+                                [result] = bound_results
+                                value = result
+                            else:
+                                value = tuple(bound_results)
+                    elif isinstance(target, torch._ops.HigherOrderOperator):
+                        if target.__name__ in (
+                            "triton_kernel_wrapper_functional",
+                            "triton_kernel_wrapper_mutation",
+                        ):
+                            loc = ir.Location.current
+                            knodes = cast(dict[str, Any], node.kwargs["kwargs"])
+                            constant_args_idx: int = node.kwargs["constant_args_idx"]
+                            constant_args = cast(
+                                dict[str, Any],
+                                torch._higher_order_ops.triton_kernel_wrap.kernel_side_table.get_constant_args(
+                                    constant_args_idx
+                                ),
+                            )
+                            kernel_idx: int = node.kwargs["kernel_idx"]
+                            function: triton.KernelInterface = torch._higher_order_ops.triton_kernel_wrap.kernel_side_table.get_kernel(
+                                kernel_idx
+                            )
+                            device = triton.runtime.driver.active.get_current_device()
+                            configs: list[triton.Config] = getattr(
+                                function, "configs", []
+                            )
+                            best_config: triton.Config | None = getattr(
+                                function, "best_config", None
+                            )
+                            while not isinstance(function, triton.JITFunction):
+                                function = function.fn
+                            (
+                                kernel_cache,
+                                kernel_key_cache,
+                                _,
+                                _,
+                                binder,
+                            ) = function.device_caches[device]
+                            binder_values = {
+                                **knodes,
+                                **constant_args,
+                            }
+                            binder_args = {
+                                parameter.name: _resolve_triton_binder_value(
+                                    parameter.name,
+                                    binder_values[parameter.name],
+                                )
+                                for parameter in function.params
+                                if parameter.name in binder_values
+                            }
+                            config_kwargs = (
+                                {} if best_config is None else best_config.all_kwargs()
+                            )
+                            runtime_kwargs = {
+                                "debug": binder_args.get("debug", function.debug)
+                                or triton.knobs.runtime.debug,
+                                "instrumentation_mode": triton.knobs.compilation.instrumentation_mode,
+                            }
+                            (
+                                bound_arguments,
+                                specialization,
+                                options,
+                            ) = binder(
+                                **binder_args,
+                                **config_kwargs,
+                                **runtime_kwargs,
+                            )
+                            key: str = triton.runtime.jit.compute_cache_key(
+                                kernel_key_cache,
+                                specialization,
+                                options,
+                            )
+                            kernel: triton.compiler.CompiledKernel | None = (
+                                kernel_cache.get(key)
+                            )
+                            assert kernel is not None, (
+                                f"failed to get compiled Triton kernel for {node.name}"
+                            )
+                            grids = node.kwargs["grid"]
+                            if configs and best_config is not None:
+                                grid = grids[configs.index(best_config)]
+                            else:
+                                [grid] = grids
+                            arguments = cast(dict[str, Any], node.kwargs["kwargs"])
+                            output_names: list[str] = node.kwargs.get(
+                                "tensors_to_clone", []
+                            )
+                            specifications: dict[str, tuple[ir.Attribute, Any]] = {}
+                            for parameter, (
+                                triton_type,
+                                descriptor,
+                            ), (
+                                compiled_name,
+                                compiled_type,
+                            ) in zip(
+                                function.params,
+                                specialization,
+                                kernel.src.signature.items(),
+                                strict=True,
+                            ):
+                                name = parameter.name
+                                assert (compiled_name, compiled_type) == (
+                                    name,
+                                    triton_type,
+                                ), (
+                                    f"compiled Triton signature does not match its source parameter order: expected {(name, triton_type)!r}, got {(compiled_name, compiled_type)!r}"
+                                )
+                                if triton_type == "constexpr":
+                                    constexpr_value = _constant_value_attribute(
+                                        descriptor, name
+                                    )
+                                    specialization_attr = ir.Attribute.parse(
+                                        f"#tvm_ffi.constant_specialization<value = {constexpr_value}>"
+                                    )
+                                else:
+                                    if triton_type.startswith("*"):
+                                        abi_type = "!llvm.ptr"
+                                    elif triton_type in {
+                                        "i1",
+                                        "i16",
+                                        "i32",
+                                        "i64",
+                                        "i8",
+                                        "u1",
+                                        "u16",
+                                        "u32",
+                                        "u64",
+                                        "u8",
+                                    }:
+                                        abi_type = f"i{triton_type.removeprefix('i').removeprefix('u')}"
+                                    elif triton_type in {"fp32", "fp64"}:
+                                        abi_type = f"f{triton_type.removeprefix('fp')}"
+                                    else:
+                                        raise RuntimeError(
+                                            f"unsupported Triton argument type: {triton_type}"
+                                        )
+                                    divisibility = (
+                                        ", divisibility = 16"
+                                        if descriptor == "D"
+                                        else ""
+                                    )
+                                    specialization_attr = ir.Attribute.parse(
+                                        f"#tvm_ffi.variable_specialization<kind = {abi_type}{divisibility}>"
+                                    )
+                                if name in arguments:
+                                    operand = arguments[name]
+                                elif name in bound_arguments:
+                                    operand = bound_arguments[name]
+                                else:
+                                    raise RuntimeError(
+                                        f"missing runtime argument for {name} of type {triton_type}"
+                                    )
+                                specifications[name] = (
+                                    specialization_attr,
+                                    operand,
+                                )
+
+                            kernel_result_types = _make_result_types(
+                                tvm_ffi_d.TensorType.get() for _ in output_names
+                            )
+                            with BindScope(
+                                kernel_result_types,
+                                self.build_arguments(
+                                    [value for _, value in specifications.values()]
+                                ),
+                            ) as scope:
+                                payloads = scope.arguments
+                                operands = {
+                                    name: (attribute, value)
+                                    for (
+                                        name,
+                                        (attribute, _),
+                                    ), value in zip(
+                                        specifications.items(),
+                                        payloads if specifications else (),
+                                        strict=True,
+                                    )
+                                }
+                                launch_result_types = _make_result_types(
+                                    tvm_ffi_d.TensorType.get() for _ in output_names
+                                )
+                                operands = {**operands}
+                                with ScopeStack() as launch_stack:
+                                    for name in output_names:
+                                        attribute, value = operands[name]
+                                        [tensor] = launch_stack.bind(
+                                            launch_result_types,
+                                            checked_call(
+                                                "trident.aten.clone",
+                                                [value, constant(None)],
+                                                tvm_ffi_d.TensorType.get(),
+                                            ),
+                                        )
+                                        operands[name] = (
+                                            attribute,
+                                            tensor,
+                                        )
+                                    dimensions = launch_stack.bind(
+                                        launch_result_types,
+                                        self.build_arguments(grid),
+                                    )
+                                    cubin = kernel.asm["cubin"]
+                                    binary_name = f"_trident_s{self.specialization_id}_{node.name}"
+                                    module_op = self.module.operation
+                                    module_op.attributes["gpu.container_module"] = (
+                                        ir.UnitAttr.get()
+                                    )
+                                    if all(
+                                        not isinstance(op, gpu.BinaryOp)
+                                        or op.sym_name != binary_name
+                                        for op in self.module.body.operations
+                                    ):
+                                        cubin_mlir: str = "".join(
+                                            f"\\{byte:02X}" for byte in cubin
+                                        )
+                                        gpu_object = ir.Attribute.parse(
+                                            f'#gpu.object<#nvvm.target<chip = "sm_{kernel.metadata.target.arch}">, '
+                                            f'"{cubin_mlir}">'
+                                        )
+                                        with ir.InsertionPoint(self.module.body):
+                                            gpu.binary(
+                                                binary_name,
+                                                ir.ArrayAttr.get([gpu_object]),
+                                                offloading_handler=ir.Attribute.parse(
+                                                    "#gpu.select_object"
+                                                ),
+                                                loc=loc,
+                                            )
+                                    symbol = ir.Attribute.parse(
+                                        f"@{binary_name}::@{kernel.metadata.name}"
+                                    )
+                                    launched = tvm_ffi_d.kernel_launch(
+                                        tvm_ffi_d.ResultType.get(
+                                            tvm_ffi_d.NoneType.get()
+                                        ),
+                                        symbol,
+                                        *(native(value) for value in dimensions),
+                                        native(
+                                            constant(
+                                                kernel.metadata.num_warps
+                                                * kernel.metadata.warp_size
+                                            )
+                                        ),
+                                        native(constant(1)),
+                                        native(constant(1)),
+                                        [value for _, value in operands.values()],
+                                        ir.ArrayAttr.get(
+                                            [
+                                                attribute
+                                                for attribute, _ in operands.values()
+                                            ]
+                                        ),
+                                        dynamic_shared_memory_size=arith.trunci(
+                                            ir.IntegerType.get_signless(32),
+                                            native(constant(kernel.metadata.shared)),
+                                            loc=loc,
+                                        ),
+                                        loc=loc,
+                                    )
+                                    launch_stack.bind(launch_result_types, [launched])
+                                    launch_outputs = [
+                                        value
+                                        for _, value in (
+                                            operands[name] for name in output_names
+                                        )
+                                    ]
+                                    yielded = launch_stack.yield_(
+                                        [
+                                            pure(value)
+                                            for value in launch_outputs
+                                            or [constant(None)]
+                                        ]
+                                    )
+                                scope.yield_(yielded)
+                                bound_results = scope.results
+                            if output_names:
+                                value = dict(
+                                    zip(
+                                        output_names,
+                                        bound_results,
+                                        strict=True,
+                                    )
+                                )
+                            else:
+                                [result] = bound_results
+                                value = result
+                        elif target.__name__ == "cond":
+                            (
+                                predicate,
+                                true_graph,
+                                false_graph,
+                                operands,
+                            ) = node.args
+                            branch_types = _make_result_types(
+                                value_type(element) for element in node.meta["val"]
+                            )
+                            with BindScope(
+                                branch_types,
+                                self.build_arguments([*operands, predicate]),
+                            ) as scope:
+                                payloads = scope.arguments
+                                *operand_values, condition = payloads
+                                conditional = scf.IfOp(
+                                    native(condition),
+                                    branch_types,
+                                    has_else=True,
+                                )
+
+                                for block, graph in (
+                                    (conditional.then_block, true_graph),
+                                    (conditional.else_block, false_graph),
+                                ):
+                                    child = self.values[graph]
+                                    assert isinstance(child, torch.fx.GraphModule)
+                                    importer = TridentFxImporter(
+                                        context=self.context,
+                                        specialization_id=self.specialization_id,
+                                    )
+                                    importer.module = self.module
+                                    with ir.InsertionPoint(block):
+                                        placeholders = [
+                                            n
+                                            for n in child.graph.nodes
+                                            if n.op == "placeholder"
+                                        ]
+                                        for placeholder, operand in zip(
+                                            placeholders,
+                                            operand_values,
+                                            strict=True,
+                                        ):
+                                            importer._bind(placeholder, operand)
+                                        output = next(
+                                            n
+                                            for n in child.graph.nodes
+                                            if n.op == "output"
+                                        )
+                                        (cond_outputs,) = output.args
+                                        yielded = importer.visit(
+                                            iter(child.graph.nodes),
+                                            child,
+                                            cond_outputs,
+                                            result_types=branch_types,
+                                        )
+                                        scf.yield_(yielded)
+                                scope.yield_(conditional.results)
+                                bound_results = scope.results
+                            if node.meta["val"]:
+                                value = tuple(bound_results)
+                            else:
+                                [result] = bound_results
+                                value = result
+                        else:
+                            raise NotImplementedError(
+                                f"unsupported higher-order FX operation: {target}"
+                            )
+                    else:
+                        arguments = node.args
+                        if node.target is torch.sym_sum and len(arguments) == 1:
+                            [argument] = arguments
+                            if isinstance(argument, (tuple, list)):
+                                arguments = argument
+                        if node.target is operator.pow:
+                            base, exponent = node.args
+                            if not isinstance(exponent, int) or exponent < 0:
+                                raise NotImplementedError(
+                                    "symbolic integer power requires a nonnegative constant exponent"
+                                )
+                            arguments = (base,)
+                        if not any(
+                            isinstance(
+                                self.values[value]
+                                if isinstance(value, torch.fx.Node)
+                                else value,
+                                (tuple, list),
+                            )
+                            for value in arguments
+                        ):
+                            value = _scalar(
+                                node,
+                                [self.argument(value) for value in arguments],
+                            )
+                        else:
+                            scalar_result_types = [
+                                tvm_ffi_d.ResultType.get(value_type(node.meta["val"]))
+                            ]
+                            with BindScope(
+                                scalar_result_types,
+                                self.build_arguments(arguments),
+                            ) as scope:
+                                payloads = scope.arguments
+                                [result_type] = scalar_result_types
+                                yielded = [
+                                    pure(
+                                        _scalar(node, payloads),
+                                        result_type=result_type,
+                                    )
+                                ]
+                                scope.yield_(yielded)
+                                bound_results = scope.results
+                            [result] = bound_results
+                            value = result
                 else:
                     raise NotImplementedError(
                         f"unsupported FX node: {node.format_node()}"

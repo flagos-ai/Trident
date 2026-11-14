@@ -20,7 +20,9 @@ class ContainerTest(unittest.TestCase):
             return x + values[0] + values[1]
 
         @trident.jit
-        def mixed_add(x: torch.Tensor, values: list) -> torch.Tensor:
+        def mixed_add(
+            x: torch.Tensor, values: list[torch.Tensor | int | None]
+        ) -> torch.Tensor:
             return x + values[0] + values[2]
 
         @trident.jit
@@ -34,8 +36,9 @@ class ContainerTest(unittest.TestCase):
         def tuple_add(
             x: torch.Tensor,
             values: tuple[torch.Tensor, torch.Tensor],
+            bias: int = 3,
         ) -> torch.Tensor:
-            return x + values[0] + values[-1]
+            return x + values[0] + values[-1] + bias
 
         def check() -> None:
             x = torch.randn(4, device="cuda")
@@ -50,11 +53,16 @@ class ContainerTest(unittest.TestCase):
                     [(first, torch.zeros_like(x)), (torch.zeros_like(x), second)],
                     x + first + second,
                 ),
-                ("tuple", tuple_add, (first, second), x + first + second),
+                ("tuple", tuple_add, (first, second), x + first + second + 3),
             ):
                 for phase in ("warmup", "cached"):
                     with self.subTest(container=name, phase=phase):
-                        torch.testing.assert_close(function(x, values), expected)
+                        result = (
+                            function(values=values, x=x)
+                            if name == "tuple"
+                            else function(x, values)
+                        )
+                        torch.testing.assert_close(result, expected)
                 self.assertEqual(len(function._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())
@@ -78,7 +86,14 @@ class ContainerTest(unittest.TestCase):
 
     def test_nested_outputs(self) -> None:
         @trident.jit
-        def outputs(x: torch.Tensor):
+        def outputs(
+            x: torch.Tensor,
+        ) -> dict[
+            str,
+            torch.Tensor
+            | tuple[torch.Tensor, list[int | None]]
+            | tuple[list[object], tuple[()], None],
+        ]:
             return {
                 "tensor": x + 1,
                 "other": (x * 2, [3, None]),
@@ -92,10 +107,11 @@ class ContainerTest(unittest.TestCase):
                     result = outputs(x)
                     self.assertIsInstance(result, dict)
                     self.assertIsInstance(result["other"], tuple)
-                    self.assertEqual(result["other"][1], [3, None])
+                    other_tensor, other_values = result["other"]
+                    self.assertEqual(other_values, [3, None])
                     self.assertEqual(result["empty"], ([], (), None))
                     torch.testing.assert_close(result["tensor"], x + 1)
-                    torch.testing.assert_close(result["other"][0], x * 2)
+                    torch.testing.assert_close(other_tensor, x * 2)
             self.assertEqual(len(outputs._sub_modules), 1)
 
         device = torch.device("cuda", torch.cuda.current_device())
@@ -103,7 +119,9 @@ class ContainerTest(unittest.TestCase):
 
     def test_repeated_outputs_keep_independent_references(self) -> None:
         @trident.jit
-        def outputs(x: torch.Tensor):
+        def outputs(
+            x: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             result = x + 1
             return x, result, result
 

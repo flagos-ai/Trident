@@ -13,9 +13,9 @@ from torch._guards import GuardSource
 from trident.core import ir
 from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.guards import parse_guards
 from trident.guards.codes import (
     ASTCode,
-    ConstantCode,
     DynamoAttributeAbsentCode,
     GuardCode,
     RequiresGradCode,
@@ -24,18 +24,20 @@ from trident.guards.codes import (
     TensorRankCode,
     TypeIdCode,
 )
-from trident.guards.kinds import (
-    ConstantMatchGuard,
-    DuplicateInputGuard,
-    Guard,
-    IgnoredGuard,
-    SequenceLengthGuard,
-    ShapeEnvGuard,
-    TensorMatchGuard,
-    TypeMatchGuard,
+from trident.guards.expressions import (
+    ExpressionContext,
+    UnsupportedExpression,
+    parse_expression,
 )
-from trident.guards.local import Local
-from trident.input import InputNodeBuilder, InputTableBuilder
+from trident.guards.scope import Scope
+from trident.guards.tree import (
+    ExecutionNode,
+    GuardNode,
+    Node,
+    Root,
+    SCMNode,
+)
+from trident.utils.values import constant
 
 from test.support.ir import new_context
 
@@ -52,12 +54,12 @@ class FakeGuard:
 
 
 class GuardExpressionTest(unittest.TestCase):
-    """IR generation, invalid comparisons and conservative view guards."""
+    """IR generation, invalid comparisons and local metadata guard policies."""
 
     def _build_expression(self, text: str) -> tuple[ir.Type, str]:
-        """Insert a guard expression into a textually parsed IR fixture."""
-        context = new_context()
-        with context, ir.Location.unknown(context):
+        """Parse without an IR context, then build and verify the recipe."""
+        expression = parse_expression(ast.parse(text, mode="eval").body)
+        with new_context() as context, ir.Location.unknown():
             module = ir.Module.parse(
                 """
                 module {
@@ -67,15 +69,43 @@ class GuardExpressionTest(unittest.TestCase):
                 }
                 """
             )
-            function = module.body.operations[0]
-            block = function.regions[0].blocks[0]
-            with ir.InsertionPoint(block.operations[-1]):
-                code = ASTCode(text, ast.parse(text, mode="eval").body)
-                result = code.build(None, context)  # type: ignore[arg-type]
+            [function] = module.body.operations
+            [region] = function.regions
+            [block] = region.blocks
+            *_, terminator = block.operations
+            with ir.InsertionPoint(terminator):
+                result = expression.build(ExpressionContext(text, None, context))
             self.assertTrue(module.operation.verify())
-            result_type = result.type
+            result_type = result.type.payload_type
             module_text = str(module)
         return result_type, module_text
+
+    def test_comparison_reads_with_special_metadata(self) -> None:
+        cases = (
+            ("0 <= len(L['xs']) <= 2", 1),
+            ("1 < len(L['xs']) < L['unused'].storage_offset()", 0),
+        )
+        for text, reads in cases:
+            with (
+                self.subTest(text=text),
+                new_context() as context,
+                ir.Location.unknown(),
+            ):
+                tuple_type = tvm_ffi_d.TupleType.get([tvm_ffi_d.IntType.get()])
+                result_type = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+                module = ir.Module.create()
+                with ir.InsertionPoint(module.body):
+                    function = func.FuncOp("guard", ([tuple_type], [result_type]))
+                    block = function.add_entry_block()
+                with ir.InsertionPoint(block):
+                    [argument] = block.arguments
+                    scope = Scope(argument, {"xs": Scope(argument)})
+                    code = ASTCode.parse(text, None)
+                    assert code is not None
+                    func.return_(code.build_result(scope, context))
+                self.assertTrue(module.operation.verify())
+                self.assertEqual(str(module).count('"ffi.ArraySize"'), reads)
+                self.assertNotIn("tensor.storage_offset", str(module))
 
     def test_container_length_extracts_nested_input(self) -> None:
         for container in (tvm_ffi_d.ArrayType, tvm_ffi_d.TupleType):
@@ -91,10 +121,6 @@ class GuardExpressionTest(unittest.TestCase):
                     else container.get([tensor, tensor])
                 )
                 array = tvm_ffi_d.ArrayType.get(type_)
-                builder = InputTableBuilder(
-                    [("xs", InputNodeBuilder(array, [InputNodeBuilder(type_)]))],
-                    ["xs"],
-                )
                 text = "len(L['xs'][0]) == 2"
                 code = ASTCode(text, ast.parse(text, mode="eval").body)
                 module = ir.Module.create()
@@ -103,7 +129,9 @@ class GuardExpressionTest(unittest.TestCase):
                     function = func.FuncOp("guard", ([array], [result_type]))
                     block = function.add_entry_block()
                 with ir.InsertionPoint(block):
-                    results = code.build_result(builder.build(block.arguments), context)
+                    [argument] = block.arguments
+                    scope = Scope(argument, {"xs": Scope(argument)})
+                    results = code.build_result(scope, context)
                     func.return_(results)
                 self.assertEqual([result.type for result in results], [result_type])
                 self.assertTrue(module.operation.verify())
@@ -117,14 +145,90 @@ class GuardExpressionTest(unittest.TestCase):
                 else:
                     self.assertIn("tvm_ffi.array.size", module_text)
 
+    def test_incompatible_conditional_branches(self) -> None:
+        text = "1 if True else 'other'"
+        with self.assertRaisesRegex(
+            AssertionError, "conditional guard branches must have the same type"
+        ) as caught:
+            self._build_expression(text)
+        self.assertIn(repr(text), str(caught.exception))
+
+    def test_input_reads_reuse_local_bindings(self) -> None:
+        for text in (
+            "L['xs'][0] + L['xs'][0] == 2",
+            "len(L['xs']) == L['xs'][0] == L['xs'][0]",
+        ):
+            with (
+                self.subTest(text=text),
+                new_context() as context,
+                ir.Location.unknown(),
+            ):
+                integer = tvm_ffi_d.IntType.get()
+                array = tvm_ffi_d.ArrayType.get(integer)
+                result_type = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+                module = ir.Module.create()
+                with ir.InsertionPoint(module.body):
+                    function = func.FuncOp("guard", ([array], [result_type]))
+                    block = function.add_entry_block()
+                with ir.InsertionPoint(block):
+                    [argument] = block.arguments
+                    root = Scope(argument, {"xs": Scope(argument)})
+                    expression_context = ExpressionContext(text, root, context)
+                    expression = parse_expression(ast.parse(text, mode="eval").body)
+                    results = [expression.build(expression_context)]
+                    # Values produced in bind bodies must not escape via the cache.
+                    parse_expression(ast.parse("L['xs'][0]", mode="eval").body).build(
+                        expression_context
+                    )
+                    func.return_(results)
+                self.assertIsNone(root["xs"].get(0))
+                self.assertTrue(module.operation.verify())
+                if text.startswith("L["):
+                    self.assertEqual(str(module).count("tvm_ffi.array.get"), 1)
+
+    def test_input_scope_restored_after_construction_failure(self) -> None:
+        # The second operand fails inside its bind while the outer bind is entering.
+        text = "len(L['xs']) + len(L['xs'][0])"
+        with new_context() as context, ir.Location.unknown():
+            array = tvm_ffi_d.ArrayType.get(tvm_ffi_d.IntType.get())
+            module = ir.Module.create()
+            with ir.InsertionPoint(module.body):
+                function = func.FuncOp("guard", ([array], []))
+                block = function.add_entry_block()
+            with ir.InsertionPoint(block):
+                [argument] = block.arguments
+                root = Scope(argument, {"xs": Scope(argument)})
+                expression_context = ExpressionContext(text, root, context)
+                expression = parse_expression(ast.parse(text, mode="eval").body)
+                with self.assertRaisesRegex(AssertionError, "len requires a container"):
+                    expression.build(expression_context)
+                self.assertIs(expression_context.scope, root)
+                self.assertIsNone(root["xs"].get(0))
+                self.assertEqual(ir.InsertionPoint.current.block, block)
+            # A failed construction leaves incomplete IR; discard the module.
+
     def test_invalid_comparisons(self) -> None:
         for text, message in (
             ("L['x'] is L['y'] is L['z']", "identity guard comparison must be binary"),
             ("1 in (1, 2)", "unsupported guard comparison operator"),
+            (
+                "L['x']._base.size()[0] + unsupported() == 0",
+                "unsupported guard syntax",
+            ),
         ):
             with (
                 self.subTest(text=text),
-                self.assertRaisesRegex(AssertionError, message),
+                self.assertRaisesRegex(UnsupportedExpression, message),
+            ):
+                self._build_expression(text)
+
+    def test_invalid_unobservable_metadata(self) -> None:
+        for text in ("L['x']._base", "L['x'].storage_offset()"):
+            with (
+                self.subTest(text=text),
+                self.assertRaisesRegex(
+                    UnsupportedExpression, "requires a local comparison"
+                ),
             ):
                 self._build_expression(text)
 
@@ -173,7 +277,7 @@ class GuardExpressionTest(unittest.TestCase):
             ),
             (
                 "mixed_boolean_integer",
-                "True | 2",
+                "True | 1",
                 tvm_ffi_d.IntType,
                 (
                     "arith.extui",
@@ -182,6 +286,12 @@ class GuardExpressionTest(unittest.TestCase):
             ),
             ("negation", "-1", tvm_ffi_d.IntType, ("arith.subi",)),
             ("select", "1 if True else 2", tvm_ffi_d.IntType, ("scf.if",)),
+            (
+                "storage_offset_expression",
+                "L['x'].storage_offset() + 1 != 2",
+                tvm_ffi_d.BoolType,
+                ("tvm_ffi.constant.bool true",),
+            ),
             (
                 "string_equality",
                 "'name' == 'name'",
@@ -204,28 +314,150 @@ class GuardExpressionTest(unittest.TestCase):
                 self.assertNotIn("arith.constant", module)
                 self.assertNotIn("torch.aten.", module)
 
-    def test_tensor_base_fallback(self) -> None:
+    def test_tensor_base_comparison(self) -> None:
         with self.assertWarnsRegex(RuntimeWarning, "Tensor\\._base guard"):
             result_type, module = self._build_expression("L['x']._base.size()[0] == 1")
         self.assertIsInstance(result_type, tvm_ffi_d.BoolType)
         self.assertIn("tvm_ffi.constant.bool true", module)
 
 
+class DispatcherTreeTest(unittest.TestCase):
+    """Ordered prefix sharing and module-local SSA lifetimes."""
+
+    def _build_dispatcher(self, dispatcher: Root) -> ir.Module:
+        module = ir.Module.create()
+        any_type = tvm_ffi_d.AnyType.get()
+
+        def add_functions(
+            node: Node | Root, input_types: tuple[ir.Type, ...] = ()
+        ) -> None:
+            if isinstance(node, ExecutionNode):
+                function = tvm_ffi_d.FuncOp(
+                    node.graph_symbol,
+                    ir.TypeAttr.get(
+                        ir.FunctionType.get(
+                            input_types,
+                            [any_type],
+                        )
+                    ),
+                    sym_visibility="private",
+                )
+                with ir.InsertionPoint(function.add_entry_block()):
+                    tvm_ffi_d.return_(
+                        constant(True),
+                        tvm_ffi_d.upcast(any_type, constant(0)),
+                    )
+            else:
+                assert isinstance(node, (GuardNode, Root, SCMNode))
+                if isinstance(node, SCMNode):
+                    input_types = tuple(node.input_types.values())
+                for child in node.children:
+                    add_functions(child, input_types)
+
+        with ir.InsertionPoint(module.body):
+            add_functions(dispatcher)
+            function = tvm_ffi_d.PackFuncOp(
+                "dispatch",
+                ir.TypeAttr.get(
+                    ir.FunctionType.get([tvm_ffi_d.PackArgumentsType.get()], [any_type])
+                ),
+            )
+            with ir.InsertionPoint(function.add_entry_block()) as ip:
+                [arguments] = ip.block.arguments
+                success, payload = dispatcher.build(Scope(arguments))
+                tvm_ffi_d.return_(success, payload)
+        self.assertTrue(module.operation.verify())
+        return module
+
+    def test_ordered_prefix_and_fresh_modules(self) -> None:
+        with new_context(), ir.Location.unknown():
+            input_types = {"x": tvm_ffi_d.IntType.get()}
+            checks = [["L['x'] >= 0", f"L['x'] < {index + 1}"] for index in range(3)]
+            dispatcher = Root()
+            for index, texts in enumerate(checks):
+                dispatcher.add(
+                    parse_guards([FakeGuard("SHAPE_ENV", texts)]),
+                    input_types,
+                    f"run_{index}",
+                )
+            self.assertEqual(len(dispatcher.children), 1)
+            # Reuse recipes and the planned tree, but rebuild all SSA in each module.
+            for _ in range(2):
+                module = self._build_dispatcher(dispatcher)
+                self.assertNotIn("tvm_ffi.pack.size", f"{module}")
+                self.assertNotIn("tvm_ffi.isa", f"{module}")
+                self.assertEqual(f"{module}".count("arith.cmpi sge"), 1)
+            previous = f"{module}"
+            dispatcher.add(
+                parse_guards([FakeGuard("SHAPE_ENV", ["L['x'] >= 0", "L['x'] < 4"])]),
+                input_types,
+                "run_3",
+            )
+            updated = self._build_dispatcher(dispatcher)
+            self.assertNotIn("@run_3", previous)
+            self.assertIn("tvm_ffi.pack.call @run_3", f"{updated}")
+            self.assertEqual(f"{updated}".count("arith.cmpi sge"), 1)
+            self.assertEqual(f"{module}", previous)
+            self.assertTrue(module.operation.verify())
+
+    def test_signature_boundaries(self) -> None:
+        with new_context(), ir.Location.unknown():
+            int_type, float_type = tvm_ffi_d.IntType.get(), tvm_ffi_d.FloatType.get()
+            dispatcher = Root()
+            signatures = (
+                {"x": int_type, "y": float_type},
+                {"y": float_type, "x": int_type},
+                {"x": int_type, "y": float_type},
+                {"x": float_type, "y": float_type},
+                {"z": float_type, "y": float_type},
+            )
+            for index, signature in enumerate(signatures):
+                dispatcher.add((), signature, f"run_{index}")
+            self.assertEqual(len(dispatcher.children), len(signatures))
+            self._build_dispatcher(dispatcher)
+
+
 class GuardParsingTest(unittest.TestCase):
-    """Guard dispatch, code composition, metadata and rejected inputs."""
+    """Content-based parsing, code composition, metadata and rejected inputs."""
 
     def _assert_parsed(
         self,
         guard: FakeGuard,
-        kind: type[Guard],
         code_types: tuple[type[GuardCode], ...],
-    ) -> Guard:
-        parsed = Guard.parse(guard)
-        self.assertIsInstance(parsed, kind)
-        assert parsed is not None
-        self.assertEqual(tuple(type(item) for item in parsed.codes), code_types)
-        self.assertEqual(parsed.source, Local.parse(guard.name))
+    ) -> tuple[GuardCode, ...]:
+        parsed = parse_guards([guard])
+        self.assertEqual(tuple(type(item) for item in parsed), code_types)
+        source = (
+            ast.parse(guard.name.removesuffix(".shape"), mode="eval").body
+            if guard.name
+            else None
+        )
+        for code in parsed:
+            self.assertEqual(
+                None if code.source is None else ast.dump(code.source),
+                None if source is None else ast.dump(source),
+            )
         return parsed
+
+    def test_code_ordering_and_deduplication(self) -> None:
+        general = "L['x'] >= 0"
+        rank = "L['x'].ndimension() == 2"
+        scalar = "L['n'] == 3"
+        other = "L['x'].size()[0] >= 2"
+        codes = parse_guards(
+            [
+                FakeGuard("UNKNOWN", [general, rank, scalar, other], "L['x']"),
+                FakeGuard("CONSTANT_MATCH", [scalar], "L['n']"),
+                FakeGuard("SHAPE_ENV", ['L["n"] == 3']),
+            ]
+        )
+        self.assertEqual(
+            tuple(type(code) for code in codes),
+            (TensorRankCode, ASTCode, ASTCode, ASTCode),
+        )
+        self.assertEqual(tuple(code.priority for code in codes), (1, 1, 2, 2))
+        _, _, *remaining = codes
+        self.assertEqual(tuple(code.text for code in remaining), (general, other))
 
     def test_constant_values(self) -> None:
         supported = (
@@ -239,28 +471,21 @@ class GuardParsingTest(unittest.TestCase):
         )
         for text in supported:
             with self.subTest(text=text):
-                parsed = self._assert_parsed(
+                self._assert_parsed(
                     FakeGuard("CONSTANT_MATCH", [text], "L['value']"),
-                    ConstantMatchGuard,
-                    (ConstantCode,),
-                )
-                code = parsed.codes[0]
-                assert isinstance(code, ConstantCode)
-                self.assertEqual(
-                    ast.dump(code.expression, include_attributes=False),
-                    ast.dump(
-                        ast.parse(text, mode="eval").body, include_attributes=False
-                    ),
+                    (ASTCode,),
                 )
 
     def test_invalid_device(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "Invalid device string"):
-            Guard.parse(
-                FakeGuard(
-                    "TENSOR_MATCH",
-                    ["str(L['x'].device) == 'not-a-device'"],
-                    "L['x']",
-                )
+            parse_guards(
+                [
+                    FakeGuard(
+                        "TENSOR_MATCH",
+                        ["str(L['x'].device) == 'not-a-device'"],
+                        "L['x']",
+                    )
+                ]
             )
 
     def test_rejected_guards(self) -> None:
@@ -281,24 +506,27 @@ class GuardParsingTest(unittest.TestCase):
             ),
             ("constant_missing_code", FakeGuard("CONSTANT_MATCH", None, "L['x']")),
             (
-                "constant_multiple_codes",
-                FakeGuard("CONSTANT_MATCH", ["L['x'] == 1", "L['x'] == 2"], "L['x']"),
+                "mixed_unsupported_code",
+                FakeGuard("UNKNOWN", ["L['x'] >= 0", "unsupported(L['x'])"], "L['x']"),
             ),
             (
-                "constant_not_equal",
-                FakeGuard("CONSTANT_MATCH", ["L['value'] != 1"], "L['value']"),
+                "shape_invalid_type_template",
+                FakeGuard(
+                    "SEQUENCE_LENGTH",
+                    [
+                        "len(L['x'].shape) == 2",
+                        "___check_type_id(L['y'].shape, 1), type=<class 'torch.Size'>",
+                    ],
+                    "L['x'].shape",
+                ),
             ),
             (
-                "constant_reversed_operands",
-                FakeGuard("CONSTANT_MATCH", ["1 == L['value']"], "L['value']"),
-            ),
-            (
-                "shape_env_local_source",
-                FakeGuard("SHAPE_ENV", ["L['x'].size()[0] == 2"], "L['x']"),
-            ),
-            (
-                "tensor_rank_inequality",
-                FakeGuard("TENSOR_MATCH", ["L['x'].ndimension() >= 2"], "L['x']"),
+                "shape_unsupported_code",
+                FakeGuard(
+                    "SEQUENCE_LENGTH",
+                    ["len(L['x'].shape) == 2", "unsupported(L['x'])"],
+                    "L['x'].shape",
+                ),
             ),
             (
                 "type_match_object_identity",
@@ -308,16 +536,48 @@ class GuardParsingTest(unittest.TestCase):
         )
         for name, guard in cases:
             with self.subTest(case=name):
-                self.assertIsNone(Guard.parse(guard))
+                with self.assertRaisesRegex(
+                    AssertionError, "unsupported Dynamo guard"
+                ) as caught:
+                    parse_guards([guard])
+                self.assertIn(guard.create_fn, str(caught.exception))
+                self.assertIn(repr(guard.name), str(caught.exception))
+                if guard.code_list:
+                    *_, last_code = guard.code_list
+                    self.assertIn(repr(last_code), str(caught.exception))
 
-    def test_supported_kinds(self) -> None:
+    def test_shape_source(self) -> None:
+        self._assert_parsed(
+            FakeGuard(
+                "SEQUENCE_LENGTH",
+                [
+                    "___check_type_id(L['x'].shape, 1), type=<class 'torch.Size'>",
+                    "len(L['x'].shape) == 2",
+                ],
+                "L['x'].shape",
+            ),
+            (TypeIdCode, ASTCode),
+        )
+
+    def test_supported_expressions(self) -> None:
         cases = (
             (
-                FakeGuard("DUPLICATE_INPUT", ["L['x'] is L['y']"], "L['x']"),
-                DuplicateInputGuard,
+                FakeGuard("CONSTANT_MATCH", ["L['x'] == 1", "L['x'] == 2"], "L['x']"),
+                (ASTCode, ASTCode),
+            ),
+            (
+                FakeGuard("CONSTANT_MATCH", ["L['value'] != 1"], "L['value']"),
                 (ASTCode,),
             ),
-            (FakeGuard("GLOBAL_STATE", None), IgnoredGuard, ()),
+            (
+                FakeGuard("CONSTANT_MATCH", ["1 == L['value']"], "L['value']"),
+                (ASTCode,),
+            ),
+            (
+                FakeGuard("DUPLICATE_INPUT", ["L['x'] is L['y']"], "L['x']"),
+                (ASTCode,),
+            ),
+            (FakeGuard("GLOBAL_STATE", None), ()),
             (
                 FakeGuard(
                     "SEQUENCE_LENGTH",
@@ -327,9 +587,13 @@ class GuardParsingTest(unittest.TestCase):
                     ],
                     "L['xs']",
                 ),
-                SequenceLengthGuard,
                 (TypeIdCode, ASTCode),
             ),
+            (
+                FakeGuard("SHAPE_ENV", ["L['x'].size()[0] == 2"], "L['x']"),
+                (ASTCode,),
+            ),
+            (FakeGuard("SHAPE_ENV", None), ()),
             (
                 FakeGuard(
                     "SHAPE_ENV",
@@ -338,8 +602,11 @@ class GuardParsingTest(unittest.TestCase):
                         "L['x'].size()[1] == 4 * L['y'].size()[1]",
                     ],
                 ),
-                ShapeEnvGuard,
                 (ASTCode, ASTCode),
+            ),
+            (
+                FakeGuard("TENSOR_MATCH", ["L['x'].ndimension() >= 2"], "L['x']"),
+                (ASTCode,),
             ),
             (
                 FakeGuard(
@@ -347,13 +614,17 @@ class GuardParsingTest(unittest.TestCase):
                     ["___check_type_id(L['xs'][0], 2), type=<class 'torch.Tensor'>"],
                     "L['xs'][0]",
                 ),
-                TypeMatchGuard,
                 (TypeIdCode,),
             ),
+            (
+                FakeGuard("UNKNOWN", ["L['x'] >= 0"], "L['x']"),
+                (ASTCode,),
+            ),
+            (FakeGuard("UNKNOWN", ["unsupported()"], "G['x']", GuardSource.GLOBAL), ()),
         )
-        for guard, kind, code_types in cases:
+        for guard, code_types in cases:
             with self.subTest(kind=guard.create_fn):
-                self._assert_parsed(guard, kind, code_types)
+                self._assert_parsed(guard, code_types)
 
     def test_tensor_metadata(self) -> None:
         code_list = [
@@ -366,7 +637,6 @@ class GuardParsingTest(unittest.TestCase):
         ]
         parsed = self._assert_parsed(
             FakeGuard("TENSOR_MATCH", code_list, "L['xs'][0]"),
-            TensorMatchGuard,
             (
                 TypeIdCode,
                 TensorDTypeCode,
@@ -376,7 +646,9 @@ class GuardParsingTest(unittest.TestCase):
                 DynamoAttributeAbsentCode,
             ),
         )
-        _, dtype, device, grad, rank, attribute = parsed.codes
+        guard = FakeGuard("TENSOR_MATCH", code_list, "L['xs'][0]")
+        self.assertEqual(len(parse_guards([guard, guard])), len(code_list))
+        _, dtype, device, grad, rank, attribute = parsed
         assert isinstance(dtype, TensorDTypeCode)
         assert isinstance(device, TensorDeviceCode)
         assert isinstance(grad, RequiresGradCode)

@@ -11,38 +11,37 @@ FFI. The LLVM revision remains pinned in the top-level CMake file.
 ## Frontend and symbolic values
 
 `python/trident/backend.py` captures a graph and its Dynamo guards. It exports
-without running functionalization or decompositions, executes a warmup to populate
-Triton's compilation cache, and calls `TridentFxImporter.import_program`.
-Warmup is the first execution, including its mutations; cached calls execute the
-compiled program. A private `tvm_ffi.func` holds the graph, and a public
-`tvm_ffi.func` checks guards and exposes the packed ABI. The Python executor
-converts runtime tensors through DLPack and reconstructs the output pytree.
-The semantic `tvm_ffi.pack.func` dispatcher tries packed specializations in order with
-`tvm_ffi.pack.call`, tests successful payloads with `tvm_ffi.isa`, and propagates
-runtime call failures. Automatic ownership releases rejected Exception payloads.
+without running functionalization or decompositions, executes a warmup to
+populate Triton's compilation cache, and calls
+`TridentFxImporter.import_program`. Warmup is the first execution, including its
+mutations; cached calls execute the compiled program. Private `tvm_ffi.func`
+functions hold each graph and adapt original parameters to FX inputs internally;
+the Python guard tree generates the dispatcher CFG and forwards the original pack. The Python executor converts runtime
+tensors through DLPack and reconstructs the output pytree. The semantic
+`tvm_ffi.pack.func` dispatcher tries ordered specializations through a native
+execute-region state machine, selecting the first candidate whose guards match and returning its execution
+result without retrying. Automatic ownership releases rejected Exception payloads.
 The combined module, including the dispatcher, is lowered in one pipeline.
 
 `importer.py` maps FX nodes to SSA values. Tensors use `!tvm_ffi.tensor` and
 retain reference semantics. Graph traversal binds call results through one path;
-call dispatch handles scalar operations, ATen and higher-order operators.
-The current-node dispatcher delegates ATen, cond, kernel and scalar construction
-to dedicated methods; ATen construction owns schema selection and argument
-conversion. Checked-call helpers return complete Results; callers bind them
-explicitly. Private graph functions use Results internally and pack successful
-outputs at
-their `tvm_ffi.return` boundary. Graph rejection returns a successful GuardMatch
-payload; the guard wrapper calls the graph through its packed ABI.
-An in-place ATen call operates on the original object, and views keep their
-storage aliases. ATen calls use the schema to
-order positional and keyword arguments, fill defaults, select a scalar overload
-when FX recorded a Python scalar in a tensor overload, and name the existing
+call dispatch handles scalar operations, ATen and higher-order operators. The
+visitor constructs ATen, cond, kernel and scalar operations directly in their
+dispatch branches, including ATen schema selection and argument conversion.
+Checked-call helpers return complete Results; callers bind them explicitly. Private graph functions use Results internally and pack successful
+outputs at their `tvm_ffi.return` boundary. Graph rejection returns a successful
+GuardMatch payload; each execution leaf forwards the original argument pack
+through `tvm_ffi.pack.call`. An in-place ATen call operates on the original
+object, and views keep their storage aliases. ATen calls use the schema to order positional and keyword
+arguments, fill defaults, select a scalar overload when FX recorded a Python
+scalar in a tensor overload, and name the existing
 `trident.aten.<operator>[.<overload>]` registry wrapper. Dtype arguments pass
-through `trident.runtime.tvm_ffi_to_torch_type` to obtain the integer expected by
-ATen's boxed schema. Multiple ATen results are retrieved from an FFI Array.
+through `trident.runtime.tvm_ffi_to_torch_type` to obtain the integer expected
+by ATen's boxed schema. Multiple ATen results are retrieved from an FFI Array.
 
 SymInt, SymFloat and SymBool values use TVM FFI Int, Float and Bool throughout
 Python construction, including constants, symbol bindings and graph-node results.
-Shared Python arithmetic builders in `ir.py` own type unification and emit native
+Shared Python arithmetic builders in `utils/values.py` own type unification and emit native
 `arith` operations. They extract temporary native `i64`, `f64` and `i1` SSA values
 with `tvm_ffi.get`, widen operands and immediately wrap results with `tvm_ffi.to`.
 Bool-to-Int uses zero extension, Bool-to-Float uses unsigned conversion and
@@ -57,9 +56,10 @@ use example hints; unbound symbols produce an explicit import error.
 `torch.cond` imports its branches into `scf.if`, extracting only its predicate
 and retaining monadic Result values.
 
-`ir.py` shares scalar arithmetic builders, constants, metadata and Result
-construction with the guard frontend. Numeric constants use
-`tvm_ffi.constant.bool/int/float` directly. `make_result_types` wraps CABI
+`utils/values.py` shares scalar arithmetic and constant builders with the
+guard frontend; `utils/monad.py` owns Result construction and lexical scopes.
+Numeric constants use `tvm_ffi.constant.bool/int/float` directly.
+Importer-local `_make_result_types` wraps CABI
 payload types and supplies the None default for empty sequences.
 `pure(value, result_type=...)` accepts one semantic payload and returns one Result
 value. It infers the CABI Result type unless the caller declares a boundary
@@ -67,9 +67,9 @@ type, and widens semantic values at Any/Union boundaries. Neither Result nor
 container construction implicitly accepts native scalar types or values.
 Bind arguments retain their CABI types; consumers extract native scalars only
 within a local builder or at an interface requiring them. No-data success uses
-`pure(constant(None))` explicitly. Shared `checked_call` and
-`container_get` builders construct registry calls and typed container extraction
-without depending on the graph importer. The shared `BINARY_ARITHMETIC` operation
+`pure(constant(None))` explicitly. Shared `checked_call` constructs registry
+calls; importer-local `_container_get` wraps typed container extraction in
+Results. Guards use shared builders without depending on the graph importer. The shared `BINARY_ARITHMETIC` operation
 mappings also define the supported FX scalar operations; the importer only normalizes symbolic min/max
 aliases.
 Each asserting FFI call checks lookup success, a non-null handle and call success;
@@ -211,49 +211,210 @@ interfaces.
 
 ## Guards and containers
 
-Guards are parsed into `GuardCode`, `Guard` and collection objects under
-`python/trident/guards/`. `InputTableBuilder` maps function arguments and nested
-list/tuple paths to semantic values. Lists use `!tvm_ffi.array<T>` with a common
-semantic element type, or `!tvm_ffi.any` for empty or heterogeneous lists. Tuples
-retain one type per element. `array_type` infers a common semantic element type;
-`TupleType.get` preserves each semantic element type independently. Nested
-containers preserve this structure. Strings use semantic Str throughout the frontend, including Result payloads
-and nested container elements. Decomposition admits RawStr, SmallStr and CStr
-representations after runtime container normalization.
-The frontend emits `array.create/get/size` and `tuple.construct/unconstruct`.
-Array construction and extraction return their array/element types directly;
-array size returns a boxed integer directly. Tuple construct directly packs elements into a semantic Tuple;
-unconstruct directly returns all elements in order, including zero results for
-an empty Tuple. Tuple indexing selects an unconstruct result, normalizes negative
-indices and checks static bounds; static length comes from the Tuple type.
-Container decomposition checks lookup status, non-null handles and call status with
-runtime assertions that terminate on failure. Array indexing uses a
-native i64; runtime failures terminate through assertions. `InputTable.extract`
-builds fresh complete Results for a path; `extract_many` reconstructs leaf
-inputs in exported order. Extraction is lazy in its consumer block. Guards use
-these table methods and shared IR builders directly, without a graph importer.
-Tuple length guards retain checked runtime `ffi.ArraySize` calls: wrapper inputs
-must validate arity before trusting their static tuple schema.
-A single input-node implementation handles leaves and containers; each fresh
-table holds explicit root or consumer-local payload bindings without caching
-extraction Results. Scalar guards return TVM FFI values from local arithmetic and comparisons; tensor metadata uses existing semantic
-metadata operations. Guard collections build structured short-circuit branches
-with fresh input tables per region and explicitly bind fallible extraction
-Results. A failed specialization returns `!tvm_ffi.exception` widened to
-`!tvm_ffi.any`, so the dispatcher can try another specialization or request
-compilation.
+`parse_guards` in `python/trident/guards/parser.py` converts Dynamo guard code lists
+directly into a tuple of `GuardCode` recipes. The parser tries specialized
+regex templates before general AST expressions, without a Dynamo-category
+registry or wrapper objects. Support depends on each code's contents, including
+codes from previously unknown categories. Guard sources remain Python `ast.Subscript` expressions;
+there is no separate Local object. The context-free `utils/guards.py` module recognizes
+these expressions and converts them to lists of path components in a single
+`input_path` traversal, returning None for other syntax; Scope only
+manages materialized SSA bindings. `TridentGraphModule.compile` in
+`python/trident/backend.py` constructs a signature-ordered parameter-name-to-type
+mapping and export input-name-to-path bindings by traversing exported example
+inputs.
+Parameter binding uses the function signature; traversal preserves positional
+and keyword export order. The backend reuses that signature for cached calls
+and converts input leaves, including defaults, at invocation. The first call
+exports directly; an executor is built only after a specialization exists.
+SCMNode retains only this entry signature;
+there is no full-path type table or placeholder Scope tree. Scope in `python/trident/guards/scope.py` represents only
+materialized inputs: every node requires an `ir.Value`, and its type comes directly
+from that value. Its children contain only inputs already read in the current
+lexical region. The root holds the actual packed arguments. Scope nodes contain
+no static input-type mapping; types come from their values and container elements.
 
-Tensor identity and `_base` guards retain their existing conservative handling;
+`scope[key]` looks up one materialized child and raises KeyError when absent.
+It delegates to `scope.get(key)`, which returns None for a missing child.
+`scope.child(key)` returns the child and updated
+current node. An existing child returns unchanged with `self`; a missing child
+is read directly at the current insertion point and inserted in a copied child map.
+Container reads are assumed valid and create no Monad bind regions.
+Tuple children use their position's type; Array children use the element type.
+`child` requires an Array or Tuple for a missing integer child. Path traversal
+performs no implicit container casts; heterogeneous Array elements remain Any
+until a consuming operation explicitly narrows them.
+`scope.read(path)` returns `(value, updated_root)`, reconnecting child updates
+through every ancestor and sharing unchanged subtrees. Callers retain the returned
+root for subsequent reads in the same domain, without changing the previous
+version. Torch device/dtype pytree registrations live in
+`python/trident/pytree.py` and load before export.
+Lists use `!tvm_ffi.array<T>` with a common semantic element type, or
+`!tvm_ffi.any` for empty or heterogeneous lists. Tuples retain one type per element. `array_type` infers a common semantic
+element type; `TupleType.get` preserves each semantic element type
+independently. Nested containers preserve this structure. Strings use semantic
+Str throughout the frontend, including Result payloads and nested container
+elements. Decomposition admits RawStr, SmallStr and CStr representations after
+runtime container normalization. The frontend emits `array.create/get/size` and
+`tuple.construct/unconstruct`. Array construction and extraction return their
+array/element types directly; array size returns a boxed integer directly. Tuple
+construct directly packs elements into a semantic Tuple; unconstruct directly
+returns all elements in order, including zero results for an empty Tuple. Tuple
+indexing selects an unconstruct result, normalizes negative indices and checks
+static bounds; static length comes from the Tuple type. Container decomposition
+checks lookup status, non-null handles and call status with runtime assertions
+that terminate on failure. Array indexing uses a native i64; runtime failures
+terminate through assertions. `Scope.extract(input_path)` returns
+`(fresh_result, updated_root)`: it calls `read` and wraps the payload in `pure`.
+Repeated reads through the updated root reuse the payload, but never the Result.
+Materialization itself returns direct SSA values without Monad regions.
+The importer retains execution-local parameter Scope versions across FX input
+bindings, sharing repeated paths and common prefixes.
+Extraction is lazy in its consumer block. Guards use input paths and shared IR
+builders directly, without a graph importer.
+Tuple length guards retain checked runtime `ffi.ArraySize` calls: dispatcher
+inputs must validate arity before trusting their static tuple schema. The schema
+retains parameter container types; heterogeneous Array elements are read as Any. Scope is the
+persistent input-tree node, and its root represents a lexical binding version.
+Nodes contain a required SSA value and materialized children, with no parent
+pointer, duplicate child key or separate root wrapper. The root's packed argument
+value is real even for zero-argument functions; its typed parameter children
+use function parameter names. Materialization copies only the path to the target
+and shares unchanged nodes. Neither nodes nor child maps
+are modified in place. Extraction Results are not cached. Scalar guards return
+TVM FFI values from local arithmetic and comparisons; tensor metadata uses
+existing semantic metadata operations. `parse_guards` filters captured guard
+sources handled by export, rejects unsupported guards, deduplicates checks
+within the candidate and stably sorts recipes by priority. `Root.add` consumes
+the code sequence directly; GuardNodes retain the recipes without a collection
+wrapper or an additional cache. Each check produces a `Result<Bool>`. Dispatch
+stops a candidate on the first false Bool or failed Result; a candidate with no
+checks proceeds directly to execution.
+
+Captured sources and explicitly listed ambient guards retain their filtering
+policy. Empty shape environments are valid because Dynamo emits them for graphs
+without shape checks; other empty guards are rejected. Every non-filtered code
+must parse, and diagnostics identify its category, source and failing text.
+Shape sources resolve to their tensor input; only recognized shape type-id
+templates receive signature-covered handling, never arbitrary neighboring code.
+Constant comparisons use ASTCode with the same structural deduplication key as
+other AST expressions. Their early priority is retained independently of category,
+alongside metadata checks; other expressions follow in stable capture order.
+
+`python/trident/guards/tree.py` describes the dispatcher as a persistent `Root`
+with ordered `SCMNode`, `GuardNode` and `ExecutionNode` children. The backend
+registers each specialization with
+`Root.add(guard_codes, input_types, graph_symbol)`; there is no parallel candidate
+list or separately supplied execution-symbol map.
+Each specialization extends an ordered prefix tree ending in an execution leaf.
+Leaves own only their execution symbol. Root reuses its final SCMNode only when
+the signature-ordered parameter names and types match exactly. At each guard
+level it reuses only the final GuardNode with the same structural code key;
+otherwise it appends a new branch. Searching earlier siblings could move a later
+execution ahead of intervening candidates. Shared prefixes therefore cover
+contiguous candidates only, preserving registration order. Guard priority and
+stable capture ordering remain unchanged; checks are not reordered for sharing.
+
+Dispatcher and execution entries must share the original function's argument
+layout: the same count, signature order and container structure, including
+specialized constants, unused arguments and defaults. Execution is a private
+`tvm_ffi.func` with these original typed parameters; `lower-to-pack` converts it
+to the packed ABI accepted by the dispatcher. This is layout and ABI equality,
+not identical pre-lowering MLIR function types. The dispatcher forwards the
+original borrowed pack with `tvm_ffi.pack.call`, without extracting, reordering
+or narrowing graph arguments. FX flattening, constant selection and placeholder
+binding belong inside the execution function. The importer receives `input_types`
+and export input-name-to-path bindings through `import_program`; it reads and
+narrows values locally before binding FX nodes. A graph with no dynamic inputs
+still receives every original function parameter. No adaptation wrapper or
+additional flat graph function is generated.
+
+Root is independent of Node. `Root.build(scope)` creates a fresh
+`scf.execute_region no_inline`, entry and miss exit, builds its children with
+the supplied packed-argument Scope, and returns the success and payload values.
+Each Node implements `build(scope, fallback_block)` and returns its entry block.
+Nodes append blocks to the successor's region and use ordinary IR builders
+directly. Ordered children are emitted
+through their `build` methods in reverse construction order to connect successor
+blocks while preserving runtime order. SCMNode adapts and binds inputs in its own
+entry block; GuardNode builds one complete shared check; ExecutionNode forwards
+the original pack and returns its execution result. The caller
+supplies a fresh Scope backed by the packed arguments. SCMNode uses its static
+parameter signature to construct an emission-local root whose parameter children
+hold typed values. Consumers can share an unchanged Scope because child materialization
+never mutates an existing version. Consumers create local versions for directly
+read values and retain each updated root within that consumer. Nested bind bodies
+inherit the current version; normal and exceptional exits restore the parent
+version, keeping child-local values out of the parent and siblings. Input
+construction completes before saving the version for a bind body. Consumers
+discard their versions after use, leaving the enclosing version intact.
+The values follow ordinary SSA dominance at their insertion point.
+Scopes have neither a parent chain nor a separate node-to-SSA table. Use
+`scope` for a current tree version, `input_scope` for a materialized input subtree,
+and `input_types` for SCMNode's parameter-name-to-type mapping. Input path lists
+use `input_path` and importer `input_paths`; AST sources keep `source`.
+Monad region context managers use `bind_scope` to distinguish them from Scope
+versions. Guard AST sources resolve to lists of path components, also used for
+graph argument order, so
+node identity changes during path copying do not require remapping. Extraction
+Results remain fresh and local to their consumer. Persistent dispatcher nodes
+retain only static input types, recipes and paths, with no SSA values or blocks.
+Adding a specialization extends the tree; previously emitted modules remain
+independent.
+
+All checks use `GuardCode.build_result`, including runtime calls and nested input
+extraction. Guards must be read-only: they do not modify inputs or external state,
+and repeated checks of the same input state may be shared. There is no purity
+classification, rank-fact tracking, predicate reordering or implication analysis.
+Distinct checks keep their own expression reads. No results are cached across
+calls or reused between different prefixes.
+
+The tree emits `scf.execute_region no_inline` containing `cf.br`/`cf.cond_br`.
+SCMNode reads packed slots, downcasts them to the candidate parameter types and
+binds their names without separate arity or type-tag matching branches. Inputs
+must align with the execution signature; matching constraints belong to guards.
+Packed reads and downcasts retain their underlying assertions. Each check
+branches on Result success before inspecting its boolean payload. Failure
+propagates immediately. False branches skip the node's entire subtree and
+continue at its next sibling,
+or the enclosing fallback when there is no sibling. True branches enter its
+ordered children; exhausting those children also reaches the enclosing fallback.
+Already-matched shared prefixes are not evaluated again. Each execution leaf
+calls `main_N` with `tvm_ffi.pack.call`, forwarding the original argument pack
+even for graphs with no dynamic inputs.
+There are no per-version adaptation wrappers, separate guard functions or Guard
+dialect.
+
+Once a candidate passes all checks, its execution ends this dispatch and its
+result is returned unchanged. Specialization rejection returns successful
+GuardMatch, which Python raises as RuntimeError without retrying or compiling.
+Exhaustion without a matching candidate returns GuardMiss instead, allowing
+Python to compile a new specialization. Exception.get_kind() distinguishes these
+markers. Actual call failures propagate immediately without compilation. Common
+prefixes are shared before lowering; later IR passes may optimize other repeated
+checks without any guarantee of elimination.
+
+The persistent tree stores recipes and schemas, never SSA values. Planning needs
+no active IR context; each emission creates fresh blocks and expressions. There
+is no cross-check expression cache. Input payloads are reused only within each
+consumer's local Scope version; extraction Results remain fresh.
+TVM FFI and DLPack metadata operations retain memory-read effects. Machine exits
+yield payloads under their producer's dominance scope; borrowed CFG arguments
+cannot extend a producer's cleanup lifetime.
+
 DLPack does not expose Python wrapper identity or autograd view relationships.
+Tensor identity checks retain their warning and skipped validation. Comparisons
+depending on `_base` are locally relaxed as described below; other conditions
+in the same guard remain enforced.
 
 ## Triton kernels
 
 `importer.py` resolves the compiled Triton kernel from its warmup cache,
 imports its cubin as `gpu.binary`, and emits `tvm_ffi.kernel_launch`.
-The kernel construction method resolves the cache, builds specialization
-attributes and assembles operands. Ordered launch construction clones functional
-outputs, inserts the binary and emits the launch, returning complete Results
-for its output tensors.
+The visitor's kernel branch resolves the cache, builds specialization
+attributes and assembles operands. It clones functional outputs, inserts the
+binary and emits the launch in order, retaining complete Results for its output
+tensors.
 Each specialization has a unique binary symbol. Operands retain semantic FFI
 values and carry constant or variable specialization attributes in source
 parameter order. Variable attributes record native ABI type and divisibility;
@@ -274,7 +435,8 @@ Success means the launch path was taken, not asynchronous execution completed.
 
 ## Lowering and ownership
 
-The lowering pipeline is:
+The Python frontend has already emitted the guard CFG when the lowering pipeline
+starts. The pipeline performs these lowering steps:
 
 1. Run `lower-kernel-launch` to remove specialization attributes and construct
    guarded native launches with Monad success/rejection Results. Then run
@@ -317,9 +479,9 @@ The lowering pipeline is:
    public declarations. Output slots are written only on success;
    there is no separate typed implementation or wrapper call.
 5. Convert local typed and packed calls in TVMFFIToFunc to direct calls of
-   the generated packed ABI functions. Lift the packed preflight CFG to SCF
-   before the default inliner and symbol DCE: multi-block callees otherwise
-   cannot inline into single-block SCF branches. DLPack metadata operations
+   the generated packed ABI functions. Lift CFG to SCF before the default
+   inliner and symbol DCE. Multi-block callees otherwise cannot
+   inline into single-block SCF branches. DLPack metadata operations
    support inlining. Run CSE and canonicalization before SCF-to-CF to share
    identical predicates and propagate conditions established by enclosing
    branches. Scalar boxing/extraction and matching widen/narrow casts fold,
@@ -359,19 +521,18 @@ runtime Array construction, registry lookup or temporary reference adjustment.
 Only consumers requiring a container explicitly construct one before cleanup.
 
 `!tvm_ffi.monad.result<T>` carries one CABI payload and success state before
-monad lowering. No-data Results use an explicit None payload. `monad.bind`
-runs its continuation only when every input succeeds; input and output counts
-are independent and may be zero. Zero inputs execute unconditionally; zero
-outputs perform only conditional effects. A failed bind yields failed Results
-when outputs exist. Independent effects after a call remain inside its
-continuation, so failure suppresses them without requiring a payload dependency.
-Private graph functions and guard wrappers use local packed calls. Function
-payloads are boxed into Any during monad lowering.
+monad lowering. No-data Results use an explicit None payload. `monad.bind` runs
+its continuation only when every input succeeds; input and output counts are
+independent and may be zero. Zero inputs execute unconditionally; zero outputs
+perform only conditional effects. A failed bind yields failed Results when
+outputs exist. Independent effects after a call remain inside its continuation,
+so failure suppresses them without requiring a payload dependency. Execution
+leaves call private execution functions through `tvm_ffi.pack.call`. Function payloads are boxed into Any during monad lowering.
 
-`TridentFxImporter.visit` iterates over the original FX nodes. Node handlers
-construct only their current node and return its ordinary value structure, whose
-leaves may include complete Results. The visitor flattens this structure, binds
-its Result leaves, restores payloads in place, and continues the loop inside the
+`TridentFxImporter.visit` iterates over the original FX nodes and constructs
+the current node's ordinary value structure directly in its dispatch branches.
+The structure's leaves may include complete Results. The visitor flattens it,
+binds its Result leaves, restores payloads in place, and continues the loop inside the
 successful body. Unit Result leaves with a None payload restore to Python `None`,
 consuming their corresponding block argument. The visitor does not redispatch on
 the node target after binding. Local `BindScope` contexts keep nested insertion
@@ -396,7 +557,7 @@ actual call arguments; explicit Python None arguments retain their positions.
 Argument construction does not invoke an operator or traverse later FX nodes. Kernel clone, grid and
 launch construction likewise preserves its original order.
 
-The shared `trident.ir.Scope` abstraction manages one block's insertion point
+The shared `trident.utils.monad.Scope` abstraction manages one block's insertion point
 and exposes complete operation results. `BindScope` constructs one `MonadBindOp`;
 its `arguments` expose borrowed successful payloads in input order, including
 None payloads. Explicit `scope.yield_(results)` terminates only its own block;
@@ -435,41 +596,105 @@ Nested containers, expressions and control-flow branches remain recursive.
 use a fresh importer for each program.
 
 Python builds ordinary operations and exits without ownership attributes.
-Function entries and SCF branches use insertion points directly. Cond
-branches use independent importers sharing the parent module, and return Results for the
-parent visitor to bind. Input tables construct fresh complete Results for each
-extraction at the current insertion point, without caching Results or bind payloads.
-Explicit root and consumer-local payload bindings remain available within their
-lexical scopes. MLIR verification checks SSA visibility; frontend builders do not
-perform separate block-ancestry checks. Semantic reference lifetimes extend to
-the defining IR block's dominance-scope exit, independently of Python context-manager exits.
-Guards and backend input flattening use fresh tables. Construction exceptions propagate; discard
-an importer and its tables after a construction failure.
+Function entries and SCF branches use insertion points directly. Cond branches
+use independent importers sharing the parent module, and return Results for the
+parent visitor to bind. Input scopes construct fresh complete Results for each
+extraction at the current insertion point, without caching Results or bind
+payloads. Explicit root and consumer-local payload bindings remain available
+within their lexical scopes. MLIR verification checks SSA visibility; frontend
+builders do not perform separate block-ancestry checks. Semantic reference
+lifetimes extend to the defining IR block's dominance-scope exit, independently
+of Python context-manager exits. Input nodes bind roots in emission-local scopes;
+guard consumers use persistent tree versions for local bindings. Leaving a
+consumer discards its version; this does not delete IR or manage runtime
+references. Extraction Results remain fresh. Construction exceptions propagate;
+discard an importer and its scopes after a construction failure.
 
-Each guard-expression visitor caches one recursive analysis per AST node for its
-type, active operands, purity, fallback and checked array-size requirement.
-Synthesized operands are reused, while expression values are evaluated afresh;
-comparison chains still evaluate their intermediate operands twice. Both pure
-and fallible construction reuse the cached active operand list; comparison
-construction slices its operand pairs from that list and uses the cached
-whole-expression fallback instead of rescanning the remaining chain. Analysis
-stops at fallback so later operands are neither resolved nor built. Guard
-expressions share ordinary scalar evaluation helpers and consume pure operand
-prefixes in a loop before opening checked-operation binds. Fallible expression
-helpers return complete Results; static fallback metadata preserves
-whole-expression `_base` and storage-offset behavior without a continuation
-protocol. Previously constructed calls still run and enforce their assertions;
-fallback suppresses later operands. Guard collections return a short-circuiting
-boxed boolean Result. The backend explicitly binds this result, constructs the
-guarded branch, binds flattened inputs and forwards the packed graph result. Each `tvm_ffi.func` declares exactly one C ABI payload type;
-`tvm_ffi.return` carries a boxed success boolean and Any payload. Generic no-data
-functions can declare `!tvm_ffi.none`; generated graph and wrapper functions
+Guard expressions are organized under `python/trident/guards/expressions/`.
+`syntax.py` translates Python AST once into context-free Expression subclasses
+defined as ordinary classes in `nodes.py`. Each subclass owns its payload type
+inference and Result construction. Nodes use explicit fields for their operands,
+operators, literals and input paths rather than a kind tag interpreted by a
+central builder. `codes` retains those recipes and structural AST deduplication
+keys alongside specialized regex-based metadata codes. Unsupported syntax is
+rejected while constructing the complete tree. `BaseExpression` and
+`StorageOffsetExpression` retain their receiver nodes; rank, size and stride
+also have concrete nodes rather than a method-string dispatch. `len(x.shape)`
+and `x.ndimension()` share RankExpression.
+
+`parse_expression` only constructs the recipe; there is no separate validation
+traversal. Base and offset nodes raise the private `_UnobservableMetadata`
+exception during construction or type inference. The exception carries a
+diagnostic message and an optional warning. ComparisonExpression handles it
+locally; the public Expression.build entry converts an unhandled exception to
+UnsupportedExpression. Parsing requires neither a Scope nor an IR context.
+
+Each emission calls `expression.build(ExpressionContext(...))`. The context in
+`lowering.py` holds local Scope versions, ordered binds, scope restoration,
+length and truth conversion. It does not dispatch on node
+types. Nodes infer the types needed to declare bind and branch results without
+caching types or SSA values. The common build entry adds the original guard text
+to construction diagnostics. ASTCode converts the completed Result to a boolean
+through the context's predicate helper.
+
+Boolean guards use Bool operands and short circuit. Conditional expressions
+construct equally typed alternatives inside their own SCF branches. Comparisons
+evaluate intermediate operands once and stop on the first false comparison.
+There is no heterogeneous branch join or runtime alternative-type dispatch.
+Arithmetic requires statically numeric operands. Predicate consumers handle
+numeric values and containers; untyped input truth checks retain the existing
+container interpretation used by Dynamo's empty-sequence guards. Tuple lengths
+use checked runtime `ffi.ArraySize`, including truth checks, rather than trusting
+the static input schema.
+
+BaseExpression and StorageOffsetExpression raise `_UnobservableMetadata` through
+supported derived metadata, arithmetic and compound nodes. The first exception
+encountered during construction propagates to the enclosing comparison. The
+complete AST is parsed before construction, so unsupported sibling syntax still
+fails rather than being hidden by metadata relaxation.
+
+ComparisonExpression catches the metadata exception and relaxes the entire
+comparison to a successful boolean-true Result. There are no restrictions on
+the comparison operator, other operand or arithmetic wrapping. A comparison
+chain is one comparison node, so `1 < 0 < x.storage_offset()` also passes in its
+entirety. Encountered `_base` exceptions produce a RuntimeWarning at construction
+time. Standalone unobservable metadata fails when built rather than when parsed.
+
+A comparison remembers its insertion block's existing operations and Scope
+before construction. If metadata interrupts construction, lexical scopes unwind,
+then the comparison restores the Scope and erases its newly inserted operations
+in reverse order. This removes incomplete bind and branch regions before
+returning true, leaving verifiable IR without a separate validation traversal or
+preflight. Ordinary construction failures still propagate. Normal comparisons
+retain single evaluation of intermediate operands and short-circuit behavior;
+subsequent passes can clean up valid redundant IR.
+
+These are explicit guard relaxations, not equivalent constant folds. Surrounding
+boolean operators, negation and conditional expressions retain their ordinary
+semantics. Relaxation applies to the enclosing comparison node, not the whole
+guard. There is no eager prefix. Model storage-offset metadata, model computation
+and FFI behavior remain unchanged; subsequent MLIR passes perform ordinary
+constant and control-flow cleanup.
+
+All expression construction returns complete Results through one entry point;
+there is no parallel bare-value evaluator or purity shortcut. Operand construction
+uses ordered binds and consumer-local persistent Scope versions. Standard
+context managers restore the enclosing version on normal and exceptional branch
+and bind exits, keeping local SSA out of siblings and parents. The canonicalizer
+removes binds over pure inputs. GuardCode's
+`build_result` converts the final expression to a boxed boolean Result. The
+dispatcher tree emits shared prefix checks and ordered short-circuit branches
+directly into an execute-region CFG. Each execution leaf forwards the original
+argument pack and returns the execution success and payload. Each `tvm_ffi.func`
+declares exactly one C ABI payload type; `tvm_ffi.return` carries a boxed success boolean and Any payload.
+Generic no-data functions can declare `!tvm_ffi.none`; generated graph functions
 declare Any so they can also return GuardMatch. Private graph helpers bind
 internal Results, pack successful payloads and use `tvm_ffi.return`. Packed
-output slots are read and written only on success. Multiple
-values are packed into a semantic tuple payload before returning. Guard
-rejection and Triton specialization failure remain successful `GuardMatch`
-values, requesting another specialization; runtime FFI failures return nonzero
+output slots are read and written only on success. Multiple values are packed
+into a semantic tuple payload before returning. Dispatch exhaustion returns
+successful `GuardMiss`, requesting a new specialization. Triton specialization
+rejection returns successful `GuardMatch`, which Python raises as RuntimeError
+without trying another candidate or compiling. Runtime FFI failures return nonzero
 status without inspecting output payloads.
 
 Lowered Results are runtime Array tuples containing a boxed boolean and payload.
@@ -482,7 +707,8 @@ ownership attribute is needed.
 whitelist. Synchronous nested regions may borrow captured semantic references;
 local producers register cleanup in their own region. Region boundaries carrying
 semantic values require dedicated ownership conversion patterns. Functions,
-explicit defer bodies, `scf.if`, `scf.for` and `scf.while` are supported;
+explicit defer bodies, `scf.execute_region`, `scf.if`, `scf.for` and
+`scf.while` are supported;
 unsupported semantic boundaries fail legalization. Cleanup region structure is
 validated by `lower-tvm-ffi-defer`. This policy assumes synchronous execution;
 asynchronous reference lifetimes are outside the automatic ownership contract.
@@ -493,7 +719,7 @@ register result cleanup. The for and while patterns retain initial values and
 register per-execution entry argument cleanup. This also preserves results when
 a for loop executes zero times. Independent yield and condition conversion
 patterns retain each outgoing semantic slot using their own remapped adaptors.
-Yield ownership applies to if, for and while boundaries. The condition predicate
+Yield ownership applies to execute_region, if, for and while boundaries. The condition predicate
 is not retained; both condition outcomes share the same outgoing payload
 reference. Repeated semantic slots retain separate references.
 
@@ -533,7 +759,7 @@ conversion transaction. Value replacements register cleanup at the current
 insertion point; operation replacements place it
 after the replacement operation. Dedicated function return patterns retain exported
 operands without applying producer ownership rules. Dedicated for and while
-patterns insert initial-value retains and entry cleanups. The if, for and while
+patterns insert initial-value retains and entry cleanups. The execute_region, if, for and while
 patterns directly register result cleanup. Independent yield and condition
 patterns retain transferred payloads and replace their own terminators using
 adaptor values. Patterns retain original Opaque slots directly; shared helpers register
@@ -605,8 +831,8 @@ checker; callers must preserve reference validity.
 
 Generated private graph Results use failure for specialization rejection. At the
 graph function exit, the importer checks all Result success bits,
-reads/packs payloads only on success, and maps rejection to a successful GuardMatch
-payload. All independently successful outputs are cleaned up even if another
+reads/packs payloads only on success, and maps rejection to a successful
+GuardMatch payload. All independently successful outputs are cleaned up even if another
 output failed. Ordinary asserting FFI-call failures remain assertions, and generic
 Result/ABI failure propagation is unchanged. Introducing recoverable graph runtime
 errors requires distinguishing them from rejection before extending this contract.
@@ -651,6 +877,17 @@ C/Python construction. The C++ payload parameter and accessor use
 LLVM storage; CABI membership does not imply compatibility with Any casts.
 
 ## Source layout and validation
+
+Cross-module Python helpers live under `python/trident/utils/`: `values` owns
+constants and scalar arithmetic, `types` owns type inference, `containers` owns
+direct container reads, `monad` owns Result builders and lexical scopes,
+`guards` owns Dynamo input-path syntax, and `runtime` owns runtime-library
+discovery. Import helpers directly from their responsibility-specific module;
+the package initializer does not re-export them. Helpers used only by one
+business module stay there: the importer owns container-get Results, result-type
+lists, constant powers and stateless FX/Triton conversions; the backend owns
+runtime container traversal. Guard parsing, expression behavior and input
+bindings stay in their existing business modules.
 
 `core/` contains the DLPack and TVM FFI dialects, lowering passes,
 C API and Python bindings. `ffi/` generates ATen wrappers from dispatcher schemas

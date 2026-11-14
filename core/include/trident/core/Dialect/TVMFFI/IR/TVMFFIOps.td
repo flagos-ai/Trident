@@ -12,7 +12,7 @@
 include "trident/core/Dialect/TVMFFI/IR/TVMFFIOpBase.td"
 
 class TVMFFI_TensorIndexedMetadataOp<string mnemonic>
-    : TVMFFI_Op<mnemonic, [Pure,
+    : TVMFFI_Op<mnemonic, [MemoryEffects<[MemRead]>,
         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let arguments = (ins TVMFFI_TensorValue : $tensor, I64 : $index);
   let results = (outs I64 : $result);
@@ -507,7 +507,7 @@ def TVMFFI_TensorCopyOp
   let assemblyFormat = "$destination `,` $source attr-dict `:` type($destination)";
 }
 
-def TVMFFI_TensorDTypeOp : TVMFFI_Op<"tensor.dtype", [Pure,
+def TVMFFI_TensorDTypeOp : TVMFFI_Op<"tensor.dtype", [MemoryEffects<[MemRead]>,
     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read DLPack dtype fields from a runtime tensor";
   let arguments = (ins TVMFFI_TensorValue:$tensor);
@@ -515,7 +515,7 @@ def TVMFFI_TensorDTypeOp : TVMFFI_Op<"tensor.dtype", [Pure,
   let assemblyFormat = "$tensor attr-dict `:` type($tensor)";
 }
 
-def TVMFFI_TensorDeviceOp : TVMFFI_Op<"tensor.device", [Pure,
+def TVMFFI_TensorDeviceOp : TVMFFI_Op<"tensor.device", [MemoryEffects<[MemRead]>,
     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read DLPack device fields from a runtime tensor";
   let arguments = (ins TVMFFI_TensorValue:$tensor);
@@ -523,7 +523,7 @@ def TVMFFI_TensorDeviceOp : TVMFFI_Op<"tensor.device", [Pure,
   let assemblyFormat = "$tensor attr-dict `:` type($tensor)";
 }
 
-def TVMFFI_TensorDimOp : TVMFFI_Op<"tensor.dim", [Pure,
+def TVMFFI_TensorDimOp : TVMFFI_Op<"tensor.dim", [MemoryEffects<[MemRead]>,
     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read the rank of a runtime tensor";
   let arguments = (ins TVMFFI_TensorValue:$tensor);
@@ -551,7 +551,7 @@ def TVMFFI_TensorSizeOp
 }
 
 def TVMFFI_TensorStorageOffsetOp
-    : TVMFFI_Op<"tensor.storage_offset", [Pure,
+    : TVMFFI_Op<"tensor.storage_offset", [MemoryEffects<[MemRead]>,
         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "Read a runtime tensor storage offset";
   let arguments = (ins TVMFFI_TensorValue:$tensor);

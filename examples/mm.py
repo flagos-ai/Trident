@@ -11,8 +11,62 @@ import triton.language as tl
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
-def get_autotune_config() -> list[triton.Config]:
-    return [
+@triton.jit
+def leaky_relu(x):
+    return tl.where(x >= 0, x, 0.01 * x)
+
+
+def main() -> None:
+    torch.manual_seed(0)
+    a: torch.Tensor = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+    b: torch.Tensor = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+
+    torch_output: torch.Tensor = torch.matmul(a, b)
+
+    triton_output: torch.Tensor = matmul_impl(a, b, "")
+    torch.testing.assert_close(triton_output, torch_output, atol=1e-2, rtol=1e-2)
+
+    output_jit: torch.Tensor = matmul_jit(a, b)
+    torch.testing.assert_close(output_jit, torch_output, atol=1e-2, rtol=1e-2)
+
+
+def matmul_impl(a: torch.Tensor, b: torch.Tensor, activation: str = "") -> torch.Tensor:
+    M, K = a.shape
+    b_rows, N = b.shape
+    assert K == b_rows, "Incompatible dimensions"
+    assert a.is_contiguous(), "Matrix A must be contiguous"
+    c: torch.Tensor = torch.empty((M, N), device=a.device, dtype=torch.float16)
+    matmul_kernel[
+        lambda META: (
+            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+            1,
+            1,
+        )
+    ](
+        a,
+        b,
+        c,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c.stride(0),
+        c.stride(1),
+        ACTIVATION=activation,
+    )
+    return c
+
+
+@trident.jit
+def matmul_jit(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return matmul_impl(a, b, "")
+
+
+@triton.autotune(
+    configs=[
         triton.Config(
             {
                 "BLOCK_SIZE_K": 64,
@@ -173,65 +227,7 @@ def get_autotune_config() -> list[triton.Config]:
             num_stages=4,
             num_warps=4,
         ),
-    ]
-
-
-@triton.jit
-def leaky_relu(x):
-    return tl.where(x >= 0, x, 0.01 * x)
-
-
-def main() -> None:
-    torch.manual_seed(0)
-    a: torch.Tensor = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-    b: torch.Tensor = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-
-    torch_output: torch.Tensor = torch.matmul(a, b)
-
-    triton_output: torch.Tensor = matmul_triton(a, b, "")
-    torch.testing.assert_close(triton_output, torch_output, atol=1e-2, rtol=1e-2)
-
-    output_jit: torch.Tensor = matmul_jit(a, b)
-    torch.testing.assert_close(output_jit, torch_output, atol=1e-2, rtol=1e-2)
-
-
-def matmul_impl(a: torch.Tensor, b: torch.Tensor, activation: str = "") -> torch.Tensor:
-    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-    assert a.is_contiguous(), "Matrix A must be contiguous"
-    M, K = a.shape
-    K, N = b.shape
-    c: torch.Tensor = torch.empty((M, N), device=a.device, dtype=torch.float16)
-    matmul_kernel[
-        lambda META: (
-            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
-            1,
-            1,
-        )
-    ](
-        a,
-        b,
-        c,
-        M,
-        N,
-        K,
-        a.stride(0),
-        a.stride(1),
-        b.stride(0),
-        b.stride(1),
-        c.stride(0),
-        c.stride(1),
-        ACTIVATION=activation,
-    )
-    return c
-
-
-@trident.jit
-def matmul_jit(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    return matmul_impl(a, b, "")
-
-
-@triton.autotune(
-    configs=get_autotune_config(),
+    ],
     key=["M", "N", "K"],
 )
 @triton.jit
@@ -292,13 +288,6 @@ def matmul_kernel(
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
-
-
-def matmul_triton(
-    a: torch.Tensor, b: torch.Tensor, activation: str = ""
-) -> torch.Tensor:
-    """Direct Triton path."""
-    return matmul_impl(a, b, activation)
 
 
 if __name__ == "__main__":
