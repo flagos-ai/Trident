@@ -133,8 +133,8 @@ class Scope(ABC):
     """Construct one block with an explicit, operation-specific terminator."""
 
     def __init__(self, block: ir.Block) -> None:
-        self.block = block
-        self._insertion_point = ir.InsertionPoint(block)
+        self.block: ir.Block = block
+        self._insertion_point: ir.InsertionPoint = ir.InsertionPoint(block)
 
     def __enter__(self) -> Self:
         self._insertion_point.__enter__()
@@ -168,7 +168,9 @@ class BindScope(Scope):
         assert all(isinstance(value.type, tvm_ffi_d.ResultType) for value in inputs), (
             "bind inputs must be Results"
         )
-        self.operation = tvm_ffi_d.MonadBindOp(result_types, inputs)
+        self.operation: tvm_ffi_d.MonadBindOp = tvm_ffi_d.MonadBindOp(
+            result_types, inputs
+        )
         super().__init__(self.operation.add_entry_block())
 
     @property
@@ -217,7 +219,7 @@ class ScopeStack(ExitStack):
 
     def yield_(self, values: Sequence[ir.Value]) -> list[ir.Value]:
         """Drain this stack, forwarding complete results from each scope."""
-        results = [*values]
+        results: list[ir.Value] = [*values]
         while self._scopes:
             scope = self._scopes.pop()
             scope.yield_(results)

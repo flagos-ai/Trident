@@ -7,10 +7,11 @@ import copy
 import gc
 import inspect
 import operator
-from collections.abc import Callable, Hashable
+from collections.abc import Callable
 from itertools import islice
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
+import sympy
 import torch
 import tvm_ffi
 import tvm_ffi.utils
@@ -22,6 +23,7 @@ from torch.export.graph_signature import (
     SymIntArgument,
     TensorArgument,
 )
+from torch.fx.experimental.symbolic_shapes import ShapeEnv
 from torch.utils import _pytree as pytree
 
 from trident import capi_utils
@@ -44,6 +46,10 @@ from .guards import parse_guards
 from .guards.scope import Scope
 from .guards.tree import Root
 from .importer import TridentFxImporter
+
+
+if TYPE_CHECKING:
+    from torch.export.dynamic_shapes import _DimHint
 
 
 def _convert_input(value: Any) -> Any:
@@ -98,14 +104,14 @@ class TridentGraphModule:
         *,
         dynamic: bool = True,
     ) -> None:
-        self._signature = inspect.signature(fn)
+        self._signature: Final[inspect.Signature] = inspect.signature(fn)
         self.fn: Final[Callable[..., Any]] = fn
         self.dynamic: Final[bool] = dynamic
         self.ctx: Final[ir.Context] = ir.Context()
         register_all_dialects(self.ctx)
         register_all_passes()
         self._sub_modules: list[ir.Module] = []
-        self._dispatcher = Root()
+        self._dispatcher: Root = Root()
         self.executor: Callable[..., Any] = self.compile
 
     def __name__(self) -> str:
@@ -115,8 +121,8 @@ class TridentGraphModule:
         self,
         value: Any,
         fake_value: Any,
-        shape_env: Any,
-        dimensions: dict[Hashable, torch.export.Dim],
+        shape_env: ShapeEnv,
+        dimensions: dict[sympy.Symbol, torch.export.Dim | _DimHint],
         dynamic_shapes: torch.export.ShapesCollection,
     ) -> None:
         if not isinstance(value, torch.Tensor):
@@ -128,7 +134,7 @@ class TridentGraphModule:
             f"Dynamo FakeTensor has rank {fake_value.dim()}, but its input "
             f"has rank {value.dim()}"
         )
-        shape: dict[int, torch.export.Dim] = {}
+        shape: dict[int, torch.export.Dim | _DimHint] = {}
         for index, size in enumerate(fake_value.shape):
             if not isinstance(size, torch.SymInt):
                 continue
@@ -178,7 +184,7 @@ class TridentGraphModule:
         """Export and import one specialization, then rebuild its dispatcher."""
         index = len(self._sub_modules)
 
-        bound = self._signature.bind(*args, **kwargs)
+        bound: inspect.BoundArguments = self._signature.bind(*args, **kwargs)
         bound.apply_defaults()
         exported_gm, gs = torch._dynamo.export(
             self.fn,
@@ -190,7 +196,7 @@ class TridentGraphModule:
         )
         shape_env = fake_mode.shape_env
         assert shape_env is not None, "Dynamo FakeTensorMode does not have a ShapeEnv"
-        dimensions: dict[Hashable, torch.export.Dim] = {}
+        dimensions: dict[sympy.Symbol, torch.export.Dim | _DimHint] = {}
         dynamic_shapes = torch.export.ShapesCollection()
 
         pytree.tree_map(
@@ -211,7 +217,7 @@ class TridentGraphModule:
             *pytree.tree_leaves(exported_program.example_inputs)
         )
 
-        self._output_spec = pytree.tree_structure(warmup_result)
+        self._output_spec: pytree.TreeSpec = pytree.tree_structure(warmup_result)
 
         importer = TridentFxImporter(context=self.ctx, specialization_id=index)
         main_func_name = f"main_{index}"
@@ -225,8 +231,10 @@ class TridentGraphModule:
             )
 
             exported_args, exported_kwargs = exported_program.example_inputs
-            exported_bound = self._signature.bind(*exported_args, **exported_kwargs)
-            positional_names = [
+            exported_bound: inspect.BoundArguments = self._signature.bind(
+                *exported_args, **exported_kwargs
+            )
+            positional_names: list[str] = [
                 name
                 for name, parameter in self._signature.parameters.items()
                 if parameter.kind
@@ -239,20 +247,22 @@ class TridentGraphModule:
                 "variadic positional inputs are unsupported"
             )
             # Traverse in export order; dispatch parameters retain signature order.
-            provided_names = [
+            provided_names: list[str] = [
                 *islice(positional_names, len(exported_args)),
                 *exported_kwargs,
             ]
             input_spec_iter = iter(input_specs)
-            producers = {node.name: node for node in exported_program.graph.nodes}
-            input_paths: dict[str, tuple[int | str, ...]] = {}
+            producers: dict[str, torch.fx.Node] = {
+                node.name: node for node in exported_program.graph.nodes
+            }
+            input_paths: dict[str, list[int | str]] = {}
 
-            def build_type(value: Any, input_path: tuple[int | str, ...]) -> ir.Type:
+            def build_type(value: Any, input_path: list[int | str]) -> ir.Type:
                 if isinstance(value, (torch.device, torch.dtype)):
                     return value_type(value)
                 if isinstance(value, (list, tuple)):
-                    child_types = [
-                        build_type(child, (*input_path, index))
+                    child_types: list[ir.Type] = [
+                        build_type(child, [*input_path, index])
                         for index, child in enumerate(value)
                     ]
                     return (
@@ -272,8 +282,8 @@ class TridentGraphModule:
                     return value_type(producers[input_spec.arg.name].meta["val"])
                 return value_type(value)
 
-            input_types = {
-                name: build_type(exported_bound.arguments[name], (name,))
+            input_types: dict[str, ir.Type] = {
+                name: build_type(exported_bound.arguments[name], [name])
                 for name in provided_names
             }
             input_types = {
@@ -361,7 +371,9 @@ class TridentGraphModule:
                     raise RuntimeError(f"Compiled execution failed: {kind}")
                 return result
             count = self._output_spec.num_leaves
-            leaves = [] if count == 0 else [result] if count == 1 else list(result)
+            leaves: list[Any] = (
+                [] if count == 0 else [result] if count == 1 else list(result)
+            )
             return pytree.tree_unflatten(leaves, self._output_spec)
 
         return tvm_ffi.utils.kwargs_wrapper.make_kwargs_wrapper_from_signature(
@@ -372,7 +384,7 @@ class TridentGraphModule:
         """Generate the ordered guard tree directly as an execute-region CFG."""
         with self.ctx, combined.operation.location, ir.InsertionPoint(combined.body):
             any_type = tvm_ffi_d.AnyType.get()
-            parameter_types = [tvm_ffi_d.PackArgumentsType.get()]
+            parameter_types: list[ir.Type] = [tvm_ffi_d.PackArgumentsType.get()]
             dispatcher = tvm_ffi_d.PackFuncOp(
                 self.fn.__name__,
                 ir.TypeAttr.get(ir.FunctionType.get(parameter_types, [any_type])),

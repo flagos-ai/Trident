@@ -67,7 +67,9 @@ class SpecializationTest(unittest.TestCase):
 
     def test_string_specialization(self) -> None:
         @trident.jit
-        def named(x: torch.Tensor, name: str):
+        def named(
+            x: torch.Tensor, name: str
+        ) -> tuple[str, dict[str, list[str | torch.Tensor | tuple[str]]]]:
             return name, {
                 "nested": [name, x + 1, ("constant string longer than seven bytes",)]
             }

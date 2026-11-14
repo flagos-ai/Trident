@@ -10,7 +10,7 @@ ATen call order, tensor aliases, and mutations are preserved.
 from __future__ import annotations
 
 import operator
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import cached_property, reduce
 from typing import Any, TypeAlias, cast
 
@@ -60,12 +60,12 @@ ImportedValue: TypeAlias = (
 
 class TridentFxImporter:
     def __init__(self, *, context: ir.Context, specialization_id: int) -> None:
-        self.context = context
-        self.specialization_id = specialization_id
+        self.context: ir.Context = context
+        self.specialization_id: int = specialization_id
         with context, ir.Location.unknown(context):
-            self.module = ir.Module.create()
+            self.module: ir.Module = ir.Module.create()
         self.values: dict[torch.fx.Node, ImportedValue] = {}
-        self.symbols: dict[Any, ir.Value] = {}
+        self.symbols: dict[sympy.Basic, ir.Value] = {}
 
     def _aten_argument(
         self, node: torch.fx.Node, index: int, parameter: torch.Argument
@@ -707,10 +707,12 @@ class TridentFxImporter:
         *,
         func_name: str,
         input_types: Mapping[str, ir.Type],
-        input_paths: Mapping[str, tuple[int | str, ...]],
+        input_paths: Mapping[str, list[int | str]],
     ) -> tvm_ffi_d.FuncOp:
         """Build execution with the original signature and bind FX inputs locally."""
-        producers = {node.name: node for node in program.graph.nodes}
+        producers: dict[str, torch.fx.Node] = {
+            node.name: node for node in program.graph.nodes
+        }
         outputs = [
             spec
             for spec in program.graph_signature.output_specs
@@ -721,7 +723,7 @@ class TridentFxImporter:
             ir.Location.unknown(self.context),
             ir.InsertionPoint(self.module.body),
         ):
-            payload_types = [
+            payload_types: list[ir.Type] = [
                 value_type(
                     spec.arg.value
                     if isinstance(spec.arg, ConstantArgument)
@@ -746,7 +748,7 @@ class TridentFxImporter:
                     else producers[spec.arg.name]
                     for spec in outputs
                 ]
-                parameters = {
+                parameters: dict[str, Scope] = {
                     name: Scope(value)
                     for name, value in zip(input_types, block.arguments, strict=True)
                 }
@@ -757,7 +759,7 @@ class TridentFxImporter:
                         and spec.kind == InputKind.USER_INPUT
                     ):
                         name, *keys = input_paths[spec.arg.name]
-                        value, parameters[name] = parameters[name].read(tuple(keys))
+                        value, parameters[name] = parameters[name].read(keys)
                         target = value_type(producers[spec.arg.name].meta["val"])
                         if value.type != target:
                             value = tvm_ffi_d.downcast(target, value)
@@ -822,8 +824,8 @@ class TridentFxImporter:
         [result] = outcome.results
         return [tvm_ffi_d.constant_bool(True), result]
 
-    def symbolic(self, expression: Any) -> ir.Value:
-        operations = {
+    def symbolic(self, expression: sympy.Basic) -> ir.Value:
+        operations: dict[type[sympy.Basic], Callable[..., Any]] = {
             sympy.Add: operator.add,
             sympy.Max: max,
             sympy.Min: min,

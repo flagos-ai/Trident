@@ -116,7 +116,7 @@ class TensorDTypeCode(GuardCode):
         tensor, scope = scope.read(source_path(source))
         if not isinstance(tensor.type, tvm_ffi_d.TensorType):
             tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
-        metadata = [
+        metadata: list[ir.Value] = [
             tvm_ffi_d.to(arith.extui(ir.IntegerType.get_signless(64), field))
             for field in tvm_ffi_d.tensor_dtype(tensor)
         ]

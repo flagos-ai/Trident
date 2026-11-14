@@ -36,12 +36,15 @@ def parse_source(text: str) -> ast.Subscript | None:
     return input_source(expression)
 
 
-def source_path(source: ast.Subscript) -> tuple[int | str, ...]:
+def source_path(source: ast.Subscript) -> list[int | str]:
     """Translate a guard source to a path rooted at a validated parameter."""
     assert isinstance(source, ast.Subscript) and isinstance(source.slice, ast.Constant)
     key = source.slice.value
+    assert isinstance(key, (int, str)) and not isinstance(key, bool)
     if isinstance(source.value, ast.Name) and source.value.id == "L":
-        input_path = (key,)
+        assert isinstance(key, str) and key
+        input_path: list[int | str] = [key]
     else:
-        input_path = (*source_path(source.value), key)
+        assert isinstance(source.value, ast.Subscript)
+        input_path = [*source_path(source.value), key]
     return input_path

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from typing import Final
 
 from trident.core import ir
 from trident.core.dialects import cf, scf
@@ -39,10 +40,10 @@ class ExecutionNode(Node):
     """Forward the original argument pack and return the execution result."""
 
     def __init__(self, graph_symbol: str) -> None:
-        self.graph_symbol = graph_symbol
+        self.graph_symbol: Final[str] = graph_symbol
 
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
-        entry = fallback_block.region.blocks.append()
+        entry: ir.Block = fallback_block.region.blocks.append()
         with ir.InsertionPoint(entry):
             success, payload = tvm_ffi_d.pack_call(
                 ir.FlatSymbolRefAttr.get(self.graph_symbol),
@@ -58,7 +59,7 @@ class GuardNode(Node):
 
     def __init__(self, code: GuardCode) -> None:
         self.children: list[Node] = []
-        self.code = code
+        self.code: Final[GuardCode] = code
 
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
         blocks = fallback_block.region.blocks
@@ -70,7 +71,7 @@ class GuardNode(Node):
         with ir.InsertionPoint(failed):
             none = tvm_ffi_d.upcast(tvm_ffi_d.AnyType.get(), constant(None))
             scf.yield_([tvm_ffi_d.to(success), none])
-        passed = _build_children(self.children, scope, fallback_block)
+        passed: ir.Block = _build_children(self.children, scope, fallback_block)
         with ir.InsertionPoint(matched):
             predicate = tvm_ffi_d.downcast(tvm_ffi_d.BoolType.get(), payload)
             cf.cond_br(native(predicate), [], [], passed, fallback_block)
@@ -82,10 +83,10 @@ class SCMNode(Node):
 
     def __init__(self, input_types: Mapping[str, ir.Type]) -> None:
         self.children: list[Node] = []
-        self.input_types = dict(input_types)
+        self.input_types: Final[dict[str, ir.Type]] = dict(input_types)
 
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
-        entry = fallback_block.region.blocks.append()
+        entry: ir.Block = fallback_block.region.blocks.append()
         with ir.InsertionPoint(entry):
             scope = Scope(
                 scope.value,
@@ -99,7 +100,7 @@ class SCMNode(Node):
                     for index, (name, type_) in enumerate(self.input_types.items())
                 },
             )
-        first = _build_children(self.children, scope, fallback_block)
+        first: ir.Block = _build_children(self.children, scope, fallback_block)
         with ir.InsertionPoint(entry):
             cf.br([], first)
         return entry
@@ -118,6 +119,8 @@ class Root:
         graph_symbol: str,
     ) -> None:
         """Extend the trailing common prefix without changing execution order."""
+        scm_node: SCMNode
+        guard_node: GuardNode
         if self.children and tuple(self.children[-1].input_types.items()) == tuple(
             input_types.items()
         ):
@@ -125,7 +128,7 @@ class Root:
         else:
             scm_node = SCMNode(input_types)
             self.children.append(scm_node)
-        children = scm_node.children
+        children: list[Node] = scm_node.children
         for code in guard_codes:
             # Searching earlier siblings could move this execution ahead of
             # intervening candidates. Only the trailing prefix is safe to share.
@@ -152,7 +155,7 @@ class Root:
                 tvm_ffi_d.AnyType.get(), tvm_ffi_d.exception("GuardMiss")
             )
             scf.yield_([constant(True), rejection])
-        first = _build_children(self.children, scope, miss)
+        first: ir.Block = _build_children(self.children, scope, miss)
         with ir.InsertionPoint(entry):
             cf.br([], first)
         return machine.results

@@ -145,8 +145,8 @@ def _parse_expression(node: ast.expr) -> Expression:
                     return (
                         RankExpression(operand) if shape else LengthExpression(operand)
                     )
-    index = None
-    call = node
+    index: int | None = None
+    call: ast.expr = node
     if isinstance(node, ast.Subscript):
         if (
             not isinstance(node.slice, ast.Constant)

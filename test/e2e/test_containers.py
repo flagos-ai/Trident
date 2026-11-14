@@ -20,7 +20,9 @@ class ContainerTest(unittest.TestCase):
             return x + values[0] + values[1]
 
         @trident.jit
-        def mixed_add(x: torch.Tensor, values: list) -> torch.Tensor:
+        def mixed_add(
+            x: torch.Tensor, values: list[torch.Tensor | int | None]
+        ) -> torch.Tensor:
             return x + values[0] + values[2]
 
         @trident.jit
@@ -84,7 +86,14 @@ class ContainerTest(unittest.TestCase):
 
     def test_nested_outputs(self) -> None:
         @trident.jit
-        def outputs(x: torch.Tensor):
+        def outputs(
+            x: torch.Tensor,
+        ) -> dict[
+            str,
+            torch.Tensor
+            | tuple[torch.Tensor, list[int | None]]
+            | tuple[list[object], tuple[()], None],
+        ]:
             return {
                 "tensor": x + 1,
                 "other": (x * 2, [3, None]),
@@ -110,7 +119,9 @@ class ContainerTest(unittest.TestCase):
 
     def test_repeated_outputs_keep_independent_references(self) -> None:
         @trident.jit
-        def outputs(x: torch.Tensor):
+        def outputs(
+            x: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             result = x + 1
             return x, result, result
 

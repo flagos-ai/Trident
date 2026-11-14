@@ -15,13 +15,13 @@ from test.support.cuda import assert_no_cuda_leak
 
 
 @triton.jit
-def increment_kernel(value: tl.tensor, BLOCK: tl.constexpr):
+def increment_kernel(value: tl.tensor, BLOCK: tl.constexpr) -> None:
     offsets = tl.arange(0, BLOCK)
     tl.store(value + offsets, tl.load(value + offsets) + 1)
 
 
 @triton.jit
-def shift_kernel(value: tl.tensor, BLOCK: tl.constexpr, MODE: tl.constexpr):
+def shift_kernel(value: tl.tensor, BLOCK: tl.constexpr, MODE: tl.constexpr) -> None:
     offsets = tl.arange(0, BLOCK)
     delta = 1 if MODE == "increment" else -1
     tl.store(value + offsets, tl.load(value + offsets) + delta)

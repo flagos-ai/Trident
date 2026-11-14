@@ -16,7 +16,7 @@ from test.support.cuda import assert_no_cuda_leak
 class DynamicTest(unittest.TestCase):
     def test_cond(self) -> None:
         @trident.jit(dynamic=True)
-        def conditional(x: torch.Tensor):
+        def conditional(x: torch.Tensor) -> torch.Tensor:
             size, *_ = x.shape
             return torch.cond(size > 4, lambda t: t + 1, lambda t: t - 1, (x,))
 
@@ -57,7 +57,9 @@ class DynamicTest(unittest.TestCase):
         assert_no_cuda_leak(self, check, device)
 
     def test_scalar_arithmetic(self) -> None:
-        def arithmetic(x: torch.Tensor):
+        def arithmetic(
+            x: torch.Tensor,
+        ) -> tuple[torch.Tensor, tuple[bool | int | float, ...]]:
             size, *_ = x.shape
             return x + 1, (
                 size + 2,

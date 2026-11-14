@@ -8,7 +8,8 @@ from __future__ import annotations
 import operator
 import warnings
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Final, Literal
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import torch
 
@@ -28,6 +29,7 @@ from trident.ir import (
 )
 
 if TYPE_CHECKING:
+    from ..scope import Scope
     from .lowering import ExpressionContext
 
 BinaryOperator = Literal[
@@ -38,7 +40,7 @@ ComparisonOperator = Literal["eq", "ge", "gt", "is", "le", "lt", "ne"]
 LiteralValue = bool | int | float | str | None | torch.device | torch.dtype
 UnaryOperator = Literal["neg", "not", "pos"]
 
-_OPERATIONS = {
+_OPERATIONS: Final[dict[BinaryOperator | ComparisonOperator, Callable[..., Any]]] = {
     "add": operator.add,
     "eq": operator.eq,
     "floordiv": operator.floordiv,
@@ -55,7 +57,6 @@ _OPERATIONS = {
     "sub": operator.sub,
     "truediv": operator.truediv,
 }
-_NUMERIC = (tvm_ffi_d.BoolType, tvm_ffi_d.IntType, tvm_ffi_d.FloatType)
 
 
 class UnsupportedExpression(ValueError):
@@ -124,10 +125,13 @@ class BinaryExpression(Expression):
         return self.lhs, self.rhs
 
     def infer_type(self, context: ExpressionContext) -> ir.Type:
-        types = [child.infer_type(context) for child in self.children()]
-        assert all(isinstance(type_, _NUMERIC) for type_ in types), (
-            "arithmetic requires numeric operands"
-        )
+        types: list[ir.Type] = [child.infer_type(context) for child in self.children()]
+        assert all(
+            isinstance(
+                type_, (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
+            )
+            for type_ in types
+        ), "arithmetic requires numeric operands"
         if self.operation == "truediv" or any(
             isinstance(type_, tvm_ffi_d.FloatType) for type_ in types
         ):
@@ -139,7 +143,9 @@ class BinaryExpression(Expression):
         return tvm_ffi_d.IntType.get()
 
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            self.infer_type(context)
+        )
         with context.operands(self.children(), result_type) as (stack, values):
             value = BINARY_ARITHMETIC[_OPERATIONS[self.operation]](*values)
             [result] = stack.yield_([pure(value)])
@@ -164,7 +170,9 @@ class BooleanExpression(Expression):
         return tvm_ffi_d.BoolType.get()
 
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            self.infer_type(context)
+        )
         predicate, *remaining = self.operands
         if not remaining:
             return predicate._build(context)
@@ -173,7 +181,9 @@ class BooleanExpression(Expression):
             truth = context.truth(value)
             with context.local_scope(), BindScope([result_type], [truth]) as bind_scope:
                 [condition] = bind_scope.arguments
-                branch = scf.IfOp(native(condition), [result_type], has_else=True)
+                branch: scf.IfOp = scf.IfOp(
+                    native(condition), [result_type], has_else=True
+                )
                 tail = BooleanExpression(tuple(remaining), self.operation)
                 selected, other = (
                     (branch.then_block, branch.else_block)
@@ -209,10 +219,12 @@ class ComparisonExpression(Expression):
 
     def _build(self, context: ExpressionContext) -> ir.Value:
         block = ir.InsertionPoint.current.block
-        existing = set(block.operations)
-        scope = context.scope
+        existing: set[ir.Operation | ir.OpView] = set(block.operations)
+        scope: Scope | None = context.scope
         try:
-            result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+            result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+                self.infer_type(context)
+            )
             first, *_ = self.operands
             with context.operands([first], result_type) as (stack, values):
                 [lhs] = values
@@ -235,7 +247,9 @@ class ComparisonExpression(Expression):
     def _comparison(
         self, context: ExpressionContext, index: int, lhs: ir.Value
     ) -> ir.Value:
-        result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            self.infer_type(context)
+        )
         with context.operands([self.operands[index + 1]], result_type) as (
             stack,
             values,
@@ -258,7 +272,7 @@ class ComparisonExpression(Expression):
             if index == len(self.operations) - 1:
                 [result] = stack.yield_([pure(predicate)])
                 return result
-            branch = scf.IfOp(native(predicate), [result_type], has_else=True)
+            branch: scf.IfOp = scf.IfOp(native(predicate), [result_type], has_else=True)
             with context.local_scope(), ir.InsertionPoint(branch.then_block):
                 scf.yield_([self._comparison(context, index + 1, rhs)])
             with ir.InsertionPoint(branch.else_block):
@@ -279,8 +293,8 @@ class ConstantExpression(Expression):
 
 
 class InputExpression(Expression):
-    def __init__(self, path: tuple[int | str, ...]) -> None:
-        self.path: Final[tuple[int | str, ...]] = path
+    def __init__(self, path: list[int | str]) -> None:
+        self.path: Final[list[int | str]] = path
 
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         return context.input_type(self.path)
@@ -300,7 +314,9 @@ class LengthExpression(Expression):
         return tvm_ffi_d.IntType.get()
 
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            self.infer_type(context)
+        )
         with context.operands(self.children(), result_type) as (stack, values):
             [value] = values
             [result] = stack.yield_([context.length(value)])
@@ -320,7 +336,9 @@ class TensorMetadataExpression(Expression):
         return tvm_ffi_d.IntType.get()
 
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            self.infer_type(context)
+        )
         with context.operands(self.children(), result_type) as (stack, values):
             [tensor] = values
             if not isinstance(tensor.type, tvm_ffi_d.TensorType):
@@ -357,13 +375,17 @@ class SelectExpression(Expression):
         return type_
 
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            self.infer_type(context)
+        )
         with context.operands([self.predicate], result_type) as (stack, values):
             [value] = values
             truth = context.truth(value)
             with context.local_scope(), BindScope([result_type], [truth]) as bind_scope:
                 [condition] = bind_scope.arguments
-                branch = scf.IfOp(native(condition), [result_type], has_else=True)
+                branch: scf.IfOp = scf.IfOp(
+                    native(condition), [result_type], has_else=True
+                )
                 for block, choice in zip(
                     (branch.then_block, branch.else_block),
                     (self.selected, self.alternative),
@@ -428,7 +450,9 @@ class UnaryExpression(Expression):
         return type_
 
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type = tvm_ffi_d.ResultType.get(self.infer_type(context))
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            self.infer_type(context)
+        )
         with context.operands(self.children(), result_type) as (stack, values):
             [value] = values
             if self.operation == "not":

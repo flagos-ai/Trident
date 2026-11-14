@@ -5,6 +5,7 @@
 
 import operator
 import unittest
+from typing import cast
 
 import sympy
 import torch
@@ -48,8 +49,12 @@ class ImporterTest(unittest.TestCase):
                 super().__init__()
                 self.count = count
 
-            def forward(self, value: list, bias: int = 3):
-                return tuple(value[0] + index for index in range(self.count))
+            def forward(
+                self, value: list[torch.Tensor | None], bias: int = 3
+            ) -> tuple[torch.Tensor, ...]:
+                return tuple(
+                    cast(torch.Tensor, value[0]) + index for index in range(self.count)
+                )
 
         for count in (0, 1, 2):
             with self.subTest(outputs=count), new_context() as context:
@@ -64,7 +69,7 @@ class ImporterTest(unittest.TestCase):
                     func_name="graph",
                     input_types=input_types,
                     input_paths={
-                        program.graph_signature.input_specs[0].arg.name: ("value", 0)
+                        program.graph_signature.input_specs[0].arg.name: ["value", 0]
                     },
                 )
                 self.assertIsInstance(function, tvm_ffi_d.FuncOp)
@@ -231,26 +236,26 @@ class ImporterTest(unittest.TestCase):
                 scope = Scope(
                     values, {"values": Scope(values, {1: Scope(tensor_value)})}
                 )
-                first_result, local_scope = scope.extract(("values", 0))
-                second_result, reused_scope = local_scope.extract(("values", 0))
+                first_result, local_scope = scope.extract(["values", 0])
+                second_result, reused_scope = local_scope.extract(["values", 0])
                 self.assertNotEqual(first_result, second_result)
                 self.assertIs(reused_scope, local_scope)
                 self.assertIsNone(scope["values"].get(0))
                 self.assertIs(local_scope["values"][1], scope["values"][1])
                 with BindScope([unit], [pure(constant(None))]) as bind_scope:
-                    value, local_scope = scope.read(("values", 0))
+                    value, local_scope = scope.read(["values", 0])
                     self.assertIsNone(scope["values"].get(0))
                     self.assertIs(local_scope["values"][1], scope["values"][1])
                     with BindScope([unit], [pure(constant(None))]) as nested_bind_scope:
-                        inherited, _ = local_scope.read(("values", 0))
+                        inherited, _ = local_scope.read(["values", 0])
                         self.assertEqual(inherited, value)
-                        inner_value, _ = scope.read(("values", 0))
+                        inner_value, _ = scope.read(["values", 0])
                         self.assertNotEqual(inner_value, value)
                         nested_bind_scope.yield_([pure(constant(None))])
                         nested_results = nested_bind_scope.results
                     bind_scope.yield_(nested_results)
 
-                extracted_result, _ = scope.extract(("values", 0))
+                extracted_result, _ = scope.extract(["values", 0])
                 with BindScope([unit], [extracted_result]) as bind_scope:
                     bind_scope.yield_([pure(constant(None))])
 
@@ -277,11 +282,11 @@ class ImporterTest(unittest.TestCase):
                 for child in (branch.then_block, branch.else_block):
                     with ir.InsertionPoint(child):
                         with BindScope([unit], [pure(constant(None))]) as bind_scope:
-                            value, local_scope = scope.read(("values", 0, 0))
-                            reused, reused_scope = local_scope.read(("values", 0, 0))
+                            value, local_scope = scope.read(["values", 0, 0])
+                            reused, reused_scope = local_scope.read(["values", 0, 0])
                             self.assertEqual(reused, value)
                             self.assertIs(reused_scope, local_scope)
-                            other, local_scope = local_scope.read(("values", 0, 1))
+                            other, local_scope = local_scope.read(["values", 0, 1])
                             self.assertNotEqual(other, value)
                             self.assertIsNone(scope["values"].get(0))
                             bind_scope.yield_([pure(constant(None))])
@@ -514,7 +519,9 @@ class ImporterTest(unittest.TestCase):
 
     def test_frontend_scalar_values(self) -> None:
         class Scalars(torch.nn.Module):
-            def forward(self, value: torch.Tensor):
+            def forward(
+                self, value: torch.Tensor
+            ) -> tuple[torch.Tensor, int, bool, int]:
                 size, *_ = value.shape
                 return value, (size + 1) ** 2, size > 3, value.stride(0)
 
@@ -530,7 +537,7 @@ class ImporterTest(unittest.TestCase):
                 func_name="scalars",
                 input_types={"value": tvm_ffi_d.TensorType.get()},
                 input_paths={
-                    program.graph_signature.input_specs[0].arg.name: ("value",)
+                    program.graph_signature.input_specs[0].arg.name: ["value"]
                 },
             )
             self.assertTrue(importer.module.operation.verify())

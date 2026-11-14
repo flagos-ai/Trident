@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from trident.core import ir
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
@@ -18,16 +18,14 @@ from ..scope import Scope
 if TYPE_CHECKING:
     from .nodes import Expression
 
-_NUMERIC = (tvm_ffi_d.BoolType, tvm_ffi_d.IntType, tvm_ffi_d.FloatType)
-
 
 class ExpressionContext:
     """Shared mechanics for one emission; expression behavior lives in nodes."""
 
     def __init__(self, text: str, scope: Scope | None, context: ir.Context) -> None:
-        self.text = text
-        self.scope = scope
-        self.context = context
+        self.text: Final[str] = text
+        self.scope: Scope | None = scope
+        self.context: Final[ir.Context] = context
 
     @contextmanager
     def diagnostics(self) -> Generator[None, None, None]:
@@ -46,9 +44,9 @@ class ExpressionContext:
             [result] = bind_scope.results
             return result
 
-    def input_type(self, path: tuple[int | str, ...]) -> ir.Type:
+    def input_type(self, path: list[int | str]) -> ir.Type:
         assert self.scope is not None, "guard input requires a bound Scope"
-        type_ = self.scope.type
+        type_: ir.Type = self.scope.type
         scope: Scope | None = self.scope
         for key in path:
             scope = None if scope is None else scope.get(key)
@@ -62,14 +60,14 @@ class ExpressionContext:
                 type_ = tvm_ffi_d.AnyType.get()
         return type_
 
-    def extract(self, path: tuple[int | str, ...]) -> ir.Value:
+    def extract(self, path: list[int | str]) -> ir.Value:
         assert self.scope is not None, "guard input requires a bound Scope"
         result, self.scope = self.scope.extract(path)
         return result
 
     @contextmanager
     def local_scope(self) -> Generator[None, None, None]:
-        scope = self.scope
+        scope: Scope | None = self.scope
         try:
             yield
         finally:
@@ -103,9 +101,13 @@ class ExpressionContext:
     def truth(self, value: ir.Value) -> ir.Value:
         if isinstance(value.type, tvm_ffi_d.BoolType):
             return pure(value)
-        if isinstance(value.type, _NUMERIC):
+        if isinstance(
+            value.type, (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
+        ):
             return pure(logical_not(logical_not(value)))
-        result_type = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            tvm_ffi_d.BoolType.get()
+        )
         with (
             self.local_scope(),
             BindScope([result_type], [self.length(value)]) as bind_scope,

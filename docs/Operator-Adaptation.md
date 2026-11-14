@@ -444,7 +444,8 @@ Runtime Scope nodes require an `ir.Value`; their type comes from `value.type`.
 The root holds packed arguments, including for zero-argument functions, without
 extra type metadata. Children contain only materialized values.
 Do not store a node's own key or a parent pointer. Guard sources remain AST
-expressions and resolve from root parameter names into ordinary tuple paths. Use structural AST keys for deduplication within a candidate and prefix sharing.
+expressions and resolve from root parameter names into lists of path components.
+Use structural AST keys for deduplication within a candidate and prefix sharing.
 Scope is itself the runtime input-tree node; its root represents the current
 binding version without a wrapper or separate SSA table. Pytree registrations
 load before export. Register each specialization with

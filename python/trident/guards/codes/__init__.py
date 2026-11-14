@@ -3,14 +3,16 @@
 
 from ast import Subscript
 
-from .ast import ASTCode as ASTCode
-from .base import GuardCode as GuardCode
-from .tensor import DynamoAttributeAbsentCode as DynamoAttributeAbsentCode
-from .tensor import RequiresGradCode as RequiresGradCode
-from .tensor import TensorDeviceCode as TensorDeviceCode
-from .tensor import TensorDTypeCode as TensorDTypeCode
-from .tensor import TensorRankCode as TensorRankCode
-from .type import TypeIdCode as TypeIdCode
+from .ast import ASTCode
+from .base import GuardCode
+from .tensor import (
+    DynamoAttributeAbsentCode,
+    RequiresGradCode,
+    TensorDTypeCode,
+    TensorDeviceCode,
+    TensorRankCode,
+)
+from .type import TypeIdCode
 
 
 def parse_code(text: str, source: Subscript | None) -> GuardCode | None:

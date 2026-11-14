@@ -6,6 +6,7 @@
 import ast
 import unittest
 from collections import Counter
+from typing import TypeVar
 
 import torch
 import tvm_ffi
@@ -24,6 +25,9 @@ from trident.ir import checked_call, constant, pure
 
 from test.support.cuda import assert_no_cuda_leak
 from test.support.ir import new_context
+
+
+_T = TypeVar("_T")
 
 
 class LocalCallTest(unittest.TestCase):
@@ -46,7 +50,7 @@ class LocalCallTest(unittest.TestCase):
         )
 
     def test_dispatcher_outcomes(self) -> None:
-        def dispatch(value):
+        def dispatch(value: _T) -> _T:
             return value
 
         graph = TridentGraphModule(dispatch)

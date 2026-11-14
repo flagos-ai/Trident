@@ -43,7 +43,7 @@ class Scope:
         assert isinstance(key, int) and isinstance(
             self.value.type, (tvm_ffi_d.ArrayType, tvm_ffi_d.TupleType)
         )
-        type_ = (
+        type_: ir.Type = (
             self.value.type.types[key]
             if isinstance(self.value.type, tvm_ffi_d.TupleType)
             else self.value.type.element_type
@@ -53,18 +53,18 @@ class Scope:
         scope = Scope(self.value, {**self.children, key: input_scope})
         return input_scope, scope
 
-    def read(self, input_path: tuple[int | str, ...]) -> tuple[ir.Value, Scope]:
+    def read(self, input_path: list[int | str]) -> tuple[ir.Value, Scope]:
         """Read a path and reconnect materialized children to a persistent root."""
         if not input_path:
             return self.value, self
         key, *keys = input_path
         child, scope = self.child(key)
-        value, updated_child = child.read(tuple(keys))
+        value, updated_child = child.read(keys)
         if updated_child is not child:
             scope = Scope(scope.value, {**scope.children, key: updated_child})
         return value, scope
 
-    def extract(self, input_path: tuple[int | str, ...]) -> tuple[ir.Value, Scope]:
+    def extract(self, input_path: list[int | str]) -> tuple[ir.Value, Scope]:
         """Wrap a locally reusable payload in a fresh Result and return its root."""
         value, scope = self.read(input_path)
         return pure(value), scope

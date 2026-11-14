@@ -217,8 +217,8 @@ regex templates before general AST expressions, without a Dynamo-category
 registry or wrapper objects. Support depends on each code's contents, including
 codes from previously unknown categories. Guard sources remain Python `ast.Subscript` expressions;
 there is no separate Local object. The context-free `source.py` module recognizes
-these expressions and converts them to tuple paths; Scope only manages
-materialized SSA bindings. `TridentGraphModule.compile` in
+these expressions and converts them to lists of path components; Scope only
+manages materialized SSA bindings. `TridentGraphModule.compile` in
 `python/trident/backend.py` constructs a signature-ordered parameter-name-to-type
 mapping and export input-name-to-path bindings by traversing exported example
 inputs.
@@ -350,11 +350,11 @@ discard their versions after use, leaving the enclosing version intact.
 The values follow ordinary SSA dominance at their insertion point.
 Scopes have neither a parent chain nor a separate node-to-SSA table. Use
 `scope` for a current tree version, `input_scope` for a materialized input subtree,
-and `input_types` for SCMNode's parameter-name-to-type mapping. Tuple input
-paths use `input_path` and importer `input_paths`; AST sources keep `source`.
+and `input_types` for SCMNode's parameter-name-to-type mapping. Input path lists
+use `input_path` and importer `input_paths`; AST sources keep `source`.
 Monad region context managers use `bind_scope` to distinguish them from Scope
-versions. Guard AST sources resolve to ordinary tuple paths, also used for graph
-argument order, so
+versions. Guard AST sources resolve to lists of path components, also used for
+graph argument order, so
 node identity changes during path copying do not require remapping. Extraction
 Results remain fresh and local to their consumer. Persistent dispatcher nodes
 retain only static input types, recipes and paths, with no SSA values or blocks.
