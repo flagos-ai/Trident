@@ -71,6 +71,8 @@ class TridentLoweringPipelinePass final
     pm.addPass(mlir::createCSEPass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
+    // Clean up forwarding blocks and join arguments before GPU preparation.
+    pm.addPass(mlir::createCanonicalizerPass());
     // GPU conversion simplifies regions before applying LLVM patterns. Run it
     // before packed calls and reference checks expand into large LLVM CFGs.
     pm.addPass(

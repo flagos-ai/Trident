@@ -524,7 +524,9 @@ starts. The pipeline performs these lowering steps:
    branches. Scalar boxing/extraction and matching widen/narrow casts fold,
    including native constants extracted from TVM FFI scalar constants, so they
    do not hide constant or repeated conditions from SCF simplification.
-   Calls rejected by the inliner retain their packed ABI. Then run GPU-to-LLVM,
+   Calls rejected by the inliner retain their packed ABI. After SCF-to-CF, run
+   the canonicalizer to simplify forwarding blocks and join arguments before
+   GPU-to-LLVM vector preparation. Then run GPU-to-LLVM,
    TVMFFI-to-LLVM and the remaining LLVM conversions, canonicalization and cast
    reconciliation. Ownership cleanup is materialized before either inliner.
 
