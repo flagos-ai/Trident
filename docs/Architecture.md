@@ -501,7 +501,9 @@ starts. The pipeline performs these lowering steps:
    checked runtime Array calls. Materialize semantic export retains and register
    local releases in defer regions. Run `lower-tvm-ffi-defer` immediately
    afterward to clone their bodies
-   at dominance-scope exits before inlining and SCF-to-CFG conversion.
+   at dominance-scope exits before inlining and SCF-to-CFG conversion. Run symbol
+   DCE before packed entry conversion to remove unused ABI declarations that
+   would otherwise conflict with the generated entry names.
 4. Run `lower-tensor-metadata` to expand tensor metadata operations
    through borrowed object/DLTensor views into DLPack operations. Then run
    `lower-to-pack` followed by
@@ -527,8 +529,10 @@ starts. The pipeline performs these lowering steps:
    Calls rejected by the inliner retain their packed ABI. After SCF-to-CF, run
    the canonicalizer to simplify forwarding blocks and join arguments before
    GPU-to-LLVM vector preparation. Then run GPU-to-LLVM,
-   TVMFFI-to-LLVM and the remaining LLVM conversions, canonicalization and cast
-   reconciliation. Ownership cleanup is materialized before either inliner.
+   TVMFFI-to-LLVM and the remaining LLVM conversions through Func-to-LLVM. Finish
+   with cast reconciliation, canonicalization and symbol DCE so cleanup sees the
+   final LLVM IR. Inlining runs once, after local calls become `func.call` and
+   before SCF-to-CF; ownership cleanup is already materialized at that point.
 
 `tvm_ffi.monad.call @callee(...)` returns `Result<T>`, where T exactly matches
 its callee's return type. `lower-tvm-ffi-monad` emits `tvm_ffi.call @callee(...)`

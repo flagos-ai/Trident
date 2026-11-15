@@ -6,6 +6,12 @@
 //===----------------------------------------------------------------------===//
 
 // RUN: trident-core-opt %s --lower-kernel-launch --convert-tvm-ffi-to-gpu --lower-tvm-ffi-monad --decompose-tvm-ffi --lower-tvm-ffi-defer --lower-to-pack --convert-tvm-ffi-to-func --convert-scf-to-cf --convert-tvm-ffi-to-llvm --convert-dlpack-to-llvm -split-input-file | FileCheck %s
+// RUN: trident-core-opt %s --trident-lowering-pipeline --verify-each | FileCheck %s --check-prefix=PIPELINE --implicit-check-not='!tvm_ffi.' --implicit-check-not='dlpack.' --implicit-check-not='unrealized_conversion_cast'
+
+// PIPELINE-LABEL: llvm.func @test_kernel_launch(
+// PIPELINE: %[[STREAM:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIEnvGetStream(%[[DEVICE:[a-zA-Z0-9_]+]], %[[INDEX:[a-zA-Z0-9_]+]]) : (i32, i32) -> !llvm.ptr
+// PIPELINE: gpu.launch_func <%[[STREAM]] : !llvm.ptr> @kernel::@entry
+// PIPELINE: llvm.return
 
 // CHECK-LABEL: module attributes {gpu.container_module}
 // CHECK: gpu.binary @kernel
