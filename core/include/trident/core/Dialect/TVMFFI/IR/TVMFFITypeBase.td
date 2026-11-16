@@ -24,6 +24,8 @@ def TVMFFI_Contains : NativeTypeTrait<"Contains", [{
 }]>;
 def TVMFFI_HasObject : NativeTypeTrait<"HasObject">;
 def TVMFFI_HasStaticTypeIndex : NativeTypeTrait<"HasStaticTypeIndex">;
+def TVMFFI_IsIntegral : NativeTypeTrait<"IsIntegral">;
+def TVMFFI_IsNumeric : NativeTypeTrait<"IsNumeric">;
 def TVMFFI_MayHaveObject : Type<Or<[
   CPred<"$_self.hasTrait<::mlir::TypeTrait::HasObject>()">,
   CPred<"$_self.hasTrait<::mlir::TypeTrait::Contains>()">

@@ -8,7 +8,9 @@ import unittest
 from trident.core import ir
 from trident.core.dialects import func
 from trident.core.dialects import tvm_ffi as tvm_ffi_d
-from trident.ir import constant, pure, value_type
+from trident.utils.monad import pure
+from trident.utils.types import value_type
+from trident.utils.values import constant
 
 from test.support.ir import new_context
 
@@ -113,8 +115,9 @@ class BindingsTest(unittest.TestCase):
                     self.assertEqual(len(empty.arguments), 0)
                     tvm_ffi_d.monad_yield([])
 
-                self.assertEqual(empty.get_entry_block(), empty.body.blocks[0])
-                self.assertEqual(empty.add_entry_block(), empty.body.blocks[0])
+                [empty_block] = empty.body.blocks
+                self.assertEqual(empty.get_entry_block(), empty_block)
+                self.assertEqual(empty.add_entry_block(), empty_block)
                 self.assertEqual(len(empty.body.blocks), 1)
                 func.return_([])
 
@@ -206,7 +209,8 @@ class BindingsTest(unittest.TestCase):
                     self.assertEqual(
                         [value.type for value in body.arguments], [argument_type]
                     )
-                    self.assertEqual(body.arguments[0].location, location)
+                    [argument] = body.arguments
+                    self.assertEqual(argument.location, location)
                     self.assertEqual(operation.get_entry_block(), body)
                     self.assertEqual(operation.add_entry_block(), body)
                     self.assertEqual(len(operation.body.blocks), 1)
@@ -241,11 +245,14 @@ class BindingsTest(unittest.TestCase):
                     func.return_([monad_call.result, call.success, call.value])
             self.assertTrue(module.operation.verify())
             parsed = ir.Module.parse(f"{module}")
-            calls = list(parsed.body.operations[1].regions[0].blocks[0].operations)
-            self.assertIsInstance(calls[0], tvm_ffi_d.MonadCallOp)
-            self.assertIsInstance(calls[1], tvm_ffi_d.CallOp)
-            self.assertIsInstance(calls[1].success.type, tvm_ffi_d.BoolType)
-            self.assertIsInstance(calls[1].value.type, tvm_ffi_d.AnyType)
+            _, caller = parsed.body.operations
+            [region] = caller.regions
+            [block] = region.blocks
+            monad_call, call, _ = block.operations
+            self.assertIsInstance(monad_call, tvm_ffi_d.MonadCallOp)
+            self.assertIsInstance(call, tvm_ffi_d.CallOp)
+            self.assertIsInstance(call.success.type, tvm_ffi_d.BoolType)
+            self.assertIsInstance(call.value.type, tvm_ffi_d.AnyType)
 
     def test_monad_unpack(self) -> None:
         context = new_context()

@@ -200,6 +200,30 @@ public:
   }
 };
 
+class LowerExecuteRegionOp final
+    : public mlir::OpConversionPattern<mlir::scf::ExecuteRegionOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  mlir::LogicalResult
+  matchAndRewrite(mlir::scf::ExecuteRegionOp op, OpAdaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    llvm::SmallVector<mlir::Type> types;
+    if (mlir::failed(
+            getTypeConverter()->convertTypes(op.getResultTypes(), types)) ||
+        mlir::failed(rewriter.convertRegionTypes(&op.getRegion(),
+                                                 *getTypeConverter()))) {
+      return mlir::failure();
+    }
+    mlir::scf::ExecuteRegionOp replacement = mlir::scf::ExecuteRegionOp::create(
+        rewriter, op.getLoc(), types, op.getNoInlineAttr());
+    replacement->setAttrs(op->getAttrs());
+    rewriter.inlineRegionBefore(op.getRegion(), replacement.getRegion(),
+                                replacement.getRegion().end());
+    rewriter.replaceOp(op, replacement.getResults());
+    return mlir::success();
+  }
+};
+
 // These regionless operations keep their semantics; only operands and results
 // change. Region-bearing operations use their own structural conversions below.
 template <typename OpTy>
@@ -278,10 +302,10 @@ void populateLowerTVMFFIMonadConversionPatterns(
                (body.empty() ||
                 converter.isLegal(body.front().getArgumentTypes()));
       });
-  patterns
-      .add<LowerBindOp, LowerCallOp, LowerFailOp, LowerPureOp, LowerUnpackOp,
-           LowerYieldOp, GenericOpPattern<mlir::func::CallOp>,
-           GenericOpPattern<mlir::func::ReturnOp>>(converter, context);
+  patterns.add<LowerBindOp, LowerCallOp, LowerExecuteRegionOp, LowerFailOp,
+               LowerPureOp, LowerUnpackOp, LowerYieldOp,
+               GenericOpPattern<mlir::func::CallOp>,
+               GenericOpPattern<mlir::func::ReturnOp>>(converter, context);
   // Preserve yield attributes instead of using the upstream structural rewrite.
   patterns.add<GenericOpPattern<mlir::scf::YieldOp>>(converter, context,
                                                      mlir::PatternBenefit(2));
@@ -291,6 +315,8 @@ void populateLowerTVMFFIMonadConversionPatterns(
       patterns, converter);
   mlir::scf::populateSCFStructuralTypeConversionsAndLegality(converter,
                                                              patterns, target);
+  target.addDynamicallyLegalOp<mlir::scf::YieldOp>(
+      [&](mlir::scf::YieldOp op) -> bool { return converter.isLegal(op); });
   mlir::cf::populateCFStructuralTypeConversionsAndLegality(converter, patterns,
                                                            target);
 }

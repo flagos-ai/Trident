@@ -51,7 +51,9 @@ mlir::LogicalResult MonadBindOp::canonicalize(MonadBindOp op,
                                               mlir::PatternRewriter &rewriter) {
   mlir::Block &body = *op.getEntryBlock();
   // Replacing block arguments and moving the body require a region rewrite.
-  for (auto [index, input] : llvm::enumerate(op.getInputs())) {
+  for (auto it : llvm::enumerate(op.getInputs())) {
+    std::size_t index = it.index();
+    mlir::Value input = it.value();
     if (MonadPureOp pure = input.getDefiningOp<MonadPureOp>()) {
       rewriter.replaceAllUsesWith(body.getArgument(index), pure.getValue());
       rewriter.modifyOpInPlace(op, [&body, index, op] {
@@ -91,12 +93,11 @@ mlir::LogicalResult MonadBindOp::verify() {
 mlir::LogicalResult MonadCallOp::verify() {
   FuncOp function = mlir::SymbolTable::lookupNearestSymbolFrom<FuncOp>(
       getOperation(), getCalleeAttr());
-  if (function && (function.getResultTypes().size() != 1 ||
-                   getResult().getType().getPayloadType() !=
-                       function.getResultTypes().front())) {
-    return emitOpError("Result payload must match the callee result");
-  }
-  return mlir::success();
+  return function && (function.getResultTypes().size() != 1 ||
+                      getResult().getType().getPayloadType() !=
+                          function.getResultTypes().front())
+             ? emitOpError("Result payload must match the callee result")
+             : mlir::success();
 }
 
 mlir::LogicalResult MonadFailOp::verify() {

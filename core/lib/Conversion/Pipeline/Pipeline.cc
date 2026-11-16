@@ -11,6 +11,7 @@
 #include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
 #include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
+#include "trident/core/Dialect/TVMFFI/Transforms/LowerArith.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerKernelLaunch.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
 #include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
@@ -42,19 +43,22 @@ class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
   void runOnOperation() final {
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
-    // Materialize lexical cleanup before inlining can merge its block scopes.
+    // Expand semantic arithmetic and guarded launches before simplifying
+    // Results.
+    pm.addPass(tvm_ffi::createLowerArith());
     pm.addPass(tvm_ffi::createLowerKernelLaunch());
     pm.addPass(createConvertTVMFFIToGPU());
     // Simplify continuations while Result success and payloads are explicit.
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
     pm.addPass(mlir::createCanonicalizerPass());
+    // Materialize lexical cleanup before inlining can merge its block scopes.
     pm.addPass(tvm_ffi::createDecomposeTVMFFI());
     pm.addPass(tvm_ffi::createLowerTVMFFIDefer());
-    pm.addPass(mlir::createInlinerPass());
+    // Remove unused ABI declarations before packed entries take their names.
     pm.addPass(mlir::createSymbolDCEPass());
-    pm.addPass(tvm_ffi::createLowerTensorMetadata());
     // Form packed entry bodies before lowering their native ABI.
+    pm.addPass(tvm_ffi::createLowerTensorMetadata());
     pm.addPass(tvm_ffi::createLowerToPack());
     pm.addPass(createConvertTVMFFIToFunc());
     pm.addPass(mlir::createCanonicalizerPass());
@@ -69,6 +73,8 @@ class TridentLoweringPipelinePass final
     pm.addPass(mlir::createCSEPass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
+    // Clean up forwarding blocks and join arguments before GPU preparation.
+    pm.addPass(mlir::createCanonicalizerPass());
     // GPU conversion simplifies regions before applying LLVM patterns. Run it
     // before packed calls and reference checks expand into large LLVM CFGs.
     pm.addPass(
@@ -78,10 +84,12 @@ class TridentLoweringPipelinePass final
     pm.addPass(mlir::createUBToLLVMConversionPass());
     pm.addPass(mlir::createArithToLLVMConversionPass());
     pm.addPass(mlir::createConvertControlFlowToLLVMPass());
-    pm.addPass(mlir::createSymbolDCEPass());
     pm.addPass(mlir::createConvertFuncToLLVMPass());
-    pm.addPass(mlir::createCanonicalizerPass());
+    // Fold the final LLVM IR after removing conversion bridges, then drop
+    // symbols made unused by conversion and simplification.
     pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createSymbolDCEPass());
     if (mlir::failed(pm.run(getOperation()))) {
       signalPassFailure();
     }

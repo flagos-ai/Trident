@@ -84,6 +84,14 @@ bool TVMFFICOpaqueABIType::classof(mlir::Type type) {
   return type && type.hasTrait<mlir::TypeTrait::TVMFFICOpaqueABI>();
 }
 
+bool TVMFFIIntegralType::classof(mlir::Type type) {
+  return type && type.hasTrait<mlir::TypeTrait::IsIntegral>();
+}
+
+bool TVMFFINumericType::classof(mlir::Type type) {
+  return type && type.hasTrait<mlir::TypeTrait::IsNumeric>();
+}
+
 bool TVMFFIObjectType::classof(mlir::Type type) {
   return type && type.hasTrait<mlir::TypeTrait::HasObject>();
 }

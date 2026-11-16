@@ -100,25 +100,6 @@ def _type_kind_expr(jit_type: torch.JitType) -> str:
 
 
 # ===========================================================================
-# Schema -> tuple[str, str, str]
-# ===========================================================================
-
-
-# ===========================================================================
-# Code generation
-# ===========================================================================
-
-
-def generate_source(operators: list[tuple[str, str, str]]) -> str:
-    env: jinja2.Environment = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(_TEMPLATE_DIR),
-        keep_trailing_newline=True,
-    )
-    template: jinja2.Template = env.get_template("aten.cc.j2")
-    return template.render(operators=operators)
-
-
-# ===========================================================================
 # CLI
 # ===========================================================================
 
@@ -160,8 +141,31 @@ def main() -> None:
             (name.split(".", 1) if "." in name else (name, "") for name in args.op),
         )
 
-    operators: list[tuple[str, str, str]] = [schema_to_descriptor(s) for s in schemas]
-    source_content: Final[str] = generate_source(operators)
+    operators: list[tuple[str, str, str]] = []
+    for schema in schemas:
+        name = schema.name.removeprefix("aten::")
+        if len(schema.returns) == 0:
+            ret_expr = "c10::NoneType"
+        elif len(schema.returns) == 1:
+            [ret] = schema.returns
+            ret_expr = _type_kind_expr(ret.type)
+        else:
+            inner = ", ".join(_type_kind_expr(ret.type) for ret in schema.returns)
+            ret_expr = f"{_NAMESPACE}::Contain<c10::TupleType, {_NAMESPACE}::SubTypes<{inner}>>"
+        args_expr = f"{_NAMESPACE}::Args<{', '.join(_type_kind_expr(arg.type) for arg in schema.arguments)}>"
+        operators.append(
+            (
+                name,
+                schema.overload_name,
+                f"{_NAMESPACE}::Function<{ret_expr}, {args_expr}>::call",
+            )
+        )
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(_TEMPLATE_DIR),
+        keep_trailing_newline=True,
+    )
+    template = env.get_template("aten.cc.j2")
+    source_content: Final[str] = template.render(operators=operators)
 
     if args.out:
         source_dir = os.path.dirname(args.out)
@@ -171,33 +175,6 @@ def main() -> None:
             f.write(source_content)
     else:
         print(source_content)
-
-
-def schema_to_descriptor(schema: torch.FunctionSchema) -> tuple[str, str, str]:
-    name: Final[str] = schema.name.removeprefix("aten::")
-
-    # --- Build ret_expr ---
-    if len(schema.returns) == 0:
-        ret_expr: Final[str] = "c10::NoneType"
-    elif len(schema.returns) == 1:
-        [ret] = schema.returns
-        ret_expr: Final[str] = _type_kind_expr(ret.type)
-    else:
-        inner: Final[str] = ", ".join(_type_kind_expr(r.type) for r in schema.returns)
-        ret_expr: Final[str] = (
-            f"{_NAMESPACE}::Contain<c10::TupleType, {_NAMESPACE}::SubTypes<{inner}>>"
-        )
-
-    # --- Build args_expr ---
-    args_expr: Final[str] = (
-        f"{_NAMESPACE}::Args<{', '.join(_type_kind_expr(arg.type) for arg in schema.arguments)}>"
-    )
-
-    return (
-        name,
-        schema.overload_name,
-        f"{_NAMESPACE}::Function<{ret_expr}, {args_expr}>::call",
-    )
 
 
 if __name__ == "__main__":

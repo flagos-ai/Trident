@@ -213,6 +213,33 @@ public:
   }
 };
 
+class ConvertExecuteRegionOp final
+    : public mlir::OpConversionPattern<mlir::scf::ExecuteRegionOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  mlir::LogicalResult
+  matchAndRewrite(mlir::scf::ExecuteRegionOp op, OpAdaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    llvm::SmallVector<mlir::Type> types;
+    if (mlir::failed(
+            getTypeConverter()->convertTypes(op.getResultTypes(), types)) ||
+        mlir::failed(rewriter.convertRegionTypes(&op.getRegion(),
+                                                 *getTypeConverter()))) {
+      return mlir::failure();
+    }
+    mlir::scf::ExecuteRegionOp replacement = mlir::scf::ExecuteRegionOp::create(
+        rewriter, op.getLoc(), types, op.getNoInlineAttr());
+    replacement->setAttrs(op->getAttrs());
+    rewriter.inlineRegionBefore(op.getRegion(), replacement.getRegion(),
+                                replacement.getRegion().end());
+    rewriter.setInsertionPointAfter(replacement);
+    createObjectDecRefs(rewriter, op.getLoc(), op.getResultTypes(),
+                        replacement.getResults());
+    rewriter.replaceOp(op, replacement.getResults());
+    return mlir::success();
+  }
+};
+
 class ConvertForOp final : public mlir::OpConversionPattern<mlir::scf::ForOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -381,8 +408,8 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::scf::YieldOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    if (!mlir::isa<mlir::scf::ForOp, mlir::scf::IfOp, mlir::scf::WhileOp>(
-            op->getParentOp())) {
+    if (!mlir::isa<mlir::scf::ExecuteRegionOp, mlir::scf::ForOp,
+                   mlir::scf::IfOp, mlir::scf::WhileOp>(op->getParentOp())) {
       return rewriter.notifyMatchFailure(op, "unsupported region boundary");
     }
     createObjectIncRefs(rewriter, op.getLoc(), op.getOperandTypes(),
@@ -484,8 +511,8 @@ void populateDecomposeTVMFFIConversionPatterns(
       ConvertGenericOp<TensorStrideOp>, ConvertGenericOp<UpcastOp>,
       ConvertGenericOp<mlir::func::CallOp, true>, ConvertTupleUnconstructOp>(
       converter, context);
-  patterns.add<ConvertConditionOp, ConvertForOp, ConvertIfOp, ConvertWhileOp,
-               ConvertYieldOp>(converter, context);
+  patterns.add<ConvertConditionOp, ConvertExecuteRegionOp, ConvertForOp,
+               ConvertIfOp, ConvertWhileOp, ConvertYieldOp>(converter, context);
   mlir::populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(patterns,
                                                                  converter);
   mlir::populateFunctionOpInterfaceTypeConversionPattern<PackFuncOp>(patterns,

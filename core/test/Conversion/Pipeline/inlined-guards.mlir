@@ -3,16 +3,21 @@
 
 // RUN: trident-core-opt %s --lift-cf-to-scf --inline --symbol-dce --cse --canonicalize --verify-each | FileCheck %s
 
-// Callee metadata requires DLPack's inliner interface. Boxing must not hide
-// that the callee repeats a guard already established by the caller.
+// DLPack supports inlining. Metadata reads retain memory effects, so generic
+// CSE conservatively preserves the second read; scalar boxing still folds.
 // CHECK-LABEL: func.func @dispatch(
 // CHECK-SAME: %[[TENSOR:[a-zA-Z0-9_]+]]: !dlpack.dl_tensor)
 // CHECK: %[[RANK:[a-zA-Z0-9_]+]] = dlpack.tensor.dim %[[TENSOR]]
 // CHECK: %[[MATCH:[a-zA-Z0-9_]+]] = arith.cmpi eq, %[[RANK]], %[[EXPECTED:[a-zA-Z0-9_]+]]
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = scf.if %[[MATCH]]
-// CHECK-NOT: scf.if
-// CHECK-NOT: func.call
+// CHECK: %[[FRESH:[a-zA-Z0-9_]+]] = dlpack.tensor.dim %[[TENSOR]]
+// CHECK-NOT: tvm_ffi.
+// CHECK: %[[CHECKED:[a-zA-Z0-9_]+]] = arith.cmpi eq, %[[FRESH]], %[[EXPECTED]]
+// CHECK: scf.if %[[CHECKED]]
+// CHECK-NOT: func.call @checked
 // CHECK: func.call @run
+// CHECK: } else {
+// CHECK: func.call @reject
 // CHECK: } else {
 // CHECK: func.call @reject
 // CHECK: return %[[RESULT]]

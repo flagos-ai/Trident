@@ -35,7 +35,8 @@ class SpecializationTest(unittest.TestCase):
             device: torch.device = x.device
             first: torch.Tensor = empty_on_device(x, device)
             repeated: torch.Tensor = empty_on_device(x, device)
-            imported_module = f"{empty_on_device._sub_modules[0]}"
+            module, *_ = empty_on_device._sub_modules
+            imported_module = f"{module}"
             self.assertIn("trident.aten.empty_like", imported_module)
             self.assertNotIn("trident.aten.empty_permuted", imported_module)
             torch.testing.assert_close(first, torch.zeros_like(x))
@@ -66,7 +67,9 @@ class SpecializationTest(unittest.TestCase):
 
     def test_string_specialization(self) -> None:
         @trident.jit
-        def named(x: torch.Tensor, name: str):
+        def named(
+            x: torch.Tensor, name: str
+        ) -> tuple[str, dict[str, list[str | torch.Tensor | tuple[str]]]]:
             return name, {
                 "nested": [name, x + 1, ("constant string longer than seven bytes",)]
             }
@@ -84,12 +87,13 @@ class SpecializationTest(unittest.TestCase):
             for name in names:
                 for phase in ("first", "repeated"):
                     with self.subTest(name=name, phase=phase):
-                        result = named(x, name)
-                        self.assertEqual(result[0], name)
-                        self.assertEqual(result[1]["nested"][0], name)
-                        torch.testing.assert_close(result[1]["nested"][1], x + 1)
+                        result_name, result_values = named(x, name)
+                        nested_name, tensor, strings = result_values["nested"]
+                        self.assertEqual(result_name, name)
+                        self.assertEqual(nested_name, name)
+                        torch.testing.assert_close(tensor, x + 1)
                         self.assertEqual(
-                            result[1]["nested"][2],
+                            strings,
                             ("constant string longer than seven bytes",),
                         )
             self.assertEqual(len(named._sub_modules), len(names))
