@@ -55,14 +55,12 @@ Dependencies as declared in `pyproject.toml`:
 CC=clang CXX=clang++ uv pip install -ve . \
 	--no-build-isolation \
 	-Cbuild-dir=build \
-	-Ccmake.define.LLVM_ROOT=/path/to/llvm-install \
+	-Ccmake.define.MLIR_ROOT=/path/to/llvm-install \
 	-Ccmake.define.CMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
 
-`LLVM_ROOT` is the LLVM/MLIR installation prefix. CMake uses it as the package
-root when locating MLIR and its matching LLVM installation. When omitted, the
-build reuses `build/install/llvm-project` if available; otherwise CMake fetches
-and builds the pinned LLVM/MLIR revision.
+Set `MLIR_ROOT` to use an existing LLVM/MLIR installation. CMake searches for
+MLIR and fetches and builds the pinned revision if none is found.
 
 The same CMake variable can be passed to pip without adding an environment
 variable:
@@ -70,7 +68,7 @@ variable:
 ```bash
 CC=clang CXX=clang++ python -m pip install . \
 	--config-settings=build-dir=build \
-	--config-settings=cmake.define.LLVM_ROOT=/path/to/llvm-install
+	--config-settings=cmake.define.MLIR_ROOT=/path/to/llvm-install
 ```
 
 ### Build Wheel
@@ -84,7 +82,7 @@ config setting, for example:
 
 ```bash
 CC=clang CXX=clang++ uv build \
-	-Ccmake.define.LLVM_ROOT=/path/to/llvm-install
+	-Ccmake.define.MLIR_ROOT=/path/to/llvm-install
 ```
 
 ## Run Examples
