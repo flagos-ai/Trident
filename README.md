@@ -59,10 +59,10 @@ CC=clang CXX=clang++ uv pip install -ve . \
 	-Ccmake.define.CMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
 
-`LLVM_ROOT` is the LLVM/MLIR installation prefix containing
-`lib/cmake/llvm/LLVMConfig.cmake` and `lib/cmake/mlir/MLIRConfig.cmake`.
-When omitted, the build reuses `build/install/llvm-project` if available;
-otherwise CMake fetches and builds the pinned LLVM/MLIR revision.
+`LLVM_ROOT` is the LLVM/MLIR installation prefix. CMake uses it as the package
+root when locating MLIR and its matching LLVM installation. When omitted, the
+build reuses `build/install/llvm-project` if available; otherwise CMake fetches
+and builds the pinned LLVM/MLIR revision.
 
 The same CMake variable can be passed to pip without adding an environment
 variable:
