@@ -9,11 +9,16 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(Python_EXECUTABLE ${Python3_EXECUTABLE})
 set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 
-set(_TRIDENT_LLVM_CONFIG
-    ${CMAKE_BINARY_DIR}/install/llvm-project/lib/cmake/llvm/LLVMConfig.cmake)
-if(EXISTS "${_TRIDENT_LLVM_CONFIG}")
-  message(
-    STATUS "Using prebuilt LLVM at ${CMAKE_BINARY_DIR}/install/llvm-project")
+set(LLVM_SYSPATH "$ENV{LLVM_SYSPATH}" CACHE PATH
+    "Path to system LLVM installation")
+
+if(NOT MLIR_ROOT AND LLVM_SYSPATH)
+  set(MLIR_ROOT "${LLVM_SYSPATH}")
+endif()
+
+find_package(MLIR QUIET CONFIG)
+
+if(MLIR_FOUND)
   add_custom_target(llvm-project)
 else()
   ExternalProject_Add(
@@ -28,7 +33,7 @@ else()
                -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
                -DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}
                -DCMAKE_EXPORT_COMPILE_COMMANDS=${CMAKE_EXPORT_COMPILE_COMMANDS}
-               -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/install/llvm-project
+               -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
                -DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE}
                -DLLVM_ENABLE_LLD=${LLVM_ENABLE_LLD}
                -DLLVM_ENABLE_PROJECTS=mlir
@@ -41,6 +46,9 @@ else()
                -DPython3_FIND_VIRTUALENV=ONLY
                -DPython_EXECUTABLE=${Python_EXECUTABLE}
                -DPython_FIND_VIRTUALENV=ONLY)
+  ExternalProject_Get_Property(llvm-project INSTALL_DIR)
+  set(LLVM_DIR "${INSTALL_DIR}/lib/cmake/llvm")
+  set(MLIR_DIR "${INSTALL_DIR}/lib/cmake/mlir")
 endif()
 
 ExternalProject_Add(
@@ -59,9 +67,9 @@ ExternalProject_Add(
              -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/install/trident
              -DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE}
              -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
-             -DLLVM_DIR=${CMAKE_BINARY_DIR}/install/llvm-project/lib/cmake/llvm
+             -DLLVM_DIR=${LLVM_DIR}
              -DLLVM_ENABLE_LLD=${LLVM_ENABLE_LLD}
-             -DMLIR_DIR=${CMAKE_BINARY_DIR}/install/llvm-project/lib/cmake/mlir
+             -DMLIR_DIR=${MLIR_DIR}
              -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
              -DPython3_EXECUTABLE=${Python3_EXECUTABLE}
              -DPython3_FIND_VIRTUALENV=ONLY

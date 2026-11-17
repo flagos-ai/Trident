@@ -13,7 +13,8 @@ The repository contains:
 ## Current Status
 
 - Build system is wired through `scikit-build-core` + CMake.
-- LLVM/MLIR is fetched and built as an external project.
+- LLVM/MLIR can be supplied from a local installation or fetched and built as an
+  external project.
 - Python extension artifacts are installed directly under `trident/` in wheel/editable builds.
 
 ## Repository Layout
@@ -54,13 +55,42 @@ Dependencies as declared in `pyproject.toml`:
 CC=clang CXX=clang++ uv pip install -ve . \
 	--no-build-isolation \
 	-Cbuild-dir=build \
+	-Ccmake.define.MLIR_ROOT=/path/to/llvm-install \
 	-Ccmake.define.CMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
+
+Set `MLIR_ROOT` to use an existing LLVM/MLIR installation. CMake searches for
+MLIR and fetches and builds the pinned revision if none is found.
+
+Alternatively, set the `LLVM_SYSPATH` environment variable used by Triton. It
+is used as the MLIR package root when `MLIR_ROOT` is not set:
+
+```bash
+LLVM_SYSPATH=/path/to/llvm-install \
+	CC=clang CXX=clang++ uv pip install -ve . --no-build-isolation
+```
+
+The same CMake variable can be passed to pip without adding an environment
+variable:
+
+```bash
+CC=clang CXX=clang++ python -m pip install . \
+	--config-settings=build-dir=build \
+	--config-settings=cmake.define.MLIR_ROOT=/path/to/llvm-install
 ```
 
 ### Build Wheel
 
 ```bash
 CC=clang CXX=clang++ uv build
+```
+
+To use a local LLVM/MLIR installation for a wheel build, pass the same backend
+config setting, for example:
+
+```bash
+CC=clang CXX=clang++ uv build \
+	-Ccmake.define.MLIR_ROOT=/path/to/llvm-install
 ```
 
 ## Run Examples
