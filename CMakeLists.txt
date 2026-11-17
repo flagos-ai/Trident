@@ -9,6 +9,13 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(Python_EXECUTABLE ${Python3_EXECUTABLE})
 set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 
+set(LLVM_SYSPATH "$ENV{LLVM_SYSPATH}" CACHE PATH
+    "Path to system LLVM installation")
+
+if(NOT MLIR_ROOT AND LLVM_SYSPATH)
+  set(MLIR_ROOT "${LLVM_SYSPATH}")
+endif()
+
 find_package(MLIR QUIET CONFIG)
 
 if(MLIR_FOUND)

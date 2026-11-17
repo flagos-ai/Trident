@@ -62,6 +62,14 @@ CC=clang CXX=clang++ uv pip install -ve . \
 Set `MLIR_ROOT` to use an existing LLVM/MLIR installation. CMake searches for
 MLIR and fetches and builds the pinned revision if none is found.
 
+Alternatively, set the `LLVM_SYSPATH` environment variable used by Triton. It
+is used as the MLIR package root when `MLIR_ROOT` is not set:
+
+```bash
+LLVM_SYSPATH=/path/to/llvm-install \
+	CC=clang CXX=clang++ uv pip install -ve . --no-build-isolation
+```
+
 The same CMake variable can be passed to pip without adding an environment
 variable:
 
