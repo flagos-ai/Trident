@@ -63,8 +63,9 @@ class LocalCallTest(unittest.TestCase):
         empty = graph.stub_compile()
         graph._output_spec = torch.utils._pytree.tree_structure(0)
         with graph.ctx:
-            module = ir.Module.parse("""
-                tvm_ffi_api.func @main_0(%value: !tvm_ffi_api.tensor) -> !tvm_ffi_api.any {
+            module = ir.Module.parse(
+                """
+                tvm_ffi_api.func @main_0(%value: !tvm_ffi_abi.int) -> !tvm_ffi_api.any {
                   %rejected = tvm_ffi_api.exception "GuardMatch" : !tvm_ffi_api.exception
                   %payload = tvm_ffi_api.upcast %rejected : !tvm_ffi_api.exception -> !tvm_ffi_api.any
                   %yes = tvm_ffi_abi.constant.bool true
@@ -75,7 +76,14 @@ class LocalCallTest(unittest.TestCase):
                   %yes = tvm_ffi_abi.constant.bool true
                   tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-            """)
+                tvm_ffi_api.func @main_2(%value: !tvm_ffi_abi.int) -> !tvm_ffi_api.any {
+                  %rejected = tvm_ffi_api.exception "GuardMatch" : !tvm_ffi_api.exception
+                  %payload = tvm_ffi_api.upcast %rejected : !tvm_ffi_api.exception -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
+                }
+            """
+            )
 
         def add_guards(module: ir.Module, symbols: tuple[str, ...]) -> None:
             graph._dispatcher = Root()
@@ -102,13 +110,14 @@ class LocalCallTest(unittest.TestCase):
             module,
             *(ir.Module.create(loc=module.operation.location) for _ in range(3)),
         ]
-        add_guards(module, ("main_0",))
+        add_guards(module, ("main_0", "main_2"))
         rejected = graph.stub_compile()
         add_guards(module, ("main_1",))
         execute = graph.stub_compile()
 
         with graph.ctx:
-            failure = ir.Module.parse(r"""
+            failure = ir.Module.parse(
+                r"""
                 llvm.mlir.global internal constant @error_kind("RuntimeError\00")
                 llvm.mlir.global internal constant @error_message("dispatcher failure\00")
                 llvm.func @TVMFFIErrorSetRaisedFromCStr(!llvm.ptr, !llvm.ptr)
@@ -121,7 +130,8 @@ class LocalCallTest(unittest.TestCase):
                   %no = tvm_ffi_abi.constant.bool false
                   tvm_ffi_api.return %no, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-            """)
+            """
+            )
             _, success_function, *_ = module.body.operations
             success = success_function.operation.clone()
             failure.body.append(success)
@@ -132,9 +142,9 @@ class LocalCallTest(unittest.TestCase):
         def check() -> None:
             self.assertIsInstance(empty(7), Exception)
             self.assertEqual(execute(7), 7)
-            tensor = torch.ones(2, device="cuda")
-            with self.assertRaisesRegex(RuntimeError, "GuardMatch"):
-                rejected(tensor)
+            miss = rejected(7)
+            self.assertIsInstance(miss, Exception)
+            self.assertEqual(miss.get_kind(), "GuardMiss")
             self.assertEqual(execute(-3), -3)
             with self.assertRaisesRegex(RuntimeError, "dispatcher failure"):
                 failed(7)
@@ -146,7 +156,8 @@ class LocalCallTest(unittest.TestCase):
         context = new_context()
         with context:
             register_all_passes()
-            module = ir.Module.parse("""
+            module = ir.Module.parse(
+                """
                 tvm_ffi_api.func @finite(%value: !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none>)
                     -> !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none> {
                   %payload = tvm_ffi_api.upcast %value : !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none> -> !tvm_ffi_api.any
@@ -170,7 +181,8 @@ class LocalCallTest(unittest.TestCase):
                   %yes = tvm_ffi_abi.constant.bool true
                   tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-            """)
+            """
+            )
             finite, string, failed = self._compile_entries(
                 module, "finite", "string", "invoke_failed"
             )
@@ -195,7 +207,8 @@ class LocalCallTest(unittest.TestCase):
         context = new_context()
         with context:
             register_all_passes()
-            module = ir.Module.parse("""
+            module = ir.Module.parse(
+                """
                 tvm_ffi_api.pack.func @count(%args: !tvm_ffi_abi.pack.arguments) -> !tvm_ffi_abi.int {
                   %count = tvm_ffi_api.pack.size %args : !tvm_ffi_abi.pack.arguments
                   %boxed = tvm_ffi_abi.to %count : i64 -> !tvm_ffi_abi.int
@@ -269,7 +282,8 @@ class LocalCallTest(unittest.TestCase):
                   %yes = tvm_ffi_abi.constant.bool true
                   tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-            """)
+            """
+            )
             count, forward_empty, forward, invoke, invoke_monad, invoke_empty = (
                 self._compile_entries(
                     module,
@@ -467,7 +481,8 @@ class LocalCallTest(unittest.TestCase):
         ) -> tvm_ffi.Function:
             with graph.ctx, ir.Location.unknown():
                 module = (
-                    ir.Module.parse(r"""
+                    ir.Module.parse(
+                        r"""
                     llvm.mlir.global internal constant @error_kind("RuntimeError\00")
                     llvm.mlir.global internal constant @error_message("guard failure\00")
                     llvm.func @TVMFFIErrorSetRaisedFromCStr(!llvm.ptr, !llvm.ptr)
@@ -480,7 +495,8 @@ class LocalCallTest(unittest.TestCase):
                       %no = tvm_ffi_abi.constant.bool false
                       tvm_ffi_api.return %no, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                     }
-                """)
+                """
+                    )
                     if failing
                     else ir.Module.create()
                 )

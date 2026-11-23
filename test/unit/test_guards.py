@@ -31,6 +31,7 @@ from trident.guards.expressions.nodes import UnsupportedExpression
 from trident.guards.expressions.syntax import parse_expression
 from trident.guards.scope import Scope
 from trident.guards.tree import (
+    CandidateGroup,
     ExecutionNode,
     GuardNode,
     Node,
@@ -364,7 +365,7 @@ class DispatcherTreeTest(unittest.TestCase):
                         tvm_ffi_api.upcast(any_type, constant(0)),
                     )
             else:
-                assert isinstance(node, (GuardNode, Root, SCMNode))
+                assert isinstance(node, (CandidateGroup, GuardNode, Root, SCMNode))
                 if isinstance(node, SCMNode):
                     input_types = tuple(node.input_types.values())
                 for child in node.children:
@@ -403,7 +404,7 @@ class DispatcherTreeTest(unittest.TestCase):
             for _ in range(2):
                 module = self._build_dispatcher(dispatcher)
                 self.assertNotIn("tvm_ffi_api.pack.size", f"{module}")
-                self.assertNotIn("tvm_ffi_api.isa", f"{module}")
+                self.assertEqual(f"{module}".count("tvm_ffi_api.isa"), 3)
                 self.assertEqual(f"{module}".count("tvm_ffi_arith.ge"), 1)
             previous = f"{module}"
             dispatcher.add(
@@ -436,6 +437,31 @@ class DispatcherTreeTest(unittest.TestCase):
                 dispatcher.add((), signature, f"run_{index}")
             self.assertEqual(len(dispatcher.children), len(signatures))
             self._build_dispatcher(dispatcher)
+
+    def test_identical_trailing_paths_share_ordered_candidate_group(self) -> None:
+        with new_context(), ir.Location.unknown():
+            input_types = {"x": tvm_ffi_abi.IntType.get()}
+            guards = parse_guards([FakeGuard("SHAPE_ENV", ["L['x'] >= 0"])])
+            dispatcher = Root()
+            dispatcher.add(guards, input_types, "run_0")
+            dispatcher.add(guards, input_types, "run_1")
+            dispatcher.add(guards, input_types, "run_1")
+
+            [scm] = dispatcher.children
+            [guard] = scm.children
+            self.assertIsInstance(guard, GuardNode)
+            [group] = guard.children
+            self.assertIsInstance(group, CandidateGroup)
+            self.assertEqual(
+                [candidate.graph_symbol for candidate in group.children],
+                ["run_0", "run_1"],
+            )
+
+            module = self._build_dispatcher(dispatcher)
+            text = f"{module}"
+            self.assertEqual(text.count("tvm_ffi_api.pack.call @run_0"), 1)
+            self.assertEqual(text.count("tvm_ffi_api.pack.call @run_1"), 1)
+            self.assertIn("trident.ffi.IsCandidateReject", text)
 
 
 class GuardParsingTest(unittest.TestCase):

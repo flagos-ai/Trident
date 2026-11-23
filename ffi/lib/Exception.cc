@@ -12,7 +12,9 @@
 #include "trident/ffi/Exception.h"
 #include "trident/ffi/ExceptionObj.h"
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <tvm/ffi/any.h>
 #if __has_include(<tvm/ffi/base_detail.h>)
 #include <tvm/ffi/base_detail.h>
 #else
@@ -53,6 +55,14 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def("trident.ffi.Exception",
            [](const tvm::ffi::String &kind) -> Exception {
              return Exception(kind);
+           })
+      .def("trident.ffi.IsCandidateReject",
+           [](bool success, const tvm::ffi::AnyView &payload) -> bool {
+             if (!success) {
+               return false;
+             }
+             std::optional<Exception> exception = payload.as<Exception>();
+             return exception && exception->GetKind() == "GuardMatch";
            })
       .def("trident.ffi.GetExceptionIndex", []() -> int32_t {
         return tvm::ffi::TypeToRuntimeTypeIndex<Exception>::v();

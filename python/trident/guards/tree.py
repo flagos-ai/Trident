@@ -13,7 +13,7 @@ from typing_extensions import override
 
 from trident.core import ir
 from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
-from trident.core.dialects import cf, scf
+from trident.core.dialects import builtin, cf, scf
 from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
 from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.utils.values import constant, native
@@ -41,22 +41,104 @@ def _build_children(
 
 
 class ExecutionNode(Node):
-    """Forward the original argument pack and return the execution result."""
+    """Execute one candidate and fall through only on a specialization reject."""
 
     def __init__(self, graph_symbol: str) -> None:
         self.graph_symbol: Final[str] = graph_symbol
 
     @override
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
-        entry: ir.Block = fallback_block.region.blocks.append()
+        blocks = fallback_block.region.blocks
+        bool_type = tvm_ffi_abi.BoolType.get()
+        any_type = tvm_ffi_api.AnyType.get()
+        entry = blocks.append()
+        classify = blocks.append(bool_type, any_type)
+        exception = blocks.append(bool_type, any_type)
+        rejected = blocks.append(any_type)
+        terminal = blocks.append(bool_type, any_type)
         with ir.InsertionPoint(entry):
             success, payload = tvm_ffi_api.pack_call(
                 ir.FlatSymbolRefAttr.get(self.graph_symbol),
                 scope.value,
-                results=[tvm_ffi_abi.BoolType.get(), tvm_ffi_api.AnyType.get()],
+                results=[bool_type, any_type],
             )
-            scf.yield_([success, payload])
+            # CFG arguments borrow their payload. Keep one reference alive
+            # after pack_call's block-local result cleanup runs. Reference counting
+            # uses ABI values; API-to-ABI lowering removes these cast bridges.
+            borrowed = builtin.UnrealizedConversionCastOp(
+                [tvm_ffi_abi.AnyType.get()], [payload]
+            ).results[0]
+            tvm_ffi_abi.ObjectIncRefOp(borrowed)
+            cf.cond_br(
+                native(success),
+                [success, payload],
+                [success, payload],
+                classify,
+                terminal,
+            )
+        with ir.InsertionPoint(classify):
+            classify_success, classify_payload = classify.arguments
+            is_exception = tvm_ffi_api.isa(
+                classify_payload,
+                tvm_ffi_api.ExceptionType.get(),
+            )
+            cf.cond_br(
+                is_exception,
+                [classify_success, classify_payload],
+                [classify_success, classify_payload],
+                exception,
+                terminal,
+            )
+        with ir.InsertionPoint(exception):
+            exception_success, exception_payload = exception.arguments
+            handle = tvm_ffi_api.FunctionGetGlobalOp(
+                "trident.ffi.IsCandidateReject"
+            ).result
+            is_rejection = tvm_ffi_api.FunctionCallOp(
+                tvm_ffi_abi.BoolType.get(),
+                handle,
+                [exception_success, exception_payload],
+            ).result
+            cf.cond_br(
+                native(is_rejection),
+                [exception_payload],
+                [exception_success, exception_payload],
+                rejected,
+                terminal,
+            )
+        with ir.InsertionPoint(rejected):
+            [rejected_payload] = rejected.arguments
+            borrowed = builtin.UnrealizedConversionCastOp(
+                [tvm_ffi_abi.AnyType.get()], [rejected_payload]
+            ).results[0]
+            tvm_ffi_abi.ObjectDecRefOp(borrowed)
+            cf.br([], fallback_block)
+        with ir.InsertionPoint(terminal):
+            terminal_success, terminal_payload = terminal.arguments
+            cleanup = tvm_ffi_abi.DeferOp()
+            with ir.InsertionPoint(cleanup.body.blocks.append()):
+                borrowed = builtin.UnrealizedConversionCastOp(
+                    [tvm_ffi_abi.AnyType.get()], [terminal_payload]
+                ).results[0]
+                tvm_ffi_abi.ObjectDecRefOp(borrowed)
+                tvm_ffi_abi.DeferYieldOp()
+            scf.yield_([terminal_success, terminal_payload])
         return entry
+
+
+class CandidateGroup(Node):
+    """An ordered set of executions sharing one complete Dynamo guard path."""
+
+    def __init__(self, graph_symbol: str) -> None:
+        self.children: list[ExecutionNode] = [ExecutionNode(graph_symbol)]
+
+    def append(self, graph_symbol: str) -> None:
+        if all(child.graph_symbol != graph_symbol for child in self.children):
+            self.children.append(ExecutionNode(graph_symbol))
+
+    @override
+    def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
+        return _build_children(self.children, scope, fallback_block)
 
 
 class GuardNode(Node):
@@ -149,7 +231,10 @@ class Root:
                 guard_node = GuardNode(code)
                 children.append(guard_node)
             children = guard_node.children
-        children.append(ExecutionNode(graph_symbol))
+        if children and isinstance(children[-1], CandidateGroup):
+            children[-1].append(graph_symbol)
+        else:
+            children.append(CandidateGroup(graph_symbol))
 
     def build(self, scope: Scope) -> Sequence[ir.Value]:
         """Build a fresh dispatch region without retaining SSA in the tree."""
