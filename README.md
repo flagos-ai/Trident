@@ -144,6 +144,15 @@ On commit, only staged files are checked. If a hook modifies files or reports
 remaining errors, the commit stops; review the changes, fix any remaining
 errors, and stage the files again before retrying the commit.
 
+GitHub Actions runs the same hooks on all tracked files for pull requests,
+pushes to `master`, and manual workflow runs. If a hook modifies files or
+reports errors, the check fails and shows the changes in the log. Reproduce
+the CI check locally with:
+
+```bash
+pre-commit run --all-files --show-diff-on-failure --color always
+```
+
 The existing `bash ./tools/format.sh` command also formats CMake files; CMake
 formatting is not part of the pre-commit hooks.
 
