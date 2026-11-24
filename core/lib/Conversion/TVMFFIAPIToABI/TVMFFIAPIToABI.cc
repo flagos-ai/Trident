@@ -562,6 +562,10 @@ void populateConvertTVMFFIAPIToABIConversionPatterns(
       ConvertGenericOp<TensorStorageOffsetOp, abi::TensorStorageOffsetOp>,
       ConvertGenericOp<TensorStrideOp, abi::TensorStrideOp>,
       ConvertGenericOp<UpcastOp, abi::UpcastOp>,
+      // Dispatch borrows semantic payloads through ABI reference-count ops.
+      // Convert their explicit bridges together with the payload producers;
+      // canonicalization then removes the resulting identity casts.
+      ConvertGenericOp<mlir::UnrealizedConversionCastOp>,
       ConvertGenericOp<mlir::func::CallOp, mlir::func::CallOp, true>,
       ConvertTupleUnconstructOp>(converter, context);
   patterns.add<ConvertConditionOp, ConvertExecuteRegionOp, ConvertForOp,
