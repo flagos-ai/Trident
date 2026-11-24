@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from trident.core import ir
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
 from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 
 from .values import constant, native

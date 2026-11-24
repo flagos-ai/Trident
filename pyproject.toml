@@ -22,7 +22,7 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 # MLIR bindings re-export generated types and operation classes.
-"core/python/trident_core/dialects/tvm_ffi.py" = ["F403", "F405"]
+"core/python/trident_core/dialects/tvm_ffi/*.py" = ["F403", "F405"]
 # Load the native library before importing its registered FFI types.
 "ffi/python/__init__.py" = ["E402"]
 
