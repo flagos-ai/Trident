@@ -37,10 +37,10 @@ func.func @dispatch(%tensor: !dlpack.dl_tensor) -> i64 {
 
 func.func private @checked(%tensor: !dlpack.dl_tensor) -> i64 {
   %rank = dlpack.tensor.dim %tensor : !dlpack.dl_tensor
-  %boxed = tvm_ffi.to %rank : i64 -> !tvm_ffi.int
-  %wide = tvm_ffi.upcast %boxed : !tvm_ffi.int -> !tvm_ffi.any
-  %narrow = tvm_ffi.downcast %wide : !tvm_ffi.any -> !tvm_ffi.int
-  %native = tvm_ffi.get %narrow : !tvm_ffi.int -> i64
+  %boxed = tvm_ffi_abi.to %rank : i64 -> !tvm_ffi_abi.int
+  %wide = tvm_ffi_api.upcast %boxed : !tvm_ffi_abi.int -> !tvm_ffi_api.any
+  %narrow = tvm_ffi_api.downcast %wide : !tvm_ffi_api.any -> !tvm_ffi_abi.int
+  %native = tvm_ffi_api.get %narrow : !tvm_ffi_abi.int -> i64
   %one = arith.constant 1 : i64
   %matches = arith.cmpi eq, %native, %one : i64
   cf.cond_br %matches, ^accepted, ^rejected

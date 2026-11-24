@@ -11,8 +11,13 @@ add_mlir_library(
   MLIRRegisterAllPasses
   MLIRSCFDialect
   MLIRToLLVMIRTranslationRegistration
-  TVMFFIDialect
-  TVMFFIToGPU
-  TVMFFIToLLVM
-  TVMFFITransforms
+  TVMFFIABIDialect
+  TVMFFIABIToGPU
+  TVMFFIABIToLLVM
+  TVMFFIABITransforms
+  TVMFFIAPIDialect
+  TVMFFIAPIToABI
+  TVMFFIAPITransforms
+  TVMFFIArithTransforms
+  TVMFFIMonadTransforms
   TridentPipeline)

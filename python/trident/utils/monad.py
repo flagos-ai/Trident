@@ -14,7 +14,9 @@ from typing import Self, TypeVar
 from typing_extensions import override
 
 from trident.core import ir
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 
 
 class Scope(ABC):
@@ -52,11 +54,13 @@ class BindScope(Scope):
     def __init__(
         self, result_types: Sequence[ir.Type], inputs: Sequence[ir.Value]
     ) -> None:
-        assert all(isinstance(type_, tvm_ffi_d.ResultType) for type_ in result_types)
-        assert all(isinstance(value.type, tvm_ffi_d.ResultType) for value in inputs), (
-            "bind inputs must be Results"
+        assert all(
+            isinstance(type_, tvm_ffi_monad.ResultType) for type_ in result_types
         )
-        self.operation: tvm_ffi_d.MonadBindOp = tvm_ffi_d.MonadBindOp(
+        assert all(
+            isinstance(value.type, tvm_ffi_monad.ResultType) for value in inputs
+        ), "bind inputs must be Results"
+        self.operation: tvm_ffi_monad.BindOp = tvm_ffi_monad.BindOp(
             result_types, inputs
         )
         super().__init__(self.operation.add_entry_block())
@@ -73,7 +77,7 @@ class BindScope(Scope):
     @override
     def yield_(self, values: Sequence[ir.Value]) -> None:
         with ir.InsertionPoint(self.block):
-            tvm_ffi_d.monad_yield(values)
+            tvm_ffi_monad.yield_(values)
 
 
 _ScopeT = TypeVar("_ScopeT", bound=Scope)
@@ -124,8 +128,8 @@ def checked_call(
     name: str, arguments: Sequence[ir.Value], result: ir.Type
 ) -> list[ir.Value]:
     """Return an asserting invocation wrapped as a successful Result."""
-    handle = tvm_ffi_d.FunctionGetGlobalOp(name).result
-    call = tvm_ffi_d.FunctionCallOp(result, handle, arguments)
+    handle = tvm_ffi_api.FunctionGetGlobalOp(name).result
+    call = tvm_ffi_api.FunctionCallOp(result, handle, arguments)
     return [pure(call.result)]
 
 
@@ -133,11 +137,11 @@ def pure(value: ir.Value, *, result_type: ir.Type | None = None) -> ir.Value:
     """Wrap one borrowed payload in a successful Result."""
     assert isinstance(value, ir.Value), "pure requires one MLIR value"
     if result_type is None:
-        result_type = tvm_ffi_d.ResultType.get(value.type)
-    assert isinstance(result_type, tvm_ffi_d.ResultType)
+        result_type = tvm_ffi_monad.ResultType.get(value.type)
+    assert isinstance(result_type, tvm_ffi_monad.ResultType)
     target = result_type.payload_type
     assert value.type == target or isinstance(
-        target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
+        target, (tvm_ffi_api.AnyType, tvm_ffi_api.UnionType)
     ), "payload type must match Result type"
-    payload = tvm_ffi_d.upcast(target, value)
-    return tvm_ffi_d.MonadPureOp(result_type, payload).output
+    payload = tvm_ffi_api.upcast(target, value)
+    return tvm_ffi_monad.PureOp(result_type, payload).output

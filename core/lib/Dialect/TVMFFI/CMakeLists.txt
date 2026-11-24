@@ -1,2 +1,5 @@
-add_subdirectory(IR)
-add_subdirectory(Transforms)
+add_subdirectory(Support)
+add_subdirectory(ABI)
+add_subdirectory(API)
+add_subdirectory(Arith)
+add_subdirectory(Monad)

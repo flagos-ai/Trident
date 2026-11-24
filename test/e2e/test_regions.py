@@ -22,59 +22,59 @@ class RegionOwnershipTest(unittest.TestCase):
         with context:
             register_all_passes()
             module = ir.Module.parse("""
-                tvm_ffi.func @for_loop(%input: !tvm_ffi.tensor, %count: !tvm_ffi.int,
-                                      %replace: !tvm_ffi.bool) -> !tvm_ffi.tensor {
-                  %bound = tvm_ffi.get %count : !tvm_ffi.int -> i64
-                  %condition = tvm_ffi.get %replace : !tvm_ffi.bool -> i1
+                tvm_ffi_api.func @for_loop(%input: !tvm_ffi_api.tensor, %count: !tvm_ffi_abi.int,
+                                      %replace: !tvm_ffi_abi.bool) -> !tvm_ffi_api.tensor {
+                  %bound = tvm_ffi_api.get %count : !tvm_ffi_abi.int -> i64
+                  %condition = tvm_ffi_api.get %replace : !tvm_ffi_abi.bool -> i1
                   %zero = arith.constant 0 : i64
                   %one = arith.constant 1 : i64
                   %result = scf.for %i = %zero to %bound step %one
-                      iter_args(%current = %input) -> (!tvm_ffi.tensor) : i64 {
-                    %next = scf.if %condition -> (!tvm_ffi.tensor) {
-                      %clone = tvm_ffi.tensor.clone %current : !tvm_ffi.tensor -> !tvm_ffi.tensor
-                      scf.yield %clone : !tvm_ffi.tensor
+                      iter_args(%current = %input) -> (!tvm_ffi_api.tensor) : i64 {
+                    %next = scf.if %condition -> (!tvm_ffi_api.tensor) {
+                      %clone = tvm_ffi_api.tensor.clone %current : !tvm_ffi_api.tensor -> !tvm_ffi_api.tensor
+                      scf.yield %clone : !tvm_ffi_api.tensor
                     } else {
-                      scf.yield %current : !tvm_ffi.tensor
+                      scf.yield %current : !tvm_ffi_api.tensor
                     }
-                    scf.yield %next : !tvm_ffi.tensor
+                    scf.yield %next : !tvm_ffi_api.tensor
                   }
-                  %payload = tvm_ffi.upcast %result : !tvm_ffi.tensor -> !tvm_ffi.any
-                  %ok = tvm_ffi.constant.bool true
-                  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                  %payload = tvm_ffi_api.upcast %result : !tvm_ffi_api.tensor -> !tvm_ffi_api.any
+                  %ok = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @while_loop(%input: !tvm_ffi.tensor, %count: !tvm_ffi.int)
-                    -> !tvm_ffi.tensor {
-                  %bound = tvm_ffi.get %count : !tvm_ffi.int -> i64
+                tvm_ffi_api.func @while_loop(%input: !tvm_ffi_api.tensor, %count: !tvm_ffi_abi.int)
+                    -> !tvm_ffi_api.tensor {
+                  %bound = tvm_ffi_api.get %count : !tvm_ffi_abi.int -> i64
                   %zero = arith.constant 0 : i64
                   %one = arith.constant 1 : i64
                   %iterations, %result = scf.while (%i = %zero, %current = %input)
-                      : (i64, !tvm_ffi.tensor) -> (i64, !tvm_ffi.tensor) {
+                      : (i64, !tvm_ffi_api.tensor) -> (i64, !tvm_ffi_api.tensor) {
                     %condition = arith.cmpi slt, %i, %bound : i64
-                    scf.condition(%condition) %i, %current : i64, !tvm_ffi.tensor
+                    scf.condition(%condition) %i, %current : i64, !tvm_ffi_api.tensor
                   } do {
-                  ^body(%i: i64, %current: !tvm_ffi.tensor):
+                  ^body(%i: i64, %current: !tvm_ffi_api.tensor):
                     %next_i = arith.addi %i, %one : i64
-                    %next = tvm_ffi.tensor.clone %current : !tvm_ffi.tensor -> !tvm_ffi.tensor
-                    scf.yield %next_i, %next : i64, !tvm_ffi.tensor
+                    %next = tvm_ffi_api.tensor.clone %current : !tvm_ffi_api.tensor -> !tvm_ffi_api.tensor
+                    scf.yield %next_i, %next : i64, !tvm_ffi_api.tensor
                   }
-                  %payload = tvm_ffi.upcast %result : !tvm_ffi.tensor -> !tvm_ffi.any
-                  %ok = tvm_ffi.constant.bool true
-                  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                  %payload = tvm_ffi_api.upcast %result : !tvm_ffi_api.tensor -> !tvm_ffi_api.any
+                  %ok = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @discard_loop(%input: !tvm_ffi.tensor, %count: !tvm_ffi.int)
-                    -> !tvm_ffi.none {
-                  %bound = tvm_ffi.get %count : !tvm_ffi.int -> i64
+                tvm_ffi_api.func @discard_loop(%input: !tvm_ffi_api.tensor, %count: !tvm_ffi_abi.int)
+                    -> !tvm_ffi_abi.none {
+                  %bound = tvm_ffi_api.get %count : !tvm_ffi_abi.int -> i64
                   %zero = arith.constant 0 : i64
                   %one = arith.constant 1 : i64
                   %result = scf.for %i = %zero to %bound step %one
-                      iter_args(%current = %input) -> (!tvm_ffi.tensor) : i64 {
-                    %next = tvm_ffi.tensor.clone %current : !tvm_ffi.tensor -> !tvm_ffi.tensor
-                    scf.yield %next : !tvm_ffi.tensor
+                      iter_args(%current = %input) -> (!tvm_ffi_api.tensor) : i64 {
+                    %next = tvm_ffi_api.tensor.clone %current : !tvm_ffi_api.tensor -> !tvm_ffi_api.tensor
+                    scf.yield %next : !tvm_ffi_api.tensor
                   }
-                  %none = tvm_ffi.constant.none
-                  %payload = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
-                  %ok = tvm_ffi.constant.bool true
-                  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                  %none = tvm_ffi_abi.constant.none
+                  %payload = tvm_ffi_api.upcast %none : !tvm_ffi_abi.none -> !tvm_ffi_api.any
+                  %ok = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
             """)
             PassManager.parse("builtin.module(trident-lowering-pipeline)").run(

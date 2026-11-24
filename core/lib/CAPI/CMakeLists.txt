@@ -2,7 +2,9 @@ add_mlir_public_c_api_library(
   TridentCoreCAPI
   Dialects.cc
   Registration.cc
-  TVMFFITypes.cc
+  TVMFFIABITypes.cc
+  TVMFFIAPITypes.cc
+  TVMFFIMonadTypes.cc
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include
   ENABLE_AGGREGATION
@@ -11,7 +13,10 @@ add_mlir_public_c_api_library(
   DLPackDialect
   MLIRIR
   MLIRSupport
-  TVMFFIDialect
+  TVMFFIABIDialect
+  TVMFFIAPIDialect
+  TVMFFIArithDialect
+  TVMFFIMonadDialect
   TridentUtilsRegistration)
 
 install(

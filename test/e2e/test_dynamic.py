@@ -47,9 +47,9 @@ class DynamicTest(unittest.TestCase):
                         torch.testing.assert_close(reshape(x), x.reshape(size // 2, 6))
             module, *_ = reshape._sub_modules
             text = str(module)
-            self.assertIn("tvm_ffi.tensor.size", text)
-            self.assertIn("tvm_ffi.arith.floordiv", text)
-            self.assertIn("tvm_ffi.arith.mul", text)
+            self.assertIn("tvm_ffi_api.tensor.size", text)
+            self.assertIn("tvm_ffi_arith.floordiv", text)
+            self.assertIn("tvm_ffi_arith.mul", text)
             self.assertNotIn("!torch.", text)
             self.assertEqual(len(reshape._sub_modules), 1)
 

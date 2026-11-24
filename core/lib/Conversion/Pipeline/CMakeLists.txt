@@ -15,7 +15,11 @@ add_mlir_conversion_library(
   MLIRSCFToControlFlow
   MLIRTransforms
   MLIRUBToLLVM
-  TVMFFIToFunc
-  TVMFFIToGPU
-  TVMFFIToLLVM
-  TVMFFITransforms)
+  TVMFFIABIToFunc
+  TVMFFIABIToGPU
+  TVMFFIABIToLLVM
+  TVMFFIABITransforms
+  TVMFFIAPIToABI
+  TVMFFIAPITransforms
+  TVMFFIArithTransforms
+  TVMFFIMonadTransforms)

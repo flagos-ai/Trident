@@ -1,0 +1,262 @@
+//===----------------------------------------------------------------------===//
+//
+// Part of the Trident project, under the MIT License.
+// SPDX-License-Identifier: MIT
+//
+//===----------------------------------------------------------------------===//
+
+#include "trident/core/Conversion/TVMFFIABIToFunc/TVMFFIABIToFunc.h" // NOLINT(misc-include-cleaner)
+#include "trident/core/Dialect/TVMFFI/ABI/IR/TVMFFIDialect.h" // NOLINT(misc-include-cleaner)
+#include "trident/core/Dialect/TVMFFI/ABI/IR/TVMFFIOps.h"
+#include "trident/core/Dialect/TVMFFI/ABI/IR/TVMFFITypes.h"
+#include "trident/core/Dialect/TVMFFI/Support/TVMFFITypes.h"
+#include <cstdint>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/FormatVariadic.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h> // NOLINT(misc-include-cleaner)
+#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
+#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/LLVMIR/LLVMTypes.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/IR/Block.h>
+#include <mlir/IR/Builders.h>
+#include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/BuiltinTypes.h>
+#include <mlir/IR/Location.h>
+#include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/Operation.h>
+#include <mlir/IR/PatternMatch.h>
+#include <mlir/IR/Types.h>
+#include <mlir/IR/Value.h>
+#include <mlir/IR/ValueRange.h>
+#include <mlir/Support/LLVM.h>
+#include <mlir/Transforms/DialectConversion.h>
+#include <string>
+#include <type_traits>
+#include <utility>
+
+namespace trident::conversion {
+
+#define GEN_PASS_DEF_CONVERTTVMFFIABITOFUNC
+#include "trident/core/Conversion/Passes.h.inc"
+
+class ConvertPackFuncOp final
+    : public mlir::OpConversionPattern<tvm_ffi::abi::PackFuncOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(tvm_ffi::abi::PackFuncOp packed, OpAdaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location const loc = packed.getLoc();
+    mlir::Type const ptr =
+        mlir::LLVM::LLVMPointerType::get(packed.getContext());
+    mlir::Type const i32 = rewriter.getI32Type();
+    mlir::Type const view =
+        mlir::LLVM::LLVMStructType::getLiteral(packed.getContext(), {ptr, i32});
+    std::string const name = "__tvm_ffi_" + packed.getSymName().str();
+    mlir::FunctionType const type =
+        rewriter.getFunctionType({ptr, ptr, i32, ptr}, {i32});
+    mlir::func::FuncOp function =
+        mlir::func::FuncOp::create(rewriter, loc, name, type);
+    function.setSymVisibilityAttr(packed.getSymVisibilityAttr());
+    if (packed.getBody().empty()) {
+      rewriter.eraseOp(packed);
+      return mlir::success();
+    }
+    mlir::Block *entry =
+        rewriter.createBlock(&function.getBody(), {}, type.getInputs(),
+                             llvm::SmallVector<mlir::Location>(4, loc));
+    rewriter.setInsertionPointToStart(entry);
+    mlir::Value args = mlir::LLVM::UndefOp::create(rewriter, loc, view);
+    args = mlir::LLVM::InsertValueOp::create(
+        rewriter, loc, args, entry->getArgument(1), llvm::ArrayRef<int64_t>{0});
+    args = mlir::LLVM::InsertValueOp::create(
+        rewriter, loc, args, entry->getArgument(2), llvm::ArrayRef<int64_t>{1});
+    mlir::Value const borrowed =
+        mlir::UnrealizedConversionCastOp::create(
+            rewriter, loc,
+            tvm_ffi::abi::PackArgumentsType::get(packed.getContext()), args)
+            .getResult(0);
+    mlir::Type const payloadType = packed.getResultTypes().front();
+    mlir::TypeConverter::SignatureConversion signature(1);
+    signature.remapInput(0, borrowed);
+    mlir::Block *body =
+        rewriter.applySignatureConversion(packed.getEntryBlock(), signature);
+    mlir::cf::BranchOp::create(rewriter, loc, body);
+    rewriter.inlineRegionBefore(packed.getBody(), function.getBody(),
+                                function.getBody().end());
+    for (mlir::Block &block : function.getBody()) {
+      if (tvm_ffi::abi::ReturnOp returned =
+              mlir::dyn_cast<tvm_ffi::abi::ReturnOp>(block.getTerminator())) {
+        // A failed call leaves the caller's output slot untouched.
+        mlir::Value const outputSlot = entry->getArgument(3);
+        mlir::Location const loc = returned.getLoc();
+        rewriter.setInsertionPoint(returned);
+        mlir::Value const ready = tvm_ffi::abi::GetOp::create(
+            rewriter, loc, rewriter.getI1Type(), returned.getSuccess());
+        mlir::scf::IfOp branch = mlir::scf::IfOp::create(
+            rewriter, loc, mlir::TypeRange{rewriter.getI32Type()}, ready, true);
+        rewriter.setInsertionPointToStart(branch.thenBlock());
+        mlir::Type const anyType =
+            tvm_ffi::TVMFFICABIType::getLLVMType(rewriter.getContext());
+        mlir::Value const checked =
+            rewriter.createOrFold<tvm_ffi::abi::DowncastOp>(
+                loc, payloadType, returned.getValue());
+        mlir::Value const payload =
+            rewriter.createOrFold<tvm_ffi::abi::UpcastOp>(
+                loc, tvm_ffi::abi::AnyType::get(rewriter.getContext()),
+                checked);
+        mlir::Value const value = mlir::UnrealizedConversionCastOp::create(
+                                      rewriter, loc, anyType, payload)
+                                      .getResult(0);
+        mlir::LLVM::StoreOp::create(rewriter, loc, value, outputSlot);
+        mlir::Value const zero =
+            mlir::arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+        mlir::scf::YieldOp::create(rewriter, loc, zero);
+        rewriter.setInsertionPointToStart(branch.elseBlock());
+        mlir::Value const error =
+            mlir::arith::ConstantIntOp::create(rewriter, loc, -1, 32);
+        mlir::scf::YieldOp::create(rewriter, loc, error);
+        rewriter.setInsertionPoint(returned);
+        rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(returned,
+                                                          branch.getResults());
+      }
+    }
+    rewriter.eraseOp(packed);
+    return mlir::success();
+  }
+};
+
+template <typename Call>
+class ConvertLocalCallOp final : public mlir::OpConversionPattern<Call> {
+public:
+  using mlir::OpConversionPattern<Call>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(Call op, typename Call::Adaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    if (llvm::any_of(op->getOperandTypes(), [](mlir::Type type) -> bool {
+          return mlir::isa<tvm_ffi::TVMFFICOpaqueABIType>(type);
+        })) {
+      return op.emitOpError(
+          "requires convert-tvm-ffi-api-to-abi before LLVM conversion");
+    }
+    mlir::Location const loc = op.getLoc();
+    mlir::MLIRContext *context = rewriter.getContext();
+    mlir::Type const anyType = tvm_ffi::TVMFFICABIType::getLLVMType(context);
+    mlir::Type const ptrType = mlir::LLVM::LLVMPointerType::get(context);
+    mlir::Type const i32 = rewriter.getI32Type();
+    mlir::Type const i64 = rewriter.getI64Type();
+    std::string const name =
+        llvm::formatv("__tvm_ffi_{0}", op.getCallee()).str();
+    auto constant = [&](mlir::Type type, int64_t value) -> mlir::Value {
+      return mlir::LLVM::ConstantOp::create(rewriter, loc, type, value);
+    };
+    auto allocate = [&](int64_t count) -> mlir::Value {
+      return mlir::LLVM::AllocaOp::create(rewriter, loc, ptrType, anyType,
+                                          constant(i64, count));
+    };
+    mlir::Value slots;
+    mlir::Value count;
+    if constexpr (std::is_same_v<Call, tvm_ffi::abi::PackCallOp>) {
+      // Forward the borrowed view without copying or owning its arguments.
+      slots = mlir::LLVM::ExtractValueOp::create(
+          rewriter, loc, ptrType,
+          mlir::UnrealizedConversionCastOp::create(
+              rewriter, loc,
+              mlir::LLVM::LLVMStructType::getLiteral(context, {ptrType, i32}),
+              adaptor.getArguments())
+              .getResult(0),
+          llvm::ArrayRef<int64_t>{0});
+      count = mlir::LLVM::ExtractValueOp::create(
+          rewriter, loc, i32,
+          mlir::UnrealizedConversionCastOp::create(
+              rewriter, loc,
+              mlir::LLVM::LLVMStructType::getLiteral(context, {ptrType, i32}),
+              adaptor.getArguments())
+              .getResult(0),
+          llvm::ArrayRef<int64_t>{1});
+    } else {
+      int64_t const size = static_cast<int64_t>(adaptor.getOperands().size());
+      slots = allocate(size);
+      count = constant(i32, size);
+      for (auto [index, argument] : llvm::enumerate(adaptor.getOperands())) {
+        mlir::Value const boxed = rewriter.createOrFold<tvm_ffi::abi::UpcastOp>(
+            loc, tvm_ffi::abi::AnyType::get(context), argument);
+        mlir::Value const value = mlir::UnrealizedConversionCastOp::create(
+                                      rewriter, loc, anyType, boxed)
+                                      .getResult(0);
+        mlir::Value const slot = mlir::LLVM::GEPOp::create(
+            rewriter, loc, ptrType, anyType, slots,
+            llvm::ArrayRef<mlir::LLVM::GEPArg>{static_cast<int32_t>(index)});
+        mlir::LLVM::StoreOp::create(rewriter, loc, value, slot);
+      }
+    }
+    mlir::Value const resultSlot = allocate(1);
+    mlir::LLVM::StoreOp::create(
+        rewriter, loc, mlir::LLVM::ZeroOp::create(rewriter, loc, anyType),
+        resultSlot);
+    mlir::Value const contextValue =
+        mlir::LLVM::ZeroOp::create(rewriter, loc, ptrType);
+    llvm::SmallVector<mlir::Value> const arguments{contextValue, slots, count,
+                                                   resultSlot};
+    mlir::Value const status =
+        mlir::func::CallOp::create(rewriter, loc, name, mlir::TypeRange{i32},
+                                   arguments)
+            .getResult(0);
+    mlir::Value const success = mlir::LLVM::ICmpOp::create(
+        rewriter, loc, mlir::LLVM::ICmpPredicate::eq, status, constant(i32, 0));
+    mlir::scf::IfOp branch = mlir::scf::IfOp::create(
+        rewriter, loc, mlir::TypeRange{op.getValue().getType()}, success, true);
+    rewriter.setInsertionPointToStart(branch.thenBlock());
+    mlir::Value const loaded =
+        mlir::LLVM::LoadOp::create(rewriter, loc, anyType, resultSlot);
+    mlir::Value const payload =
+        mlir::UnrealizedConversionCastOp::create(
+            rewriter, loc, op.getValue().getType(), loaded)
+            .getResult(0);
+    mlir::scf::YieldOp::create(rewriter, loc, payload);
+    rewriter.setInsertionPointToStart(branch.elseBlock());
+    mlir::Value const none =
+        tvm_ffi::abi::ConstantNoneOp::create(rewriter, loc);
+    mlir::Value const failure = rewriter.createOrFold<tvm_ffi::abi::UpcastOp>(
+        loc, op.getValue().getType(), none);
+    mlir::scf::YieldOp::create(rewriter, loc, failure);
+    rewriter.setInsertionPoint(op);
+    mlir::Value const flag = tvm_ffi::abi::ToOp::create(
+        rewriter, loc, op.getSuccess().getType(), success);
+    rewriter.replaceOp(op, {flag, branch.getResult(0)});
+    return mlir::success();
+  }
+};
+
+class ConvertTVMFFIABIToFuncPass final
+    : public impl::ConvertTVMFFIABIToFuncBase<ConvertTVMFFIABIToFuncPass> {
+  void runOnOperation() final {
+    mlir::ConversionTarget target(getContext());
+    mlir::RewritePatternSet patterns(&getContext());
+    populateTVMFFIABIToFuncConversionPatterns(target, patterns);
+    if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
+                                                  std::move(patterns)))) {
+      signalPassFailure();
+    }
+  }
+};
+
+void populateTVMFFIABIToFuncConversionPatterns(
+    mlir::ConversionTarget &target, mlir::RewritePatternSet &patterns) {
+  target.addIllegalOp<tvm_ffi::abi::CallOp, tvm_ffi::abi::PackCallOp,
+                      tvm_ffi::abi::PackFuncOp>();
+  target.markUnknownOpDynamicallyLegal(
+      [](mlir::Operation *) -> bool { return true; });
+  patterns.add<ConvertLocalCallOp<tvm_ffi::abi::CallOp>,
+               ConvertLocalCallOp<tvm_ffi::abi::PackCallOp>, ConvertPackFuncOp>(
+      patterns.getContext());
+}
+
+} // namespace trident::conversion

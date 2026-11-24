@@ -91,6 +91,11 @@ ExternalProject_Add(
              -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/install/trident
              -DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE})
 
-install(DIRECTORY ${CMAKE_BINARY_DIR}/install/trident/core DESTINATION .)
+install(
+  DIRECTORY ${CMAKE_BINARY_DIR}/install/trident/core
+  DESTINATION .
+  PATTERN "tvm_ffi.py" EXCLUDE
+  PATTERN "_tvm_ffi_ops_gen.py" EXCLUDE
+  PATTERN "_tvm_ffi.*.so" EXCLUDE)
 install(DIRECTORY ${CMAKE_BINARY_DIR}/install/trident/ffi DESTINATION .)
 install(DIRECTORY ${CMAKE_BINARY_DIR}/install/trident/lib DESTINATION .)

@@ -49,7 +49,7 @@ class KernelLaunchTest(unittest.TestCase):
                 launches: list[ir.Operation] = []
 
                 def collect(operation: ir.Operation) -> ir.WalkResult:
-                    if operation.name == "tvm_ffi.kernel_launch":
+                    if operation.name == "tvm_ffi_api.kernel_launch":
                         launches.append(operation)
                     return ir.WalkResult.ADVANCE
 
@@ -60,7 +60,7 @@ class KernelLaunchTest(unittest.TestCase):
                     [launch] = launches
                     _, *remaining_attributes = launch.attributes["specializations"]
                     attribute = ir.Attribute.parse(
-                        "#tvm_ffi.variable_specialization<kind = !llvm.ptr, "
+                        "#tvm_ffi_api.variable_specialization<kind = !llvm.ptr, "
                         "divisibility = 9223372036854775808>"
                     )
                     launch.attributes["specializations"] = ir.ArrayAttr.get(
@@ -98,7 +98,7 @@ class KernelLaunchTest(unittest.TestCase):
                         )
             self.assertEqual(len(increment._sub_modules), 1)
             module, *_ = increment._sub_modules
-            self.assertIn("!tvm_ffi.monad.result<!tvm_ffi.none>", f"{module}")
+            self.assertIn("!tvm_ffi_monad.result<!tvm_ffi_abi.none>", f"{module}")
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)

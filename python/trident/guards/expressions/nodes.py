@@ -15,8 +15,11 @@ import torch
 from typing_extensions import override
 
 from trident.core import ir
+from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
+from trident.core.dialects.tvm_ffi import arith as tvm_ffi_arith
 from trident.core.dialects import scf
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.utils.monad import BindScope, pure
 from trident.utils.types import value_type
 from trident.utils.values import (
@@ -130,23 +133,24 @@ class BinaryExpression(Expression):
         types: list[ir.Type] = [child.infer_type(context) for child in self.children()]
         assert all(
             isinstance(
-                type_, (tvm_ffi_d.BoolType, tvm_ffi_d.FloatType, tvm_ffi_d.IntType)
+                type_,
+                (tvm_ffi_abi.BoolType, tvm_ffi_abi.FloatType, tvm_ffi_abi.IntType),
             )
             for type_ in types
         ), "arithmetic requires numeric operands"
         if self.operation == "truediv" or any(
-            isinstance(type_, tvm_ffi_d.FloatType) for type_ in types
+            isinstance(type_, tvm_ffi_abi.FloatType) for type_ in types
         ):
-            return tvm_ffi_d.FloatType.get()
+            return tvm_ffi_abi.FloatType.get()
         if self.operation == "or" and all(
-            isinstance(type_, tvm_ffi_d.BoolType) for type_ in types
+            isinstance(type_, tvm_ffi_abi.BoolType) for type_ in types
         ):
-            return tvm_ffi_d.BoolType.get()
-        return tvm_ffi_d.IntType.get()
+            return tvm_ffi_abi.BoolType.get()
+        return tvm_ffi_abi.IntType.get()
 
     @override
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
             self.infer_type(context)
         )
         with context.operands(self.children(), result_type) as (stack, values):
@@ -169,14 +173,14 @@ class BooleanExpression(Expression):
     @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         assert all(
-            isinstance(child.infer_type(context), tvm_ffi_d.BoolType)
+            isinstance(child.infer_type(context), tvm_ffi_abi.BoolType)
             for child in self.operands
         ), "boolean guards require Bool operands"
-        return tvm_ffi_d.BoolType.get()
+        return tvm_ffi_abi.BoolType.get()
 
     @override
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
             self.infer_type(context)
         )
         predicate, *remaining = self.operands
@@ -217,7 +221,7 @@ class ComparisonExpression(Expression):
 
     @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
-        return tvm_ffi_d.BoolType.get()
+        return tvm_ffi_abi.BoolType.get()
 
     @override
     def _build(self, context: ExpressionContext) -> ir.Value:
@@ -225,7 +229,7 @@ class ComparisonExpression(Expression):
         existing: set[ir.Operation | ir.OpView] = set(block.operations)
         scope: Scope | None = context.scope
         try:
-            result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+            result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
                 self.infer_type(context)
             )
             first, *_ = self.operands
@@ -250,7 +254,7 @@ class ComparisonExpression(Expression):
     def _comparison(
         self, context: ExpressionContext, index: int, lhs: ir.Value
     ) -> ir.Value:
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
             self.infer_type(context)
         )
         with context.operands([self.operands[index + 1]], result_type) as (
@@ -260,7 +264,7 @@ class ComparisonExpression(Expression):
             [rhs] = values
             operation = self.operations[index]
             if operation == "is" and all(
-                isinstance(value.type, tvm_ffi_d.TensorType) for value in (lhs, rhs)
+                isinstance(value.type, tvm_ffi_api.TensorType) for value in (lhs, rhs)
             ):
                 warnings.warn(
                     f"Skipping unsupported Tensor identity guard; object identity will not be validated: {context.text!r}",
@@ -310,12 +314,12 @@ class InputExpression(Expression):
             scope = None if scope is None else scope.get(key)
             if scope is not None:
                 type_ = scope.type
-            elif isinstance(type_, tvm_ffi_d.TupleType):
+            elif isinstance(type_, tvm_ffi_api.TupleType):
                 type_ = type_.types[key]
-            elif isinstance(type_, tvm_ffi_d.ArrayType):
+            elif isinstance(type_, tvm_ffi_api.ArrayType):
                 type_ = type_.element_type
             else:
-                type_ = tvm_ffi_d.AnyType.get()
+                type_ = tvm_ffi_api.AnyType.get()
         return type_
 
     @override
@@ -335,11 +339,11 @@ class LengthExpression(Expression):
 
     @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
-        return tvm_ffi_d.IntType.get()
+        return tvm_ffi_abi.IntType.get()
 
     @override
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
             self.infer_type(context)
         )
         with context.operands(self.children(), result_type) as (stack, values):
@@ -360,18 +364,18 @@ class TensorMetadataExpression(Expression):
 
     @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
-        return tvm_ffi_d.IntType.get()
+        return tvm_ffi_abi.IntType.get()
 
     @override
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
             self.infer_type(context)
         )
         with context.operands(self.children(), result_type) as (stack, values):
             [tensor] = values
-            if not isinstance(tensor.type, tvm_ffi_d.TensorType):
-                tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
-            [result] = stack.yield_([pure(tvm_ffi_d.to(self._metadata(tensor)))])
+            if not isinstance(tensor.type, tvm_ffi_api.TensorType):
+                tensor = tvm_ffi_api.downcast(tvm_ffi_api.TensorType.get(), tensor)
+            [result] = stack.yield_([pure(tvm_ffi_abi.to(self._metadata(tensor)))])
             return result
 
     @abstractmethod
@@ -382,7 +386,7 @@ class TensorMetadataExpression(Expression):
 class RankExpression(TensorMetadataExpression):
     @override
     def _metadata(self, tensor: ir.Value) -> ir.Value:
-        return tvm_ffi_d.tensor_dim(tensor)
+        return tvm_ffi_api.tensor_dim(tensor)
 
 
 class SelectExpression(Expression):
@@ -407,7 +411,7 @@ class SelectExpression(Expression):
 
     @override
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
             self.infer_type(context)
         )
         with context.operands([self.predicate], result_type) as (stack, values):
@@ -437,7 +441,7 @@ class SizeExpression(TensorMetadataExpression):
 
     @override
     def _metadata(self, tensor: ir.Value) -> ir.Value:
-        return tvm_ffi_d.tensor_size(tensor, native(constant(self.index)))
+        return tvm_ffi_api.tensor_size(tensor, native(constant(self.index)))
 
 
 class StorageOffsetExpression(Expression):
@@ -467,7 +471,7 @@ class StrideExpression(TensorMetadataExpression):
 
     @override
     def _metadata(self, tensor: ir.Value) -> ir.Value:
-        return tvm_ffi_d.tensor_stride(tensor, native(constant(self.index)))
+        return tvm_ffi_api.tensor_stride(tensor, native(constant(self.index)))
 
 
 class UnaryExpression(Expression):
@@ -482,15 +486,15 @@ class UnaryExpression(Expression):
     @override
     def infer_type(self, context: ExpressionContext) -> ir.Type:
         if self.operation == "not":
-            return tvm_ffi_d.BoolType.get()
+            return tvm_ffi_abi.BoolType.get()
         type_ = self.operand.infer_type(context)
-        if self.operation == "neg" and isinstance(type_, tvm_ffi_d.BoolType):
-            return tvm_ffi_d.IntType.get()
+        if self.operation == "neg" and isinstance(type_, tvm_ffi_abi.BoolType):
+            return tvm_ffi_abi.IntType.get()
         return type_
 
     @override
     def _build(self, context: ExpressionContext) -> ir.Value:
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
             self.infer_type(context)
         )
         with context.operands(self.children(), result_type) as (stack, values):
@@ -499,7 +503,7 @@ class UnaryExpression(Expression):
                 result = context.truth(value, invert=True)
             else:
                 if self.operation == "neg":
-                    value = tvm_ffi_d.arith_neg(value)
+                    value = tvm_ffi_arith.neg(value)
                 result = pure(value)
             [result] = stack.yield_([result])
             return result

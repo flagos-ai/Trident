@@ -10,7 +10,10 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final
 
 from trident.core import ir
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
+from trident.core.dialects.tvm_ffi import arith as tvm_ffi_arith
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
 from trident.utils.values import constant
 
@@ -50,30 +53,30 @@ class ExpressionContext:
             yield stack, values
 
     def length(self, value: ir.Value) -> ir.Value:
-        if isinstance(value.type, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)):
-            value = tvm_ffi_d.downcast(
-                tvm_ffi_d.ArrayType.get(tvm_ffi_d.AnyType.get()), value
+        if isinstance(value.type, (tvm_ffi_api.AnyType, tvm_ffi_api.UnionType)):
+            value = tvm_ffi_api.downcast(
+                tvm_ffi_api.ArrayType.get(tvm_ffi_api.AnyType.get()), value
             )
-        if isinstance(value.type, tvm_ffi_d.TupleType):
+        if isinstance(value.type, tvm_ffi_api.TupleType):
             # Input tuple arity cannot be inferred from its static schema.
-            [result] = checked_call("ffi.ArraySize", [value], tvm_ffi_d.IntType.get())
+            [result] = checked_call("ffi.ArraySize", [value], tvm_ffi_abi.IntType.get())
             return result
-        assert isinstance(value.type, tvm_ffi_d.ArrayType), "len requires a container"
-        return pure(tvm_ffi_d.array_size(value))
+        assert isinstance(value.type, tvm_ffi_api.ArrayType), "len requires a container"
+        return pure(tvm_ffi_api.array_size(value))
 
     def truth(self, value: ir.Value, *, invert: bool = False) -> ir.Value:
         """Convert a scalar or runtime container length to a Bool Result."""
-        if isinstance(value.type, tvm_ffi_d.BoolType):
-            return pure(tvm_ffi_d.arith_not(value) if invert else value)
-        if isinstance(value.type, (tvm_ffi_d.FloatType, tvm_ffi_d.IntType)):
+        if isinstance(value.type, tvm_ffi_abi.BoolType):
+            return pure(tvm_ffi_arith.not_(value) if invert else value)
+        if isinstance(value.type, (tvm_ffi_abi.FloatType, tvm_ffi_abi.IntType)):
             # Unordered not-equal preserves NaN truthiness and both zero signs.
             return pure(
-                tvm_ffi_d.arith_not(value)
+                tvm_ffi_arith.not_(value)
                 if invert
-                else tvm_ffi_d.arith_ne(value, constant(0))
+                else tvm_ffi_arith.ne(value, constant(0))
             )
-        result_type: tvm_ffi_d.ResultType = tvm_ffi_d.ResultType.get(
-            tvm_ffi_d.BoolType.get()
+        result_type: tvm_ffi_monad.ResultType = tvm_ffi_monad.ResultType.get(
+            tvm_ffi_abi.BoolType.get()
         )
         with (
             self.local_scope(),

@@ -13,7 +13,9 @@ import torch
 import tvm_ffi
 from trident.backend import TridentGraphModule
 from trident.core import ir, register_all_passes
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.core.execution_engine import ExecutionEngine
 from trident.core.passmanager import PassManager
 from trident.ffi import Exception
@@ -62,16 +64,16 @@ class LocalCallTest(unittest.TestCase):
         graph._output_spec = torch.utils._pytree.tree_structure(0)
         with graph.ctx:
             module = ir.Module.parse("""
-                tvm_ffi.func @main_0(%value: !tvm_ffi.tensor) -> !tvm_ffi.any {
-                  %rejected = tvm_ffi.exception "GuardMatch" : !tvm_ffi.exception
-                  %payload = tvm_ffi.upcast %rejected : !tvm_ffi.exception -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @main_0(%value: !tvm_ffi_api.tensor) -> !tvm_ffi_api.any {
+                  %rejected = tvm_ffi_api.exception "GuardMatch" : !tvm_ffi_api.exception
+                  %payload = tvm_ffi_api.upcast %rejected : !tvm_ffi_api.exception -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @main_1(%value: !tvm_ffi.int) -> !tvm_ffi.any {
-                  %payload = tvm_ffi.upcast %value : !tvm_ffi.int -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @main_1(%value: !tvm_ffi_abi.int) -> !tvm_ffi_api.any {
+                  %payload = tvm_ffi_api.upcast %value : !tvm_ffi_abi.int -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
             """)
 
@@ -79,7 +81,7 @@ class LocalCallTest(unittest.TestCase):
             graph._dispatcher = Root()
             with graph.ctx, module.operation.location, ir.InsertionPoint(module.body):
                 for function in list(module.body.operations):
-                    if function.operation.name != "tvm_ffi.func":
+                    if function.operation.name != "tvm_ffi_api.func":
                         continue
                     symbol = ir.StringAttr(function.attributes["sym_name"]).value
                     if symbol not in symbols:
@@ -110,14 +112,14 @@ class LocalCallTest(unittest.TestCase):
                 llvm.mlir.global internal constant @error_kind("RuntimeError\00")
                 llvm.mlir.global internal constant @error_message("dispatcher failure\00")
                 llvm.func @TVMFFIErrorSetRaisedFromCStr(!llvm.ptr, !llvm.ptr)
-                tvm_ffi.func @main_0(%value: !tvm_ffi.int) -> !tvm_ffi.any {
+                tvm_ffi_api.func @main_0(%value: !tvm_ffi_abi.int) -> !tvm_ffi_api.any {
                   %kind = llvm.mlir.addressof @error_kind : !llvm.ptr
                   %message = llvm.mlir.addressof @error_message : !llvm.ptr
                   llvm.call @TVMFFIErrorSetRaisedFromCStr(%kind, %message) : (!llvm.ptr, !llvm.ptr) -> ()
-                  %none = tvm_ffi.constant.none
-                  %payload = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
-                  %no = tvm_ffi.constant.bool false
-                  tvm_ffi.return %no, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                  %none = tvm_ffi_abi.constant.none
+                  %payload = tvm_ffi_api.upcast %none : !tvm_ffi_abi.none -> !tvm_ffi_api.any
+                  %no = tvm_ffi_abi.constant.bool false
+                  tvm_ffi_api.return %no, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
             """)
             _, success_function, *_ = module.body.operations
@@ -145,28 +147,28 @@ class LocalCallTest(unittest.TestCase):
         with context:
             register_all_passes()
             module = ir.Module.parse("""
-                tvm_ffi.func @finite(%value: !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none>)
-                    -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> {
-                  %payload = tvm_ffi.upcast %value : !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.none> -> !tvm_ffi.any
-                  %ok = tvm_ffi.constant.bool true
-                  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @finite(%value: !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none>)
+                    -> !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none> {
+                  %payload = tvm_ffi_api.upcast %value : !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none> -> !tvm_ffi_api.any
+                  %ok = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @string(%value: !tvm_ffi.str) -> !tvm_ffi.str {
-                  %payload = tvm_ffi.upcast %value : !tvm_ffi.str -> !tvm_ffi.any
-                  %ok = tvm_ffi.constant.bool true
-                  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @string(%value: !tvm_ffi_api.str) -> !tvm_ffi_api.str {
+                  %payload = tvm_ffi_api.upcast %value : !tvm_ffi_api.str -> !tvm_ffi_api.any
+                  %ok = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @failed() -> !tvm_ffi.union<!tvm_ffi.int, !tvm_ffi.float> {
-                  %none = tvm_ffi.constant.none
-                  %payload = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
-                  %ok = tvm_ffi.constant.bool false
-                  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @failed() -> !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.float> {
+                  %none = tvm_ffi_abi.constant.none
+                  %payload = tvm_ffi_api.upcast %none : !tvm_ffi_abi.none -> !tvm_ffi_api.any
+                  %ok = tvm_ffi_abi.constant.bool false
+                  tvm_ffi_api.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @invoke_failed() -> !tvm_ffi.bool {
-                  %ok, %value = tvm_ffi.call @failed() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
-                  %payload = tvm_ffi.upcast %ok : !tvm_ffi.bool -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @invoke_failed() -> !tvm_ffi_abi.bool {
+                  %ok, %value = tvm_ffi_api.call @failed() : () -> (!tvm_ffi_abi.bool, !tvm_ffi_api.any)
+                  %payload = tvm_ffi_api.upcast %ok : !tvm_ffi_abi.bool -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
             """)
             finite, string, failed = self._compile_entries(
@@ -194,78 +196,78 @@ class LocalCallTest(unittest.TestCase):
         with context:
             register_all_passes()
             module = ir.Module.parse("""
-                tvm_ffi.pack.func @count(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.int {
-                  %count = tvm_ffi.pack.size %args : !tvm_ffi.pack.arguments
-                  %boxed = tvm_ffi.to %count : i64 -> !tvm_ffi.int
-                  %value = tvm_ffi.upcast %boxed : !tvm_ffi.int -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %value : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.pack.func @count(%args: !tvm_ffi_abi.pack.arguments) -> !tvm_ffi_abi.int {
+                  %count = tvm_ffi_api.pack.size %args : !tvm_ffi_abi.pack.arguments
+                  %boxed = tvm_ffi_abi.to %count : i64 -> !tvm_ffi_abi.int
+                  %value = tvm_ffi_api.upcast %boxed : !tvm_ffi_abi.int -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %value : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.pack.func @forward_empty(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.any {
-                  %ok, %value = tvm_ffi.pack.call @empty(%args) : (!tvm_ffi.pack.arguments) -> (!tvm_ffi.bool, !tvm_ffi.any)
-                  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.pack.func @forward_empty(%args: !tvm_ffi_abi.pack.arguments) -> !tvm_ffi_api.any {
+                  %ok, %value = tvm_ffi_api.pack.call @empty(%args) : (!tvm_ffi_abi.pack.arguments) -> (!tvm_ffi_abi.bool, !tvm_ffi_api.any)
+                  tvm_ffi_api.return %ok, %value : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.pack.func @borrow(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.any {
-                  %count = tvm_ffi.pack.size %args : !tvm_ffi.pack.arguments
+                tvm_ffi_api.pack.func @borrow(%args: !tvm_ffi_abi.pack.arguments) -> !tvm_ffi_api.any {
+                  %count = tvm_ffi_api.pack.size %args : !tvm_ffi_abi.pack.arguments
                   %one = arith.constant 1 : i64
                   %last = arith.subi %count, %one : i64
-                  %value = tvm_ffi.pack.get %args[%last] : (!tvm_ffi.pack.arguments, i64) -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %value : !tvm_ffi.bool, !tvm_ffi.any
+                  %value = tvm_ffi_api.pack.get %args[%last] : (!tvm_ffi_abi.pack.arguments, i64) -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %value : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.pack.func @forward(%args: !tvm_ffi.pack.arguments) -> !tvm_ffi.any {
-                  %ok, %value = tvm_ffi.pack.call @borrow(%args) : (!tvm_ffi.pack.arguments) -> (!tvm_ffi.bool, !tvm_ffi.any)
-                  tvm_ffi.return %ok, %value : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.pack.func @forward(%args: !tvm_ffi_abi.pack.arguments) -> !tvm_ffi_api.any {
+                  %ok, %value = tvm_ffi_api.pack.call @borrow(%args) : (!tvm_ffi_abi.pack.arguments) -> (!tvm_ffi_abi.bool, !tvm_ffi_api.any)
+                  tvm_ffi_api.return %ok, %value : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @callee(%ok: !tvm_ffi.bool, %value: !tvm_ffi.tensor,
-                                     %unused: !tvm_ffi.int) -> !tvm_ffi.tensor {
-                  %success = tvm_ffi.get %ok : !tvm_ffi.bool -> i1
-                  %payload = scf.if %success -> (!tvm_ffi.any) {
-                    %value_any = tvm_ffi.upcast %value : !tvm_ffi.tensor -> !tvm_ffi.any
-                    scf.yield %value_any : !tvm_ffi.any
+                tvm_ffi_api.func @callee(%ok: !tvm_ffi_abi.bool, %value: !tvm_ffi_api.tensor,
+                                     %unused: !tvm_ffi_abi.int) -> !tvm_ffi_api.tensor {
+                  %success = tvm_ffi_api.get %ok : !tvm_ffi_abi.bool -> i1
+                  %payload = scf.if %success -> (!tvm_ffi_api.any) {
+                    %value_any = tvm_ffi_api.upcast %value : !tvm_ffi_api.tensor -> !tvm_ffi_api.any
+                    scf.yield %value_any : !tvm_ffi_api.any
                   } else {
-                    %none = tvm_ffi.constant.none
-                    %none_any = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
-                    scf.yield %none_any : !tvm_ffi.any
+                    %none = tvm_ffi_abi.constant.none
+                    %none_any = tvm_ffi_api.upcast %none : !tvm_ffi_abi.none -> !tvm_ffi_api.any
+                    scf.yield %none_any : !tvm_ffi_api.any
                   }
-                  tvm_ffi.return %ok, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                  tvm_ffi_api.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @invoke(%ok: !tvm_ffi.bool, %value: !tvm_ffi.tensor,
-                                     %unused: !tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
-                  %call_ok, %call_value = tvm_ffi.call @callee(%ok, %value, %unused) :
-                    (!tvm_ffi.bool, !tvm_ffi.tensor, !tvm_ffi.int) -> (!tvm_ffi.bool, !tvm_ffi.any)
-                  %result = tvm_ffi.tuple.construct(%call_ok, %call_value) :
-                    (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-                  %payload = tvm_ffi.upcast %result : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @invoke(%ok: !tvm_ffi_abi.bool, %value: !tvm_ffi_api.tensor,
+                                     %unused: !tvm_ffi_abi.int) -> !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any> {
+                  %call_ok, %call_value = tvm_ffi_api.call @callee(%ok, %value, %unused) :
+                    (!tvm_ffi_abi.bool, !tvm_ffi_api.tensor, !tvm_ffi_abi.int) -> (!tvm_ffi_abi.bool, !tvm_ffi_api.any)
+                  %result = tvm_ffi_api.tuple.construct(%call_ok, %call_value) :
+                    (!tvm_ffi_abi.bool, !tvm_ffi_api.any) -> !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any>
+                  %payload = tvm_ffi_api.upcast %result : !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any> -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @invoke_monad(%ok: !tvm_ffi.bool, %value: !tvm_ffi.tensor,
-                                           %unused: !tvm_ffi.int) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
-                  %call = tvm_ffi.monad.call @callee(%ok, %value, %unused) :
-                    (!tvm_ffi.bool, !tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.monad.result<!tvm_ffi.tensor>
-                  %call_ok, %call_value = tvm_ffi.monad.unpack %call :
-                    (!tvm_ffi.monad.result<!tvm_ffi.tensor>) -> (i1, !tvm_ffi.any)
-                  %flag = tvm_ffi.to %call_ok : i1 -> !tvm_ffi.bool
-                  %result = tvm_ffi.tuple.construct(%flag, %call_value) :
-                    (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-                  %payload = tvm_ffi.upcast %result : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @invoke_monad(%ok: !tvm_ffi_abi.bool, %value: !tvm_ffi_api.tensor,
+                                           %unused: !tvm_ffi_abi.int) -> !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any> {
+                  %call = tvm_ffi_monad.call @callee(%ok, %value, %unused) :
+                    (!tvm_ffi_abi.bool, !tvm_ffi_api.tensor, !tvm_ffi_abi.int) -> !tvm_ffi_monad.result<!tvm_ffi_api.tensor>
+                  %call_ok, %call_value = tvm_ffi_monad.unpack %call :
+                    (!tvm_ffi_monad.result<!tvm_ffi_api.tensor>) -> (i1, !tvm_ffi_api.any)
+                  %flag = tvm_ffi_abi.to %call_ok : i1 -> !tvm_ffi_abi.bool
+                  %result = tvm_ffi_api.tuple.construct(%flag, %call_value) :
+                    (!tvm_ffi_abi.bool, !tvm_ffi_api.any) -> !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any>
+                  %payload = tvm_ffi_api.upcast %result : !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any> -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @empty() -> !tvm_ffi.none {
-                  %none = tvm_ffi.constant.none
-                  %payload = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @empty() -> !tvm_ffi_abi.none {
+                  %none = tvm_ffi_abi.constant.none
+                  %payload = tvm_ffi_api.upcast %none : !tvm_ffi_abi.none -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
-                tvm_ffi.func @invoke_empty() -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> {
-                  %call_ok, %call_value = tvm_ffi.call @empty() : () -> (!tvm_ffi.bool, !tvm_ffi.any)
-                  %result = tvm_ffi.tuple.construct(%call_ok, %call_value) :
-                    (!tvm_ffi.bool, !tvm_ffi.any) -> !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any>
-                  %payload = tvm_ffi.upcast %result : !tvm_ffi.tuple<!tvm_ffi.bool, !tvm_ffi.any> -> !tvm_ffi.any
-                  %yes = tvm_ffi.constant.bool true
-                  tvm_ffi.return %yes, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                tvm_ffi_api.func @invoke_empty() -> !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any> {
+                  %call_ok, %call_value = tvm_ffi_api.call @empty() : () -> (!tvm_ffi_abi.bool, !tvm_ffi_api.any)
+                  %result = tvm_ffi_api.tuple.construct(%call_ok, %call_value) :
+                    (!tvm_ffi_abi.bool, !tvm_ffi_api.any) -> !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any>
+                  %payload = tvm_ffi_api.upcast %result : !tvm_ffi_api.tuple<!tvm_ffi_abi.bool, !tvm_ffi_api.any> -> !tvm_ffi_api.any
+                  %yes = tvm_ffi_abi.constant.bool true
+                  tvm_ffi_api.return %yes, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                 }
             """)
             count, forward_empty, forward, invoke, invoke_monad, invoke_empty = (
@@ -342,12 +344,12 @@ class LocalCallTest(unittest.TestCase):
         with new_context() as context, ir.Location.unknown():
             register_all_passes()
             module = ir.Module.create()
-            boolean = tvm_ffi_d.BoolType.get()
-            array = tvm_ffi_d.ArrayType.get(tvm_ffi_d.IntType.get())
-            any_type = tvm_ffi_d.AnyType.get()
+            boolean = tvm_ffi_abi.BoolType.get()
+            array = tvm_ffi_api.ArrayType.get(tvm_ffi_abi.IntType.get())
+            any_type = tvm_ffi_api.AnyType.get()
             for name, text, *_ in cases:
                 with ir.InsertionPoint(module.body):
-                    function = tvm_ffi_d.FuncOp(
+                    function = tvm_ffi_api.FuncOp(
                         name,
                         ir.TypeAttr.get(
                             ir.FunctionType.get([boolean, array], [any_type])
@@ -359,8 +361,8 @@ class LocalCallTest(unittest.TestCase):
                     scope = Scope(flag, {"flag": Scope(flag), "xs": Scope(xs)})
                     expression = parse_expression(ast.parse(text, mode="eval").body)
                     result = expression.build(ExpressionContext(text, scope, context))
-                    success, payload = tvm_ffi_d.monad_unpack(result)
-                    tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
+                    success, payload = tvm_ffi_monad.unpack(result)
+                    tvm_ffi_api.return_(tvm_ffi_abi.to(success), payload)
             self.assertTrue(module.operation.verify())
             functions = self._compile_entries(module, *(name for name, *_ in cases))
 
@@ -395,11 +397,12 @@ class LocalCallTest(unittest.TestCase):
             module = ir.Module.create()
             for name, text in expressions:
                 with ir.InsertionPoint(module.body):
-                    function = tvm_ffi_d.FuncOp(
+                    function = tvm_ffi_api.FuncOp(
                         name,
                         ir.TypeAttr.get(
                             ir.FunctionType.get(
-                                [tvm_ffi_d.FloatType.get()], [tvm_ffi_d.AnyType.get()]
+                                [tvm_ffi_abi.FloatType.get()],
+                                [tvm_ffi_api.AnyType.get()],
                             )
                         ),
                     )
@@ -408,8 +411,8 @@ class LocalCallTest(unittest.TestCase):
                     scope = Scope(real, {"real": Scope(real)})
                     expression = parse_expression(ast.parse(text, mode="eval").body)
                     result = expression.build(ExpressionContext(text, scope, context))
-                    success, payload = tvm_ffi_d.monad_unpack(result)
-                    tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
+                    success, payload = tvm_ffi_monad.unpack(result)
+                    tvm_ffi_api.return_(tvm_ffi_abi.to(success), payload)
             self.assertTrue(module.operation.verify())
             functions = self._compile_entries(
                 module, *(name for name, _ in expressions)
@@ -442,8 +445,8 @@ class LocalCallTest(unittest.TestCase):
             def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
                 if self.text == "failure":
                     return [
-                        tvm_ffi_d.monad_call(
-                            tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get()),
+                        tvm_ffi_monad.call(
+                            tvm_ffi_monad.ResultType.get(tvm_ffi_abi.BoolType.get()),
                             ir.FlatSymbolRefAttr.get("guard_failure"),
                             [],
                         )
@@ -468,21 +471,21 @@ class LocalCallTest(unittest.TestCase):
                     llvm.mlir.global internal constant @error_kind("RuntimeError\00")
                     llvm.mlir.global internal constant @error_message("guard failure\00")
                     llvm.func @TVMFFIErrorSetRaisedFromCStr(!llvm.ptr, !llvm.ptr)
-                    tvm_ffi.func private @guard_failure() -> !tvm_ffi.bool {
+                    tvm_ffi_api.func private @guard_failure() -> !tvm_ffi_abi.bool {
                       %kind = llvm.mlir.addressof @error_kind : !llvm.ptr
                       %message = llvm.mlir.addressof @error_message : !llvm.ptr
                       llvm.call @TVMFFIErrorSetRaisedFromCStr(%kind, %message) : (!llvm.ptr, !llvm.ptr) -> ()
-                      %none = tvm_ffi.constant.none
-                      %payload = tvm_ffi.upcast %none : !tvm_ffi.none -> !tvm_ffi.any
-                      %no = tvm_ffi.constant.bool false
-                      tvm_ffi.return %no, %payload : !tvm_ffi.bool, !tvm_ffi.any
+                      %none = tvm_ffi_abi.constant.none
+                      %payload = tvm_ffi_api.upcast %none : !tvm_ffi_abi.none -> !tvm_ffi_api.any
+                      %no = tvm_ffi_abi.constant.bool false
+                      tvm_ffi_api.return %no, %payload : !tvm_ffi_abi.bool, !tvm_ffi_api.any
                     }
                 """)
                     if failing
                     else ir.Module.create()
                 )
-                any_type = tvm_ffi_d.AnyType.get()
-                type_ = tvm_ffi_d.IntType.get()
+                any_type = tvm_ffi_api.AnyType.get()
+                type_ = tvm_ffi_abi.IntType.get()
                 graph._dispatcher = Root()
                 with ir.InsertionPoint(module.body):
                     for index in range(3):
@@ -504,7 +507,7 @@ class LocalCallTest(unittest.TestCase):
                             input_types,
                             f"main_{index}",
                         )
-                        function = tvm_ffi_d.FuncOp(
+                        function = tvm_ffi_api.FuncOp(
                             f"main_{index}",
                             ir.TypeAttr.get(ir.FunctionType.get([type_], [any_type])),
                         )
@@ -513,11 +516,11 @@ class LocalCallTest(unittest.TestCase):
                             checked_call(
                                 "trident.test.guard.record",
                                 [constant(100 + index)],
-                                tvm_ffi_d.NoneType.get(),
+                                tvm_ffi_abi.NoneType.get(),
                             )
-                            result = pure(tvm_ffi_d.upcast(any_type, constant(index)))
-                            success, payload = tvm_ffi_d.monad_unpack(result)
-                            tvm_ffi_d.return_(tvm_ffi_d.to(success), payload)
+                            result = pure(tvm_ffi_api.upcast(any_type, constant(index)))
+                            success, payload = tvm_ffi_monad.unpack(result)
+                            tvm_ffi_api.return_(tvm_ffi_abi.to(success), payload)
                 graph._sub_modules = [
                     module,
                     ir.Module.create(),

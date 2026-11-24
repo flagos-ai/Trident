@@ -5,8 +5,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: trident-core-opt %s --lower-kernel-launch --convert-tvm-ffi-to-gpu --lower-tvm-ffi-monad --decompose-tvm-ffi --lower-tvm-ffi-defer --lower-to-pack --convert-tvm-ffi-to-func --convert-scf-to-cf --convert-tvm-ffi-to-llvm --convert-dlpack-to-llvm -split-input-file | FileCheck %s
-// RUN: trident-core-opt %s --trident-lowering-pipeline --verify-each | FileCheck %s --check-prefix=PIPELINE --implicit-check-not='!tvm_ffi.' --implicit-check-not='dlpack.' --implicit-check-not='unrealized_conversion_cast'
+// RUN: trident-core-opt %s --lower-tvm-ffi-api-kernel-launch --convert-tvm-ffi-abi-to-gpu --lower-tvm-ffi-monad --convert-tvm-ffi-api-to-abi --lower-tvm-ffi-abi-defer --lower-tvm-ffi-abi-to-pack --convert-tvm-ffi-abi-to-func --convert-scf-to-cf --convert-tvm-ffi-abi-to-llvm --convert-dlpack-to-llvm -split-input-file | FileCheck %s
+// RUN: trident-core-opt %s --trident-lowering-pipeline --verify-each | FileCheck %s --check-prefix=PIPELINE --implicit-check-not='!tvm_ffi_'  --implicit-check-not='dlpack.' --implicit-check-not='unrealized_conversion_cast'
 
 // PIPELINE-LABEL: llvm.func @test_kernel_launch(
 // PIPELINE: %[[STREAM:[a-zA-Z0-9_]+]] = llvm.call @TVMFFIEnvGetStream(%[[DEVICE:[a-zA-Z0-9_]+]], %[[INDEX:[a-zA-Z0-9_]+]]) : (i32, i32) -> !llvm.ptr
@@ -47,23 +47,23 @@
 // CHECK: dynamic_shared_memory_size %[[SHMEM]]
 // CHECK: args(%[[LAUNCH_DATA]] : !llvm.ptr, %[[LAUNCH_SCALAR]] : i64, %[[ZERO]] : i64, %[[ZERO]] : i64)
 
-// CHECK-NOT: tvm_ffi.kernel_launch
+// CHECK-NOT: tvm_ffi_api.kernel_launch
 module attributes { gpu.container_module } {
   gpu.binary @kernel [#gpu.object<#nvvm.target, "">]
 
   func.func @test_kernel_launch(
-    %tensor: !tvm_ffi.c.tensor,
-    %scalar: !tvm_ffi.int) {
+    %tensor: !tvm_ffi_abi.tensor,
+    %scalar: !tvm_ffi_abi.int) {
     %c32 = llvm.mlir.constant(32 : i64) : i64
     %c16 = llvm.mlir.constant(16 : i64) : i64
     %c128 = llvm.mlir.constant(128 : i64) : i64
     %c1 = llvm.mlir.constant(1 : i64) : i64
     %shmem = llvm.mlir.constant(16384 : i32) : i32
 
-    %launch_0 = tvm_ffi.kernel_launch @kernel::@entry
+    %launch_0 = tvm_ffi_api.kernel_launch @kernel::@entry
       blocks in (%c32, %c16, %c1) : i64 threads in (%c128, %c1, %c1)
       dynamic_shared_memory_size %shmem
-      args (%tensor : !tvm_ffi.c.tensor #tvm_ffi.variable_specialization<kind = !llvm.ptr, divisibility = 16>, %scalar : !tvm_ffi.int #tvm_ffi.variable_specialization<kind = i64, divisibility = 16>) -> !tvm_ffi.monad.result<!tvm_ffi.none>
+      args (%tensor : !tvm_ffi_abi.tensor #tvm_ffi_api.variable_specialization<kind = !llvm.ptr, divisibility = 16>, %scalar : !tvm_ffi_abi.int #tvm_ffi_api.variable_specialization<kind = i64, divisibility = 16>) -> !tvm_ffi_monad.result<!tvm_ffi_abi.none>
     func.return
   }
 }

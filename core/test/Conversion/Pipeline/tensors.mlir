@@ -1,9 +1,9 @@
 // Part of the Trident project, under the MIT License.
 // SPDX-License-Identifier: MIT
 
-// RUN: trident-core-opt %s --split-input-file --trident-lowering-pipeline --verify-each | FileCheck %s --implicit-check-not='!tvm_ffi.' --implicit-check-not='dlpack.' --implicit-check-not='unrealized_conversion_cast'
+// RUN: trident-core-opt %s --split-input-file --trident-lowering-pipeline --verify-each | FileCheck %s --implicit-check-not='!tvm_ffi_'  --implicit-check-not='dlpack.' --implicit-check-not='unrealized_conversion_cast'
 
-// The local LowerTensorMetadata and DLPackToLLVM fixtures own the metadata field
+// The local LowerTVMFFIABITensorMetadata and DLPackToLLVM fixtures own the metadata field
 // matrix. This integration follows one dynamic index from a semantic tensor
 // through object extraction, the DLTensor layout and the native return value.
 // CHECK-LABEL: llvm.func @tensor_size(
@@ -16,8 +16,8 @@
 // CHECK: %[[SIZE_PTR:[a-zA-Z0-9_]+]] = llvm.getelementptr %[[SIZES]][%[[INDEX]]]
 // CHECK: %[[SIZE:[a-zA-Z0-9_]+]] = llvm.load %[[SIZE_PTR]] : !llvm.ptr -> i64
 // CHECK: llvm.return %[[SIZE]] : i64
-func.func @tensor_size(%tensor: !tvm_ffi.tensor, %index: i64) -> i64 {
-  %size = tvm_ffi.tensor.size %tensor[%index] : !tvm_ffi.tensor
+func.func @tensor_size(%tensor: !tvm_ffi_api.tensor, %index: i64) -> i64 {
+  %size = tvm_ffi_api.tensor.size %tensor[%index] : !tvm_ffi_api.tensor
   return %size : i64
 }
 
@@ -55,21 +55,21 @@ func.func @tensor_size(%tensor: !tvm_ffi.tensor, %index: i64) -> i64 {
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = llvm.load %[[RESULT_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
 // CHECK: llvm.store %[[RESULT]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // The packed entry stores the checked payload directly into its output slot.
-tvm_ffi.func @tensor_literal_nonsplat() -> !tvm_ffi.c.tensor {
-  %0 = tvm_ffi.tensor.literal dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32> : !tvm_ffi.c.tensor
+tvm_ffi_api.func @tensor_literal_nonsplat() -> !tvm_ffi_abi.tensor {
+  %0 = tvm_ffi_api.tensor.literal dense<[[1.000000e+00, 2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00, 6.000000e+00]]> : tensor<2x3xf32> : !tvm_ffi_abi.tensor
 
   // The marked return retains its payload before local cleanup.
-  %return_value_1 = tvm_ffi.upcast %0 : !tvm_ffi.c.tensor -> !tvm_ffi.any
-  %return_flag_1 = tvm_ffi.constant.bool true
-  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  %return_value_1 = tvm_ffi_api.upcast %0 : !tvm_ffi_abi.tensor -> !tvm_ffi_api.any
+  %return_flag_1 = tvm_ffi_abi.constant.bool true
+  tvm_ffi_api.return %return_flag_1, %return_value_1 : !tvm_ffi_abi.bool, !tvm_ffi_api.any
 }
 
 // The packed entry stores the checked payload directly into its output slot.
-tvm_ffi.func @tensor_literal_splat() -> !tvm_ffi.c.tensor {
-  %0 = tvm_ffi.tensor.literal dense<1.250000e+00> : tensor<2x3xf32> : !tvm_ffi.c.tensor
+tvm_ffi_api.func @tensor_literal_splat() -> !tvm_ffi_abi.tensor {
+  %0 = tvm_ffi_api.tensor.literal dense<1.250000e+00> : tensor<2x3xf32> : !tvm_ffi_abi.tensor
 
   // The marked return retains its payload before local cleanup.
-  %return_value_2 = tvm_ffi.upcast %0 : !tvm_ffi.c.tensor -> !tvm_ffi.any
-  %return_flag_2 = tvm_ffi.constant.bool true
-  tvm_ffi.return %return_flag_2, %return_value_2 : !tvm_ffi.bool, !tvm_ffi.any
+  %return_value_2 = tvm_ffi_api.upcast %0 : !tvm_ffi_abi.tensor -> !tvm_ffi_api.any
+  %return_flag_2 = tvm_ffi_abi.constant.bool true
+  tvm_ffi_api.return %return_flag_2, %return_value_2 : !tvm_ffi_abi.bool, !tvm_ffi_api.any
 }
