@@ -31,37 +31,37 @@ adding a file for each type, arity or operator name.
 
 | Family | Coverage boundary |
 | --- | --- |
-| `DLPack/IR/ops`, `TVMFFI/IR/types*` | Public type spellings and representative type parameter constraints |
-| `TVMFFI/IR/ops*` | Scalar/registry operations, containers, reference types, cleanup regions and kernel syntax/verifiers |
-| `TVMFFI/IR/arith-invalid`, `Transforms/lower-arith` | Numeric operand/result contracts, Bool/Int/Float promotion and native arithmetic data flow |
-| `TVMFFI/IR/casts*` | Widening, membership, subsets, identity parsing/folding and incompatible casts |
-| `TVMFFI/IR/result*` | Local calls, variadic Results, bind/yield, unpack inference and packed return shape |
-| `Transforms/lower-monad` | Result construction/unpack, continuations, independent input/output arities, local call attributes and CFG signature conversion |
+| `DLPack/IR/ops`, `TVMFFI/API/IR/types*` | Public type spellings and representative type parameter constraints |
+| `TVMFFI/API/IR/ops*` | Scalar/registry operations, containers, reference types, cleanup regions and kernel syntax/verifiers |
+| `TVMFFI/Arith/IR/arith-invalid`, `TVMFFI/Arith/Transforms/lower-arith` | Numeric operand/result contracts, Bool/Int/Float promotion and native arithmetic data flow |
+| `TVMFFI/API/IR/casts*` | Widening, membership, subsets, identity parsing/folding and incompatible casts |
+| `TVMFFI/Monad/IR/result*` | Local calls, variadic Results, bind/yield, unpack inference and packed return shape |
+| `TVMFFI/Monad/Transforms/lower-monad` | Result construction/unpack, continuations, independent input/output arities, local call attributes and CFG signature conversion |
 | `Transforms/canonicalize-containers` | Tuple element forwarding with shared users and automatic dead construct elimination before container decomposition |
-| `Transforms/canonicalize-monad` | Pure bind input removal, zero-input inlining, remaining unknown inputs, effect ordering and attribute preservation |
-| `Transforms/decompose-representations` | Opaque/Base mapping, recursive Result/attribute conversion, borrowing casts, local calls and string elements |
-| `Transforms/decompose-containers` | Checked container calls, nested types/attributes and captured values inside nested continuations |
-| `Transforms/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, region transfers, loop-carried references, direct producer exports, CFG type conversion and synchronous captures and rejected legalization |
-| `Transforms/lower-defer*` | Generic SSACFG dominance-scope cleanup, CFG edges/loops, generic region exits, SSA cloning, empty bodies, repeat lowering and rejected region structure |
-| `DLPackToLLVM/metadata`, `Transforms/lower-tensor-metadata` | Tensor metadata expansion to DLPack and LLVM field mapping |
-| `Transforms/lower-to-pack` | Typed-body conversion, count/tag guards, CFG forwarding, success-only payload checks and visibility |
-| `TVMFFIToFunc/abi-and-cfg`, `return-invalid` | Packed entry ABI, output writes, return status, declarations and duplicate-symbol verification |
-| `Transforms/lower-kernel-launch` | Attribute removal, native arguments and Monad success/rejection |
-| `TVMFFIToGPU/kernel-launch`, `invalid` | Guarded launch integration, launch arguments/stream, specializations and unsupported native operands |
-| `TVMFFIToFunc/call` | Packed argument/output slots, structured success-only reads and zero/repeated local calls |
-| `TVMFFIToLLVM/invalid`, `pack` | Checked dynamic indexing, borrowed argument access and undecomposed input rejection |
-| `TVMFFIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
+| `TVMFFI/Monad/Transforms/canonicalize-monad` | Pure bind input removal, zero-input inlining, remaining unknown inputs, effect ordering and attribute preservation |
+| `Conversion/TVMFFIAPIToABI/decompose-representations` | Opaque/Base mapping, recursive Result/attribute conversion, borrowing casts, local calls and string elements |
+| `Conversion/TVMFFIAPIToABI/decompose-containers` | Checked container calls, nested types/attributes and captured values inside nested continuations |
+| `Conversion/TVMFFIAPIToABI/automatic-ownership*` | Producer cleanup, borrowed aliases, repeated exports, mixed Opaque/Base results, region transfers, loop-carried references, direct producer exports, CFG type conversion and synchronous captures and rejected legalization |
+| `TVMFFI/ABI/Transforms/lower-defer*` | Generic SSACFG dominance-scope cleanup, CFG edges/loops, generic region exits, SSA cloning, empty bodies, repeat lowering and rejected region structure |
+| `DLPackToLLVM/metadata`, `TVMFFI/ABI/Transforms/lower-tensor-metadata` | Tensor metadata expansion to DLPack and LLVM field mapping |
+| `TVMFFI/ABI/Transforms/lower-to-pack` | Typed-body conversion, count/tag guards, CFG forwarding, success-only payload checks and visibility |
+| `TVMFFIABIToFunc/abi-and-cfg`, `return-invalid` | Packed entry ABI, output writes, return status, declarations and duplicate-symbol verification |
+| `Transforms/lower-tvm-ffi-api-kernel-launch` | Attribute removal, native arguments and Monad success/rejection |
+| `TVMFFIABIToGPU/kernel-launch`, `invalid` | Guarded launch integration, launch arguments/stream, specializations and unsupported native operands |
+| `TVMFFIABIToFunc/call` | Packed argument/output slots, structured success-only reads and zero/repeated local calls |
+| `TVMFFIABIToLLVM/invalid`, `pack` | Checked dynamic indexing, borrowed argument access and undecomposed input rejection |
+| `TVMFFIABIToLLVM/casts*` | Observable concrete tag assertions, erased finite constraints, string casts and Base identity conversion |
 | `Pipeline/guard-dispatch` | Shared-prefix execute-region dispatch and original-pack execution through Monad, cleanup and packed ABI lowering |
 | `Pipeline/guard-dispatch-cfg` | Large shared-fallback dispatch and explicit CFG cleanup before GPU-to-LLVM preparation |
-| `Pipeline/inlined-guards`, `Transforms/canonicalize-scalars`, `IR/casts` | Packed CFG structuring and DLPack inlining, repeated enclosing guards, scalar roundtrips/constants and safe cast folding |
-| `TVMFFIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |
-| `TVMFFIToLLVM/runtime-ops` | Cached registry lookup/error/call checks, conditional reference updates and clone/copy operand data flow |
+| `Pipeline/inlined-guards`, `TVMFFI/ABI/Transforms/canonicalize-scalars`, `IR/casts` | Packed CFG structuring and DLPack inlining, repeated enclosing guards, scalar roundtrips/constants and safe cast folding |
+| `TVMFFIABIToLLVM/value-ops` | Representative constant layouts, scalar boxing/extraction, kernel-argument truncation, object pointers and tensor literals |
+| `TVMFFIABIToLLVM/runtime-ops` | Cached registry lookup/error/call checks, conditional reference updates and clone/copy operand data flow |
 
 Public type mnemonics retain individual spelling checks because they have separate
 parser registrations. Generic constraints use representative categories rather
 than every scalar width or object type. Result payload rejection retains native
 scalar, native Object and nested Result examples. Unpack inference retains Any,
-CAny, a scalar and a native function handle; cast compatibility owns membership
+ABI Any, a scalar and a native function handle; cast compatibility owns membership
 and subset variations. Identity folds use scalar, container, function and union
 representatives. Scalar constants reuse boxing coverage; DType packing and None
 initialization keep their own checks.

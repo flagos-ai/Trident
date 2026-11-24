@@ -35,13 +35,13 @@
 // CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 
-tvm_ffi.func @clone(%arg0: !tvm_ffi.tensor) -> !tvm_ffi.tensor {
-  %memory_format = tvm_ffi.constant.int 0
-  %clone_handle = tvm_ffi.FunctionGetGlobal "trident.aten.clone" : !tvm_ffi.function
-  %clone = tvm_ffi.FunctionCall %clone_handle : !tvm_ffi.function(%arg0, %memory_format) : (!tvm_ffi.tensor, !tvm_ffi.int) -> !tvm_ffi.tensor
+tvm_ffi_api.func @clone(%arg0: !tvm_ffi_api.tensor) -> !tvm_ffi_api.tensor {
+  %memory_format = tvm_ffi_abi.constant.int 0
+  %clone_handle = tvm_ffi_api.FunctionGetGlobal "trident.aten.clone" : !tvm_ffi_api.function
+  %clone = tvm_ffi_api.FunctionCall %clone_handle : !tvm_ffi_api.function(%arg0, %memory_format) : (!tvm_ffi_api.tensor, !tvm_ffi_abi.int) -> !tvm_ffi_api.tensor
 
   // The return retains its payload before local cleanup.
-  %return_value_1 = tvm_ffi.upcast %clone : !tvm_ffi.tensor -> !tvm_ffi.any
-  %return_flag_1 = tvm_ffi.constant.bool true
-  tvm_ffi.return %return_flag_1, %return_value_1 : !tvm_ffi.bool, !tvm_ffi.any
+  %return_value_1 = tvm_ffi_api.upcast %clone : !tvm_ffi_api.tensor -> !tvm_ffi_api.any
+  %return_flag_1 = tvm_ffi_abi.constant.bool true
+  tvm_ffi_api.return %return_flag_1, %return_value_1 : !tvm_ffi_abi.bool, !tvm_ffi_api.any
 }

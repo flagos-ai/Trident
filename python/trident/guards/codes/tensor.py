@@ -16,7 +16,8 @@ from typing_extensions import Self, override
 
 from trident.core import ir
 from trident.core.dialects import arith
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.utils.guards import input_path
 from trident.utils.values import BINARY_ARITHMETIC, constant, equal
 
@@ -111,11 +112,11 @@ class TensorDTypeCode(GuardCode):
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor, scope = scope.read(input_path(source))
-        if not isinstance(tensor.type, tvm_ffi_d.TensorType):
-            tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
+        if not isinstance(tensor.type, tvm_ffi_api.TensorType):
+            tensor = tvm_ffi_api.downcast(tvm_ffi_api.TensorType.get(), tensor)
         metadata: list[ir.Value] = [
-            tvm_ffi_d.to(arith.extui(ir.IntegerType.get_signless(64), field))
-            for field in tvm_ffi_d.tensor_dtype(tensor)
+            tvm_ffi_abi.to(arith.extui(ir.IntegerType.get_signless(64), field))
+            for field in tvm_ffi_api.tensor_dtype(tensor)
         ]
         dtype = tvm_ffi.convert(self.dtype)
         return reduce(
@@ -180,11 +181,11 @@ class TensorDeviceCode(GuardCode):
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor, scope = scope.read(input_path(source))
-        if not isinstance(tensor.type, tvm_ffi_d.TensorType):
-            tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
+        if not isinstance(tensor.type, tvm_ffi_api.TensorType):
+            tensor = tvm_ffi_api.downcast(tvm_ffi_api.TensorType.get(), tensor)
         device_type, device_index = (
-            tvm_ffi_d.to(arith.extsi(ir.IntegerType.get_signless(64), field))
-            for field in tvm_ffi_d.tensor_device(tensor)
+            tvm_ffi_abi.to(arith.extsi(ir.IntegerType.get_signless(64), field))
+            for field in tvm_ffi_api.tensor_device(tensor)
         )
         return BINARY_ARITHMETIC[operator.and_](
             equal(
@@ -242,10 +243,10 @@ class TensorRankCode(GuardCode):
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor, scope = scope.read(input_path(source))
-        if not isinstance(tensor.type, tvm_ffi_d.TensorType):
-            tensor = tvm_ffi_d.downcast(tvm_ffi_d.TensorType.get(), tensor)
+        if not isinstance(tensor.type, tvm_ffi_api.TensorType):
+            tensor = tvm_ffi_api.downcast(tvm_ffi_api.TensorType.get(), tensor)
         return equal(
-            tvm_ffi_d.to(tvm_ffi_d.tensor_dim(tensor)), constant(self.expected)
+            tvm_ffi_abi.to(tvm_ffi_api.tensor_dim(tensor)), constant(self.expected)
         )
 
     @property

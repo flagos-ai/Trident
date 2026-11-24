@@ -7,16 +7,16 @@
 
 #include "trident/core/Conversion/Pipeline/Pipeline.h" // NOLINT(misc-include-cleaner)
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
-#include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
-#include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
-#include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerArith.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerKernelLaunch.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerToPack.h"
+#include "trident/core/Conversion/TVMFFIABIToFunc/TVMFFIABIToFunc.h"
+#include "trident/core/Conversion/TVMFFIABIToGPU/TVMFFIABIToGPU.h"
+#include "trident/core/Conversion/TVMFFIABIToLLVM/TVMFFIABIToLLVM.h"
+#include "trident/core/Conversion/TVMFFIAPIToABI/TVMFFIAPIToABI.h"
+#include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABIDefer.h"
+#include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABITensorMetadata.h"
+#include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABIToPack.h"
+#include "trident/core/Dialect/TVMFFI/API/Transforms/LowerTVMFFIAPIKernelLaunch.h"
+#include "trident/core/Dialect/TVMFFI/Arith/Transforms/LowerTVMFFIArith.h"
+#include "trident/core/Dialect/TVMFFI/Monad/Transforms/LowerTVMFFIMonad.h"
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
 #include <mlir/Conversion/ControlFlowToSCF/ControlFlowToSCF.h>
@@ -45,22 +45,22 @@ class TridentLoweringPipelinePass final
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
     // Expand semantic arithmetic and guarded launches before simplifying
     // Results.
-    pm.addPass(tvm_ffi::createLowerArith());
-    pm.addPass(tvm_ffi::createLowerKernelLaunch());
-    pm.addPass(createConvertTVMFFIToGPU());
+    pm.addPass(tvm_ffi::arith::createLowerTVMFFIArith());
+    pm.addPass(tvm_ffi::api::createLowerTVMFFIAPIKernelLaunch());
+    pm.addPass(createConvertTVMFFIABIToGPU());
     // Simplify continuations while Result success and payloads are explicit.
     pm.addPass(mlir::createCanonicalizerPass());
-    pm.addPass(tvm_ffi::createLowerTVMFFIMonad());
+    pm.addPass(tvm_ffi::monad::createLowerTVMFFIMonad());
     pm.addPass(mlir::createCanonicalizerPass());
     // Materialize lexical cleanup before inlining can merge its block scopes.
-    pm.addPass(tvm_ffi::createDecomposeTVMFFI());
-    pm.addPass(tvm_ffi::createLowerTVMFFIDefer());
+    pm.addPass(trident::conversion::createConvertTVMFFIAPIToABI());
+    pm.addPass(tvm_ffi::abi::createLowerTVMFFIABIDefer());
     // Remove unused ABI declarations before packed entries take their names.
     pm.addPass(mlir::createSymbolDCEPass());
     // Form packed entry bodies before lowering their native ABI.
-    pm.addPass(tvm_ffi::createLowerTensorMetadata());
-    pm.addPass(tvm_ffi::createLowerToPack());
-    pm.addPass(createConvertTVMFFIToFunc());
+    pm.addPass(tvm_ffi::abi::createLowerTVMFFIABITensorMetadata());
+    pm.addPass(tvm_ffi::abi::createLowerTVMFFIABIToPack());
+    pm.addPass(createConvertTVMFFIABIToFunc());
     pm.addPass(mlir::createCanonicalizerPass());
     // Packed ABI preflight introduces CFG blocks. Structure them so calls in
     // single-block SCF regions can inline the entire callee, including guards.
@@ -79,7 +79,7 @@ class TridentLoweringPipelinePass final
     // before packed calls and reference checks expand into large LLVM CFGs.
     pm.addPass(
         mlir::createGpuToLLVMConversionPass()); // NOLINT(misc-include-cleaner)
-    pm.addPass(createConvertTVMFFIToLLVM());
+    pm.addPass(createConvertTVMFFIABIToLLVM());
     pm.addPass(createConvertDLPackToLLVM());
     pm.addPass(mlir::createUBToLLVMConversionPass());
     pm.addPass(mlir::createArithToLLVMConversionPass());

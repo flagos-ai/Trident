@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 from trident.core import ir
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 
 from .values import constant, native
 
@@ -16,20 +17,22 @@ def container_read(
 ) -> ir.Value:
     """Read a semantic container directly, assuming a valid container and index."""
     type_ = container.type
-    assert isinstance(type_, (tvm_ffi_d.ArrayType, tvm_ffi_d.TupleType))
-    if isinstance(type_, tvm_ffi_d.TupleType):
+    assert isinstance(type_, (tvm_ffi_api.ArrayType, tvm_ffi_api.TupleType))
+    if isinstance(type_, tvm_ffi_api.TupleType):
         assert isinstance(index, int)
         assert -len(type_.types) <= index < len(type_.types), "tuple index out of range"
         payload = type_.types[index]
-        value = tvm_ffi_d.TupleUnconstructOp(type_.types, container).elements[index]
+        value = tvm_ffi_api.TupleUnconstructOp(type_.types, container).elements[index]
     else:
         payload = type_.element_type
-        value = tvm_ffi_d.array_get(
+        value = tvm_ffi_api.array_get(
             container, native(constant(index) if isinstance(index, int) else index)
         )
     widening = isinstance(
-        target, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType)
-    ) and not isinstance(payload, (tvm_ffi_d.AnyType, tvm_ffi_d.UnionType))
+        target, (tvm_ffi_api.AnyType, tvm_ffi_api.UnionType)
+    ) and not isinstance(payload, (tvm_ffi_api.AnyType, tvm_ffi_api.UnionType))
     if payload != target and not widening:
-        value = tvm_ffi_d.downcast(target, value)
-    return tvm_ffi_d.upcast(target, value) if payload != target and widening else value
+        value = tvm_ffi_api.downcast(target, value)
+    return (
+        tvm_ffi_api.upcast(target, value) if payload != target and widening else value
+    )

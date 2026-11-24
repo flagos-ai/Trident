@@ -27,13 +27,46 @@ declare_mlir_python_extension(
   MLIRToLLVMIRTranslationRegistration)
 
 declare_mlir_python_extension(
-  TridentCorePythonExtensions.TVMFFI
+  TridentCorePythonExtensions.TVMFFIABI
   MODULE_NAME
-  _tvm_ffi
+  _tvm_ffi_abi
   ADD_TO_PARENT
   TridentCorePythonExtensions
   SOURCES
-  dialects/TVMFFITypes.cc
+  dialects/TVMFFIABITypes.cc
+  EMBED_CAPI_LINK_LIBS
+  TridentCoreCAPI)
+
+declare_mlir_python_extension(
+  TridentCorePythonExtensions.TVMFFIAPI
+  MODULE_NAME
+  _tvm_ffi_api
+  ADD_TO_PARENT
+  TridentCorePythonExtensions
+  SOURCES
+  dialects/TVMFFIAPITypes.cc
+  EMBED_CAPI_LINK_LIBS
+  TridentCoreCAPI)
+
+declare_mlir_python_extension(
+  TridentCorePythonExtensions.TVMFFIArith
+  MODULE_NAME
+  _tvm_ffi_arith
+  ADD_TO_PARENT
+  TridentCorePythonExtensions
+  SOURCES
+  dialects/TVMFFIArith.cc
+  EMBED_CAPI_LINK_LIBS
+  TridentCoreCAPI)
+
+declare_mlir_python_extension(
+  TridentCorePythonExtensions.TVMFFIMonad
+  MODULE_NAME
+  _tvm_ffi_monad
+  ADD_TO_PARENT
+  TridentCorePythonExtensions
+  SOURCES
+  dialects/TVMFFIMonadTypes.cc
   EMBED_CAPI_LINK_LIBS
   TridentCoreCAPI)
 
@@ -73,7 +106,11 @@ declare_mlir_python_sources(
   TridentCorePythonSources
   SOURCES
   __init__.py
-  dialects/tvm_ffi.py)
+  dialects/tvm_ffi/__init__.py
+  dialects/tvm_ffi/abi.py
+  dialects/tvm_ffi/api.py
+  dialects/tvm_ffi/arith.py
+  dialects/tvm_ffi/monad.py)
 
 declare_mlir_dialect_python_bindings(
   ADD_TO_PARENT
@@ -81,9 +118,39 @@ declare_mlir_dialect_python_bindings(
   ROOT_DIR
   "${CMAKE_CURRENT_SOURCE_DIR}"
   TD_FILE
-  dialects/TVMFFIOpsPyBind.td
+  dialects/TVMFFIABIOpsPyBind.td
   DIALECT_NAME
-  tvm_ffi)
+  tvm_ffi_abi)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT
+  TridentCorePythonSources.Core
+  ROOT_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  TD_FILE
+  dialects/TVMFFIAPIOpsPyBind.td
+  DIALECT_NAME
+  tvm_ffi_api)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT
+  TridentCorePythonSources.Core
+  ROOT_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  TD_FILE
+  dialects/TVMFFIArithOpsPyBind.td
+  DIALECT_NAME
+  tvm_ffi_arith)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT
+  TridentCorePythonSources.Core
+  ROOT_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  TD_FILE
+  dialects/TVMFFIMonadOpsPyBind.td
+  DIALECT_NAME
+  tvm_ffi_monad)
 
 add_mlir_python_sources_target(
   TridentCorePythonSourcesTarget
@@ -95,7 +162,10 @@ add_mlir_python_sources_target(
   ${TRIDENT_CORE_PYTHON_OUTPUT_ROOT}
   SOURCES_TARGETS
   TridentCorePythonSources.Core
-  TridentCorePythonSources.Core.tvm_ffi.ops_gen)
+  TridentCorePythonSources.Core.tvm_ffi_abi.ops_gen
+  TridentCorePythonSources.Core.tvm_ffi_api.ops_gen
+  TridentCorePythonSources.Core.tvm_ffi_arith.ops_gen
+  TridentCorePythonSources.Core.tvm_ffi_monad.ops_gen)
 
 build_nanobind_lib(
   INSTALL_COMPONENT

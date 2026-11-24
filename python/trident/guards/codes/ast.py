@@ -10,7 +10,9 @@ from typing import Final
 from typing_extensions import Self, override
 
 from trident.core import ir
-from trident.core.dialects import tvm_ffi as tvm_ffi_d
+from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.utils.guards import input_path
 from trident.utils.monad import BindScope
 
@@ -55,7 +57,7 @@ class ASTCode(GuardCode):
     def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
         expression_context = ExpressionContext(self.text, scope, context)
         result = self.expression.build(expression_context)
-        type_ = tvm_ffi_d.ResultType.get(tvm_ffi_d.BoolType.get())
+        type_ = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.BoolType.get())
         with (
             expression_context.local_scope(),
             BindScope([type_], [result]) as bind_scope,

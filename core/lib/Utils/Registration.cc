@@ -8,18 +8,21 @@
 #include "trident/core/Utils/Registration.h"
 #include "trident/core/Conversion/DLPackToLLVM/DLPackToLLVM.h"
 #include "trident/core/Conversion/Pipeline/Pipeline.h"
-#include "trident/core/Conversion/TVMFFIToFunc/TVMFFIToFunc.h"
-#include "trident/core/Conversion/TVMFFIToGPU/TVMFFIToGPU.h"
-#include "trident/core/Conversion/TVMFFIToLLVM/TVMFFIToLLVM.h"
+#include "trident/core/Conversion/TVMFFIABIToFunc/TVMFFIABIToFunc.h"
+#include "trident/core/Conversion/TVMFFIABIToGPU/TVMFFIABIToGPU.h"
+#include "trident/core/Conversion/TVMFFIABIToLLVM/TVMFFIABIToLLVM.h"
+#include "trident/core/Conversion/TVMFFIAPIToABI/TVMFFIAPIToABI.h"
 #include "trident/core/Dialect/DLPack/IR/DLPackDialect.h"
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFIDialect.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/DecomposeTVMFFI.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerArith.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerKernelLaunch.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIDefer.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerTVMFFIMonad.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerTensorMetadata.h"
-#include "trident/core/Dialect/TVMFFI/Transforms/LowerToPack.h"
+#include "trident/core/Dialect/TVMFFI/ABI/IR/TVMFFIDialect.h"
+#include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABIDefer.h"
+#include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABITensorMetadata.h"
+#include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABIToPack.h"
+#include "trident/core/Dialect/TVMFFI/API/IR/TVMFFIDialect.h"
+#include "trident/core/Dialect/TVMFFI/API/Transforms/LowerTVMFFIAPIKernelLaunch.h"
+#include "trident/core/Dialect/TVMFFI/Arith/IR/TVMFFIDialect.h"
+#include "trident/core/Dialect/TVMFFI/Arith/Transforms/LowerTVMFFIArith.h"
+#include "trident/core/Dialect/TVMFFI/Monad/IR/TVMFFIDialect.h"
+#include "trident/core/Dialect/TVMFFI/Monad/Transforms/LowerTVMFFIMonad.h"
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllExtensions.h>
 #include <mlir/InitAllPasses.h>
@@ -28,24 +31,27 @@ void trident::conversion::registerAllDialects(mlir::DialectRegistry &registry) {
   // Register base dialects before extensions and external interfaces.
   mlir::registerAllDialects(registry);
   registry.insert<trident::dlpack::DLPackDialect,
-                  trident::tvm_ffi::TVMFFIDialect>();
+                  trident::tvm_ffi::abi::TVMFFIABIDialect,
+                  trident::tvm_ffi::api::TVMFFIAPIDialect,
+                  trident::tvm_ffi::arith::TVMFFIArithDialect,
+                  trident::tvm_ffi::monad::TVMFFIMonadDialect>();
   mlir::registerAllExtensions(registry);
   trident::conversion::registerConvertDLPackToLLVMInterface(registry);
-  trident::conversion::registerConvertTVMFFIToLLVMInterface(registry);
+  trident::conversion::registerConvertTVMFFIABIToLLVMInterface(registry);
 }
 
 void trident::conversion::registerAllPasses() {
   mlir::registerAllPasses();
   trident::conversion::registerConvertDLPackToLLVMPass();
-  trident::conversion::registerConvertTVMFFIToFuncPass();
-  trident::conversion::registerConvertTVMFFIToGPUPass();
-  trident::conversion::registerConvertTVMFFIToLLVMPass();
+  trident::conversion::registerConvertTVMFFIABIToFuncPass();
+  trident::conversion::registerConvertTVMFFIABIToGPUPass();
+  trident::conversion::registerConvertTVMFFIABIToLLVMPass();
+  trident::conversion::registerConvertTVMFFIAPIToABIPass();
   trident::conversion::registerTridentLoweringPipelinePass();
-  trident::tvm_ffi::registerDecomposeTVMFFIPass();
-  trident::tvm_ffi::registerLowerArithPass();
-  trident::tvm_ffi::registerLowerKernelLaunchPass();
-  trident::tvm_ffi::registerLowerTVMFFIDeferPass();
-  trident::tvm_ffi::registerLowerTVMFFIMonadPass();
-  trident::tvm_ffi::registerLowerTensorMetadataPass();
-  trident::tvm_ffi::registerLowerToPackPass();
+  trident::tvm_ffi::abi::registerLowerTVMFFIABIDeferPass();
+  trident::tvm_ffi::abi::registerLowerTVMFFIABITensorMetadataPass();
+  trident::tvm_ffi::abi::registerLowerTVMFFIABIToPackPass();
+  trident::tvm_ffi::api::registerLowerTVMFFIAPIKernelLaunchPass();
+  trident::tvm_ffi::arith::registerLowerTVMFFIArithPass();
+  trident::tvm_ffi::monad::registerLowerTVMFFIMonadPass();
 }

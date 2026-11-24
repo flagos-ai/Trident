@@ -9,7 +9,7 @@
 #include "trident/core/Conversion/Utils/TVMFFIUtils.h"
 #include "trident/core/Conversion/Utils/StdLibCAPIDescriptors.h"
 #include "trident/core/Conversion/Utils/TVMFFICAPIDescriptors.h"
-#include "trident/core/Dialect/TVMFFI/IR/TVMFFITypes.h"
+#include "trident/core/Dialect/TVMFFI/Support/TVMFFITypes.h"
 #include <cstddef>
 #include <cstdint>
 #include <llvm/ADT/ArrayRef.h>

@@ -32,9 +32,8 @@ from trident.core import (
     register_all_passes,
 )
 from trident.core.dialects import transform
-from trident.core.dialects import (
-    tvm_ffi as tvm_ffi_d,
-)
+from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
+from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.core.execution_engine import ExecutionEngine
 from trident.ffi import Exception
 from trident.utils.runtime import find_runtime_libraries
@@ -240,7 +239,7 @@ class TridentGraphModule:
                         for index, child in enumerate(value)
                     ]
                     return (
-                        tvm_ffi_d.TupleType.get(child_types)
+                        tvm_ffi_api.TupleType.get(child_types)
                         if isinstance(value, tuple)
                         else array_type(child_types)
                     )
@@ -375,9 +374,9 @@ class TridentGraphModule:
     def _build_dispatcher(self, combined: ir.Module) -> None:
         """Generate the ordered guard tree directly as an execute-region CFG."""
         with self.ctx, combined.operation.location, ir.InsertionPoint(combined.body):
-            any_type = tvm_ffi_d.AnyType.get()
-            parameter_types: list[ir.Type] = [tvm_ffi_d.PackArgumentsType.get()]
-            dispatcher = tvm_ffi_d.PackFuncOp(
+            any_type = tvm_ffi_api.AnyType.get()
+            parameter_types: list[ir.Type] = [tvm_ffi_abi.PackArgumentsType.get()]
+            dispatcher = tvm_ffi_api.PackFuncOp(
                 self.fn.__name__,
                 ir.TypeAttr.get(ir.FunctionType.get(parameter_types, [any_type])),
             )
@@ -385,4 +384,4 @@ class TridentGraphModule:
             with ir.InsertionPoint(entry):
                 [arguments] = entry.arguments
                 success, payload = self._dispatcher.build(Scope(arguments))
-                tvm_ffi_d.return_(success, payload)
+                tvm_ffi_api.return_(success, payload)
