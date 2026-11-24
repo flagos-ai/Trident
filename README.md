@@ -124,6 +124,29 @@ python -m unittest test.e2e.test_specialization
 See [the Python test guide](test/README.md) for capability groups and coverage
 boundaries, and [the core test guide](core/test/README.md) for Lit.
 
+## Pre-commit Checks
+
+Install pre-commit and enable the Git hook from the repository root:
+
+```bash
+uv tool install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+The hooks use pinned Ruff and clang-format versions in isolated environments.
+Ruff checks Python with the basic `E4/E7/E9/F` lint rules, applies safe fixes,
+and formats Python. clang-format formats C/C++ sources and headers using LLVM
+style. TableGen (`.td`) files, build directories and generated outputs are
+excluded. No project build or CUDA installation is needed to run these checks.
+
+On commit, only staged files are checked. If a hook modifies files or reports
+remaining errors, the commit stops; review the changes, fix any remaining
+errors, and stage the files again before retrying the commit.
+
+The existing `bash ./tools/format.sh` command also formats CMake files; CMake
+formatting is not part of the pre-commit hooks.
+
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
