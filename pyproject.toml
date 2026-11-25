@@ -12,6 +12,20 @@ dependencies = ["apache-tvm-ffi", "typing-extensions>=4.5"]
 requires = ["apache-tvm-ffi", "cmake", "jinja2", "nanobind", "ninja", "scikit-build-core", "torch>=2.10.0", "triton"]
 build-backend = "scikit_build_core.build"
 
+[tool.ruff]
+extend-exclude = ["_tvm_ffi_ops_gen.py", "aten.gen.cc", "build", "cmake-build-*", "core-build", "venv", "wheels"]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# MLIR bindings re-export generated types and operation classes.
+"core/python/trident_core/dialects/tvm_ffi/*.py" = ["F403", "F405"]
+# Load the native library before importing its registered FFI types.
+"ffi/python/__init__.py" = ["E402"]
+
 [tool.scikit-build]
 wheel.exclude = ["**/*.a"]
 wheel.install-dir = "trident"

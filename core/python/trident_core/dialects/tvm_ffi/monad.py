@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 from ..._mlir_libs._tvm_ffi_monad import *
-from . import api as _api
+from . import api as _api  # noqa: F401 - Register dependent API and ABI types.
 from .._tvm_ffi_monad_ops_gen import *
 from collections.abc import Sequence
 from ...ir import Block, BlockArgumentList, Location

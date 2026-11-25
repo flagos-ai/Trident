@@ -15,7 +15,6 @@ from typing_extensions import override
 
 from trident.core import ir
 from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
 from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 
 

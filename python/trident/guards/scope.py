@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from typing import Final
 
 from trident.core import ir
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
 from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
 from trident.utils.containers import container_read
 from trident.utils.monad import pure
