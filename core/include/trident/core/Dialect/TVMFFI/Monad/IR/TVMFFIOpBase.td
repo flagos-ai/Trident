@@ -23,4 +23,3 @@ class TVMFFIMonad_Op<string mnemonic, list<Trait> traits = []>
     : Op<TVMFFIMonad_Dialect, mnemonic, traits>;
 
 #endif
-

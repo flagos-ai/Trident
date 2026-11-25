@@ -14,10 +14,12 @@ include "mlir/IR/DialectBase.td"
 def TVMFFIAPI_Dialect : Dialect {
   let name = "tvm_ffi_api";
   let cppNamespace = "::trident::tvm_ffi::api";
-  let dependentDialects = ["::trident::tvm_ffi::abi::TVMFFIABIDialect", "::mlir::arith::ArithDialect",
+  let dependentDialects = ["::trident::tvm_ffi::abi::TVMFFIABIDialect",
+                           "::mlir::arith::ArithDialect",
                            "::mlir::LLVM::LLVMDialect"];
   let hasConstantMaterializer = 1;
   let summary = "TVM FFI API dialect";
+  // clang-format off
   let description = [{
     The TVM FFI API dialect models the TVM runtime FFI (foreign function interface)
     for interoperability between TVM/PyTorch and Triton-compiled kernels.
@@ -25,6 +27,7 @@ def TVMFFIAPI_Dialect : Dialect {
     invoking TVM runtime functions, and converting between TVM and native data
     types.
   }];
+  // clang-format on
 
   let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;

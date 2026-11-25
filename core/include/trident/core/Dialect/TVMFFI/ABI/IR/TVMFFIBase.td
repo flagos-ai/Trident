@@ -18,6 +18,7 @@ def TVMFFIABI_Dialect : Dialect {
                            "::mlir::LLVM::LLVMDialect"];
   let hasConstantMaterializer = 1;
   let summary = "TVM FFI ABI dialect";
+  // clang-format off
   let description = [{
     The TVM FFI ABI dialect models the TVM runtime FFI (foreign function interface)
     for interoperability between TVM/PyTorch and Triton-compiled kernels.
@@ -25,6 +26,7 @@ def TVMFFIABI_Dialect : Dialect {
     invoking TVM runtime functions, and converting between TVM and native data
     types.
   }];
+  // clang-format on
 
   let useDefaultAttributePrinterParser = 0;
   let useDefaultTypePrinterParser = 1;
