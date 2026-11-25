@@ -5,6 +5,7 @@ include "mlir/Pass/PassBase.td"
 
 def LowerTVMFFIABIDefer : Pass<"lower-tvm-ffi-abi-defer", "mlir::ModuleOp"> {
   let summary = "Expand deferred cleanup at dominance-scope exits";
+  // clang-format off
   let description = [{
     Clone defer bodies at registration dominance-scope exits with unspecified
     relative order, preserving operation order within each body and running
@@ -17,30 +18,34 @@ def LowerTVMFFIABIDefer : Pass<"lower-tvm-ffi-abi-defer", "mlir::ModuleOp"> {
     Re-entry into a registration block cleans up the previous iteration.
     Run after decomposition and before inlining or SCF-to-CFG lowering.
   }];
-  let dependentDialects = [
-    "mlir::cf::ControlFlowDialect", "trident::tvm_ffi::abi::TVMFFIABIDialect"
-  ];
+  // clang-format on
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "trident::tvm_ffi::abi::TVMFFIABIDialect"];
 }
 
-def LowerTVMFFIABITensorMetadata : Pass<"lower-tvm-ffi-abi-tensor-metadata", "mlir::ModuleOp"> {
+def LowerTVMFFIABITensorMetadata
+    : Pass<"lower-tvm-ffi-abi-tensor-metadata", "mlir::ModuleOp"> {
   let summary = "Lower TVM FFI tensor metadata operations through DLPack";
+  // clang-format off
   let description = [{
     Rewrite TVMFFI tensor metadata operations into TVMFFI object views and
     DLPack tensor metadata operations.
   }];
-  let dependentDialects = [
-    "trident::dlpack::DLPackDialect", "trident::tvm_ffi::abi::TVMFFIABIDialect"
-  ];
+  // clang-format on
+  let dependentDialects = ["trident::dlpack::DLPackDialect",
+                           "trident::tvm_ffi::abi::TVMFFIABIDialect"];
 }
 
 def LowerTVMFFIABIToPack : Pass<"lower-tvm-ffi-abi-to-pack", "mlir::ModuleOp"> {
   let summary = "Convert typed TVM FFI functions to packed entries";
+  // clang-format off
   let description = [{
     Replace typed function bodies with packed entries, validating argument
     counts and tags before entering the original body. Requires decomposition.
   }];
-  let dependentDialects = [
-    "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
-    "mlir::scf::SCFDialect", "trident::tvm_ffi::abi::TVMFFIABIDialect"
-  ];
+  // clang-format on
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect",
+                           "mlir::scf::SCFDialect",
+                           "trident::tvm_ffi::abi::TVMFFIABIDialect"];
 }

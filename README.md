@@ -136,9 +136,10 @@ pre-commit run --all-files
 
 The hooks use pinned Ruff and clang-format versions in isolated environments.
 Ruff checks Python with the basic `E4/E7/E9/F` lint rules, applies safe fixes,
-and formats Python. clang-format formats C/C++ sources and headers using LLVM
-style. TableGen (`.td`) files, build directories and generated outputs are
-excluded. No project build or CUDA installation is needed to run these checks.
+and formats Python. clang-format formats C/C++ sources, headers and TableGen
+(`.td`) files using LLVM style. Build directories and generated outputs are
+excluded. TableGen code blocks use local clang-format exclusions to preserve
+their contents. No project build or CUDA installation is needed to run these checks.
 
 On commit, only staged files are checked. If a hook modifies files or reports
 remaining errors, the commit stops; review the changes, fix any remaining
