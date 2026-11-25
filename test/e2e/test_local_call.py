@@ -10,12 +10,10 @@ from collections import Counter
 from typing import TypeVar
 
 import torch
-import tvm_ffi
+import tvm_ffi as runtime
 from trident.backend import TridentGraphModule
 from trident.core import ir, register_all_passes
-from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import tvm_ffi
 from trident.core.execution_engine import ExecutionEngine
 from trident.core.passmanager import PassManager
 from trident.ffi import Exception
@@ -39,7 +37,7 @@ class LocalCallTest(unittest.TestCase):
     @staticmethod
     def _compile_entries(
         module: ir.Module, *names: str
-    ) -> tuple[tvm_ffi.Function, ...]:
+    ) -> tuple[runtime.Function, ...]:
         PassManager.parse("builtin.module(trident-lowering-pipeline)").run(
             module.operation
         )
@@ -48,7 +46,7 @@ class LocalCallTest(unittest.TestCase):
         )
         engine.initialize()
         return tuple(
-            tvm_ffi.Function.__from_mlir_packed_safe_call__(
+            runtime.Function.__from_mlir_packed_safe_call__(
                 engine.raw_lookup(f"__tvm_ffi_{name}"), keep_alive_object=engine
             )
             for name in names
@@ -344,12 +342,12 @@ class LocalCallTest(unittest.TestCase):
         with new_context() as context, ir.Location.unknown():
             register_all_passes()
             module = ir.Module.create()
-            boolean = tvm_ffi_abi.BoolType.get()
-            array = tvm_ffi_api.ArrayType.get(tvm_ffi_abi.IntType.get())
-            any_type = tvm_ffi_api.AnyType.get()
+            boolean = tvm_ffi.abi.BoolType.get()
+            array = tvm_ffi.api.ArrayType.get(tvm_ffi.abi.IntType.get())
+            any_type = tvm_ffi.api.AnyType.get()
             for name, text, *_ in cases:
                 with ir.InsertionPoint(module.body):
-                    function = tvm_ffi_api.FuncOp(
+                    function = tvm_ffi.api.FuncOp(
                         name,
                         ir.TypeAttr.get(
                             ir.FunctionType.get([boolean, array], [any_type])
@@ -361,8 +359,8 @@ class LocalCallTest(unittest.TestCase):
                     scope = Scope(flag, {"flag": Scope(flag), "xs": Scope(xs)})
                     expression = parse_expression(ast.parse(text, mode="eval").body)
                     result = expression.build(ExpressionContext(text, scope, context))
-                    success, payload = tvm_ffi_monad.unpack(result)
-                    tvm_ffi_api.return_(tvm_ffi_abi.to(success), payload)
+                    success, payload = tvm_ffi.monad.unpack(result)
+                    tvm_ffi.api.return_(tvm_ffi.abi.to(success), payload)
             self.assertTrue(module.operation.verify())
             functions = self._compile_entries(module, *(name for name, *_ in cases))
 
@@ -397,12 +395,12 @@ class LocalCallTest(unittest.TestCase):
             module = ir.Module.create()
             for name, text in expressions:
                 with ir.InsertionPoint(module.body):
-                    function = tvm_ffi_api.FuncOp(
+                    function = tvm_ffi.api.FuncOp(
                         name,
                         ir.TypeAttr.get(
                             ir.FunctionType.get(
-                                [tvm_ffi_abi.FloatType.get()],
-                                [tvm_ffi_api.AnyType.get()],
+                                [tvm_ffi.abi.FloatType.get()],
+                                [tvm_ffi.api.AnyType.get()],
                             )
                         ),
                     )
@@ -411,8 +409,8 @@ class LocalCallTest(unittest.TestCase):
                     scope = Scope(real, {"real": Scope(real)})
                     expression = parse_expression(ast.parse(text, mode="eval").body)
                     result = expression.build(ExpressionContext(text, scope, context))
-                    success, payload = tvm_ffi_monad.unpack(result)
-                    tvm_ffi_api.return_(tvm_ffi_abi.to(success), payload)
+                    success, payload = tvm_ffi.monad.unpack(result)
+                    tvm_ffi.api.return_(tvm_ffi.abi.to(success), payload)
             self.assertTrue(module.operation.verify())
             functions = self._compile_entries(
                 module, *(name for name, _ in expressions)
@@ -438,15 +436,15 @@ class LocalCallTest(unittest.TestCase):
         def record(kind: int) -> None:
             counts[kind] += 1
 
-        tvm_ffi.register_global_func("trident.test.guard.record", record, override=True)
+        runtime.register_global_func("trident.test.guard.record", record, override=True)
 
         class RuntimeCode(GuardCode):
             @override
             def build_result(self, scope: Scope, context: ir.Context) -> list[ir.Value]:
                 if self.text == "failure":
                     return [
-                        tvm_ffi_monad.call(
-                            tvm_ffi_monad.ResultType.get(tvm_ffi_abi.BoolType.get()),
+                        tvm_ffi.monad.call(
+                            tvm_ffi.monad.ResultType.get(tvm_ffi.abi.BoolType.get()),
                             ir.FlatSymbolRefAttr.get("guard_failure"),
                             [],
                         )
@@ -464,7 +462,7 @@ class LocalCallTest(unittest.TestCase):
             failing: bool = False,
             paths: tuple[tuple[str, ...], ...] | None = None,
             repeated: str | None = None,
-        ) -> tvm_ffi.Function:
+        ) -> runtime.Function:
             with graph.ctx, ir.Location.unknown():
                 module = (
                     ir.Module.parse(r"""
@@ -484,8 +482,8 @@ class LocalCallTest(unittest.TestCase):
                     if failing
                     else ir.Module.create()
                 )
-                any_type = tvm_ffi_api.AnyType.get()
-                type_ = tvm_ffi_abi.IntType.get()
+                any_type = tvm_ffi.api.AnyType.get()
+                type_ = tvm_ffi.abi.IntType.get()
                 graph._dispatcher = Root()
                 with ir.InsertionPoint(module.body):
                     for index in range(3):
@@ -507,7 +505,7 @@ class LocalCallTest(unittest.TestCase):
                             input_types,
                             f"main_{index}",
                         )
-                        function = tvm_ffi_api.FuncOp(
+                        function = tvm_ffi.api.FuncOp(
                             f"main_{index}",
                             ir.TypeAttr.get(ir.FunctionType.get([type_], [any_type])),
                         )
@@ -516,11 +514,11 @@ class LocalCallTest(unittest.TestCase):
                             checked_call(
                                 "trident.test.guard.record",
                                 [constant(100 + index)],
-                                tvm_ffi_abi.NoneType.get(),
+                                tvm_ffi.abi.NoneType.get(),
                             )
-                            result = pure(tvm_ffi_api.upcast(any_type, constant(index)))
-                            success, payload = tvm_ffi_monad.unpack(result)
-                            tvm_ffi_api.return_(tvm_ffi_abi.to(success), payload)
+                            result = pure(tvm_ffi.api.upcast(any_type, constant(index)))
+                            success, payload = tvm_ffi.monad.unpack(result)
+                            tvm_ffi.api.return_(tvm_ffi.abi.to(success), payload)
                 graph._sub_modules = [
                     module,
                     ir.Module.create(),

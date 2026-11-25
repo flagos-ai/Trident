@@ -17,7 +17,7 @@ from typing import Any, TypeAlias, cast
 import sympy
 import torch
 import triton
-import tvm_ffi
+import tvm_ffi as runtime
 from torch.export.graph_signature import (
     ConstantArgument,
     InputKind,
@@ -26,16 +26,12 @@ from torch.export.graph_signature import (
 from torch.utils import _pytree as pytree
 
 from trident.core import ir
-from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
-from trident.core.dialects.tvm_ffi import arith as tvm_ffi_arith
-from trident.core.dialects import arith, cf, gpu, scf
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import arith, cf, gpu, scf, tvm_ffi
 from trident.utils.containers import container_read
 from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
 from trident.utils.types import array_type, value_type
 from trident.utils.values import (
-    BINARY_ARITHMETIC,
+    arithmetic,
     constant,
     native,
 )
@@ -80,7 +76,7 @@ def _constant_value_attribute(value: Any, name: str) -> ir.Attribute:
 def _container_get(
     container: ir.Value, index: int | ir.Value, target: ir.Type
 ) -> list[ir.Value]:
-    if isinstance(container.type, (tvm_ffi_api.TupleType, tvm_ffi_api.ArrayType)):
+    if isinstance(container.type, (tvm_ffi.api.TupleType, tvm_ffi.api.ArrayType)):
         return [pure(container_read(container, index, target))]
     else:
         return checked_call(
@@ -92,28 +88,28 @@ def _container_get(
 
 def _make_result_types(payload_types: Iterable[ir.Type]) -> list[ir.Type]:
     """Wrap TVM FFI payload types, using None for an empty sequence."""
-    return [tvm_ffi_monad.ResultType.get(type_) for type_ in payload_types] or [
-        tvm_ffi_monad.ResultType.get(tvm_ffi_abi.NoneType.get())
+    return [tvm_ffi.monad.ResultType.get(type_) for type_ in payload_types] or [
+        tvm_ffi.monad.ResultType.get(tvm_ffi.abi.NoneType.get())
     ]
 
 
 def _power(base: ir.Value, exponent: int) -> ir.Value:
     """Build a nonnegative constant power using the runtime's scalar widths."""
     assert isinstance(exponent, int) and exponent >= 0
-    floating = isinstance(base.type, tvm_ffi_abi.FloatType)
+    floating = isinstance(base.type, tvm_ffi.abi.FloatType)
     result = constant(1.0 if floating else 1)
     if floating:
         # Preserve sequential floating-point multiplication and rounding.
         for _ in range(exponent):
-            result = tvm_ffi_arith.mul(result, base)
+            result = tvm_ffi.arith.mul(result, base)
     else:
         # Squaring keeps the number of generated integer operations logarithmic.
         while exponent:
             if exponent & 1:
-                result = tvm_ffi_arith.mul(result, base)
+                result = tvm_ffi.arith.mul(result, base)
             exponent >>= 1
             if exponent:
-                base = tvm_ffi_arith.mul(base, base)
+                base = tvm_ffi.arith.mul(base, base)
     return result
 
 
@@ -148,10 +144,8 @@ def _resolve_triton_binder_value(
 
 def _scalar(node: torch.fx.Node, values: Sequence[ir.Value]) -> ir.Value:
     target = {torch.sym_max: max, torch.sym_min: min}.get(node.target, node.target)
-    if target in BINARY_ARITHMETIC:
-        return BINARY_ARITHMETIC[target](*values)
-    elif target is torch.sym_sum:
-        return reduce(BINARY_ARITHMETIC[operator.add], values, constant(0))
+    if target is torch.sym_sum:
+        return reduce(tvm_ffi.arith.add, values, constant(0))
     elif target is operator.pow:
         [base] = values
         _, exponent = node.args
@@ -159,11 +153,18 @@ def _scalar(node: torch.fx.Node, values: Sequence[ir.Value]) -> ir.Value:
     elif target in (operator.neg, operator.not_, torch.sym_not):
         (value,) = values
         return (
-            tvm_ffi_arith.neg(value)
+            tvm_ffi.arith.neg(value)
             if target is operator.neg
-            else tvm_ffi_arith.not_(value)
+            else tvm_ffi.arith.not_(value)
         )
     else:
+        name = getattr(target, "__name__", "")
+        if (
+            target in (max, min) or getattr(operator, name, None) is target
+        ) and ir.Context.current.is_registered_operation(
+            f"tvm_ffi_arith.{name.rstrip('_')}"
+        ):
+            return arithmetic(name.rstrip("_"), *values)
         raise NotImplementedError(f"unsupported FX call: {target}")
 
 
@@ -192,13 +193,13 @@ class TridentFxImporter:
                     and size.node.expr.is_Symbol
                     and size.node.expr not in self.symbols
                 ):
-                    self.symbols[size.node.expr] = tvm_ffi_abi.to(
-                        tvm_ffi_api.tensor_size(value, native(constant(index)))
+                    self.symbols[size.node.expr] = tvm_ffi.abi.to(
+                        tvm_ffi.api.tensor_size(value, native(constant(index)))
                     )
 
     @cached_property
-    def _convert_torch_enum(self) -> tvm_ffi.Function:
-        return tvm_ffi.get_global_func("trident.runtime.torch_enum_to_int")
+    def _convert_torch_enum(self) -> runtime.Function:
+        return runtime.get_global_func("trident.runtime.torch_enum_to_int")
 
     def argument(self, value: Any) -> ir.Value:
         """Import a non-container value without opening a failure scope."""
@@ -221,12 +222,12 @@ class TridentFxImporter:
         if isinstance(value, (list, tuple)):
             types = [self.argument_type(item) for item in value]
             return (
-                tvm_ffi_api.TupleType.get(types)
+                tvm_ffi.api.TupleType.get(types)
                 if isinstance(value, tuple)
                 else array_type(types)
             )
         if isinstance(value, torch.dtype):
-            return tvm_ffi_abi.IntType.get()
+            return tvm_ffi.abi.IntType.get()
         return value.type if isinstance(value, ir.Value) else value_type(value)
 
     def build_arguments(self, arguments: Sequence[Any]) -> list[ir.Value]:
@@ -246,11 +247,11 @@ class TridentFxImporter:
                     current = checked_call(
                         "trident.runtime.tvm_ffi_to_torch_type",
                         [self.argument(argument)],
-                        tvm_ffi_abi.IntType.get(),
+                        tvm_ffi.abi.IntType.get(),
                     )
                 elif isinstance(argument, (tuple, list)):
                     type_ = self.argument_type(argument)
-                    element_types = [tvm_ffi_monad.ResultType.get(type_)]
+                    element_types = [tvm_ffi.monad.ResultType.get(type_)]
                     with BindScope(
                         element_types, self.build_arguments(argument)
                     ) as elements:
@@ -260,21 +261,21 @@ class TridentFxImporter:
                         )
                         container_types = (
                             type_.types
-                            if isinstance(type_, tvm_ffi_api.TupleType)
+                            if isinstance(type_, tvm_ffi.api.TupleType)
                             else [type_.element_type] * len(container_elements)
                         )
                         container_elements = [
-                            tvm_ffi_api.upcast(target, element)
+                            tvm_ffi.api.upcast(target, element)
                             for element, target in zip(
                                 container_elements, container_types, strict=True
                             )
                         ]
-                        if isinstance(type_, tvm_ffi_api.TupleType):
-                            container = tvm_ffi_api.tuple_construct(
+                        if isinstance(type_, tvm_ffi.api.TupleType):
+                            container = tvm_ffi.api.tuple_construct(
                                 type_, container_elements
                             )
                         else:
-                            container = tvm_ffi_api.array_create(
+                            container = tvm_ffi.api.array_create(
                                 type_, container_elements
                             )
                         yielded = [pure(container)]
@@ -294,7 +295,7 @@ class TridentFxImporter:
         func_name: str,
         input_types: Mapping[str, ir.Type],
         input_paths: Mapping[str, list[int | str]],
-    ) -> tvm_ffi_api.FuncOp:
+    ) -> tvm_ffi.api.FuncOp:
         """Build execution with the original signature and bind FX inputs locally."""
         producers: dict[str, torch.fx.Node] = {
             node.name: node for node in program.graph.nodes
@@ -317,8 +318,8 @@ class TridentFxImporter:
                 )
                 for spec in outputs
             ]
-            any_type = tvm_ffi_api.AnyType.get()
-            function = tvm_ffi_api.FuncOp(
+            any_type = tvm_ffi.api.AnyType.get()
+            function = tvm_ffi.api.FuncOp(
                 func_name,
                 ir.TypeAttr.get(
                     ir.FunctionType.get(list(input_types.values()), [any_type])
@@ -348,7 +349,7 @@ class TridentFxImporter:
                         value, parameters[name] = parameters[name].read(keys)
                         target = value_type(producers[spec.arg.name].meta["val"])
                         if value.type != target:
-                            value = tvm_ffi_api.downcast(target, value)
+                            value = tvm_ffi.api.downcast(target, value)
                         initial_values.append(value)
                     else:
                         state = (
@@ -379,8 +380,8 @@ class TridentFxImporter:
                     )
                     initialization.yield_(yielded)
                     initialization_results = initialization.results
-                packed_any_type = tvm_ffi_api.AnyType.get()
-                packed_result_type = tvm_ffi_monad.ResultType.get(packed_any_type)
+                packed_any_type = tvm_ffi.api.AnyType.get()
+                packed_result_type = tvm_ffi.monad.ResultType.get(packed_any_type)
                 with BindScope(
                     [packed_result_type], initialization_results
                 ) as packed_outputs:
@@ -389,8 +390,8 @@ class TridentFxImporter:
                     if len(packed_values) == 1:
                         [packed_payload] = packed_values
                     else:
-                        packed_payload = tvm_ffi_api.tuple_construct(
-                            tvm_ffi_api.TupleType.get(
+                        packed_payload = tvm_ffi.api.tuple_construct(
+                            tvm_ffi.api.TupleType.get(
                                 [packed_value.type for packed_value in packed_values]
                             ),
                             packed_values,
@@ -400,27 +401,29 @@ class TridentFxImporter:
                     )
                     packed_outputs_results = packed_outputs.results
                 [packed_result] = packed_outputs_results
-                packed_success, packed_payload = tvm_ffi_monad.unpack(packed_result)
-                packed_success = tvm_ffi_abi.to(packed_success)
+                packed_success, packed_payload = tvm_ffi.monad.unpack(packed_result)
+                packed_success = tvm_ffi.abi.to(packed_success)
                 packed_outcome = scf.IfOp(
                     native(packed_success), [packed_any_type], has_else=True
                 )
                 with ir.InsertionPoint(packed_outcome.then_block):
                     scf.yield_([packed_payload])
                 with ir.InsertionPoint(packed_outcome.else_block):
-                    packed_rejection = tvm_ffi_api.exception("GuardMatch")
-                    scf.yield_([tvm_ffi_api.upcast(packed_any_type, packed_rejection)])
+                    packed_rejection = tvm_ffi.api.exception("GuardMatch")
+                    scf.yield_([tvm_ffi.api.upcast(packed_any_type, packed_rejection)])
                 [packed_result] = packed_outcome.results
-                packed_return = [tvm_ffi_abi.constant_bool(True), packed_result]
-                tvm_ffi_api.return_(*packed_return)
+                packed_return = [tvm_ffi.abi.constant_bool(True), packed_result]
+                tvm_ffi.api.return_(*packed_return)
         return function
 
     def symbolic(self, expression: sympy.Basic) -> ir.Value:
-        operations: dict[type[sympy.Basic], Callable[..., Any]] = {
-            sympy.Add: operator.add,
-            sympy.Max: max,
-            sympy.Min: min,
-            sympy.Mul: operator.mul,
+        operations: dict[
+            type[sympy.Basic], Callable[[ir.Value, ir.Value], ir.Value]
+        ] = {
+            sympy.Add: tvm_ffi.arith.add,
+            sympy.Max: tvm_ffi.arith.max,
+            sympy.Min: tvm_ffi.arith.min,
+            sympy.Mul: tvm_ffi.arith.mul,
         }
         if expression in self.symbols:
             return self.symbols[expression]
@@ -430,17 +433,17 @@ class TridentFxImporter:
             return constant(float(expression))
         elif expression.func in operations:
             return reduce(
-                BINARY_ARITHMETIC[operations[expression.func]],
+                operations[expression.func],
                 (self.symbolic(argument) for argument in expression.args),
             )
         elif expression.func.__name__ in ("FloorDiv", "Mod", "PythonMod"):
             lhs, rhs = (self.symbolic(argument) for argument in expression.args)
             operation = (
-                operator.floordiv
+                tvm_ffi.arith.floordiv
                 if expression.func.__name__ == "FloorDiv"
-                else operator.mod
+                else tvm_ffi.arith.mod
             )
-            return BINARY_ARITHMETIC[operation](lhs, rhs)
+            return operation(lhs, rhs)
         elif expression.func is sympy.Pow:
             base, exponent = expression.args
             if exponent.is_Integer and exponent >= 0:
@@ -499,14 +502,14 @@ class TridentFxImporter:
                                 arguments = (condition,)
                             values = [self.argument(value) for value in arguments]
                             operations = {
-                                "dim": tvm_ffi_api.tensor_dim,
-                                "sym_size": tvm_ffi_api.tensor_size,
-                                "sym_storage_offset": tvm_ffi_api.tensor_storage_offset,
-                                "sym_stride": tvm_ffi_api.tensor_stride,
+                                "dim": tvm_ffi.api.tensor_dim,
+                                "sym_size": tvm_ffi.api.tensor_size,
+                                "sym_storage_offset": tvm_ffi.api.tensor_storage_offset,
+                                "sym_stride": tvm_ffi.api.tensor_stride,
                             }
                             if operation := operations.get(name):
                                 tensor, *indices = values
-                                value = tvm_ffi_abi.to(
+                                value = tvm_ffi.abi.to(
                                     operation(
                                         tensor,
                                         *(native(value) for value in indices),
@@ -518,10 +521,10 @@ class TridentFxImporter:
                                     arguments,
                                 )
                                 value = reduce(
-                                    BINARY_ARITHMETIC[operator.mul],
+                                    tvm_ffi.arith.mul,
                                     (
-                                        tvm_ffi_abi.to(
-                                            tvm_ffi_api.tensor_size(
+                                        tvm_ffi.abi.to(
+                                            tvm_ffi.api.tensor_size(
                                                 tensor,
                                                 native(constant(index)),
                                             )
@@ -818,7 +821,7 @@ class TridentFxImporter:
                                 )
 
                             kernel_result_types = _make_result_types(
-                                tvm_ffi_api.TensorType.get() for _ in output_names
+                                tvm_ffi.api.TensorType.get() for _ in output_names
                             )
                             with BindScope(
                                 kernel_result_types,
@@ -839,7 +842,7 @@ class TridentFxImporter:
                                     )
                                 }
                                 launch_result_types = _make_result_types(
-                                    tvm_ffi_api.TensorType.get() for _ in output_names
+                                    tvm_ffi.api.TensorType.get() for _ in output_names
                                 )
                                 operands = {**operands}
                                 with ScopeStack() as launch_stack:
@@ -850,7 +853,7 @@ class TridentFxImporter:
                                             checked_call(
                                                 "trident.aten.clone",
                                                 [value, constant(None)],
-                                                tvm_ffi_api.TensorType.get(),
+                                                tvm_ffi.api.TensorType.get(),
                                             ),
                                         )
                                         operands[name] = (
@@ -891,9 +894,9 @@ class TridentFxImporter:
                                     symbol = ir.Attribute.parse(
                                         f"@{binary_name}::@{kernel.metadata.name}"
                                     )
-                                    launched = tvm_ffi_api.kernel_launch(
-                                        tvm_ffi_monad.ResultType.get(
-                                            tvm_ffi_abi.NoneType.get()
+                                    launched = tvm_ffi.api.kernel_launch(
+                                        tvm_ffi.monad.ResultType.get(
+                                            tvm_ffi.abi.NoneType.get()
                                         ),
                                         symbol,
                                         *(native(value) for value in dimensions),
@@ -1043,7 +1046,7 @@ class TridentFxImporter:
                             )
                         else:
                             scalar_result_types = [
-                                tvm_ffi_monad.ResultType.get(
+                                tvm_ffi.monad.ResultType.get(
                                     value_type(node.meta["val"])
                                 )
                             ]
@@ -1072,14 +1075,14 @@ class TridentFxImporter:
                     index: leaf
                     for index, leaf in enumerate(leaves)
                     if isinstance(leaf, ir.Value)
-                    and isinstance(leaf.type, tvm_ffi_monad.ResultType)
+                    and isinstance(leaf.type, tvm_ffi.monad.ResultType)
                 }
                 if results:
                     arguments = stack.bind(result_types, [*results.values()])
                     for index, argument in zip(results, arguments, strict=True):
                         leaves[index] = (
                             None
-                            if isinstance(argument.type, tvm_ffi_abi.NoneType)
+                            if isinstance(argument.type, tvm_ffi.abi.NoneType)
                             else argument
                         )
                     value = pytree.tree_unflatten(leaves, structure)

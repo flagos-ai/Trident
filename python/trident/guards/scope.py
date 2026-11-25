@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from trident.core import ir
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import tvm_ffi
 from trident.utils.containers import container_read
 from trident.utils.monad import pure
 
@@ -42,11 +42,11 @@ class Scope:
         if (input_scope := self.get(key)) is not None:
             return input_scope, self
         assert isinstance(key, int) and isinstance(
-            self.value.type, (tvm_ffi_api.ArrayType, tvm_ffi_api.TupleType)
+            self.value.type, (tvm_ffi.api.ArrayType, tvm_ffi.api.TupleType)
         )
         type_: ir.Type = (
             self.value.type.types[key]
-            if isinstance(self.value.type, tvm_ffi_api.TupleType)
+            if isinstance(self.value.type, tvm_ffi.api.TupleType)
             else self.value.type.element_type
         )
         value = container_read(self.value, key, type_)

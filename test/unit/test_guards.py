@@ -11,10 +11,7 @@ from dataclasses import dataclass
 
 from torch._guards import GuardSource
 from trident.core import ir
-from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
-from trident.core.dialects import func
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import func, tvm_ffi
 from trident.guards import parse_guards
 from trident.guards.codes import (
     ASTCode,
@@ -91,8 +88,8 @@ class GuardExpressionTest(unittest.TestCase):
                 new_context() as context,
                 ir.Location.unknown(),
             ):
-                tuple_type = tvm_ffi_api.TupleType.get([tvm_ffi_abi.IntType.get()])
-                result_type = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.BoolType.get())
+                tuple_type = tvm_ffi.api.TupleType.get([tvm_ffi.abi.IntType.get()])
+                result_type = tvm_ffi.monad.ResultType.get(tvm_ffi.abi.BoolType.get())
                 module = ir.Module.create()
                 with ir.InsertionPoint(module.body):
                     function = func.FuncOp("guard", ([tuple_type], [result_type]))
@@ -108,23 +105,23 @@ class GuardExpressionTest(unittest.TestCase):
                 self.assertNotIn("tensor.storage_offset", str(module))
 
     def test_container_length_extracts_nested_input(self) -> None:
-        for container in (tvm_ffi_api.ArrayType, tvm_ffi_api.TupleType):
+        for container in (tvm_ffi.api.ArrayType, tvm_ffi.api.TupleType):
             with (
                 self.subTest(container=container.__name__),
                 new_context() as context,
                 ir.Location.unknown(),
             ):
-                tensor = tvm_ffi_api.TensorType.get()
+                tensor = tvm_ffi.api.TensorType.get()
                 type_ = (
                     container.get(tensor)
-                    if container is tvm_ffi_api.ArrayType
+                    if container is tvm_ffi.api.ArrayType
                     else container.get([tensor, tensor])
                 )
-                array = tvm_ffi_api.ArrayType.get(type_)
+                array = tvm_ffi.api.ArrayType.get(type_)
                 text = "len(L['xs'][0]) == 2"
                 code = ASTCode(text, ast.parse(text, mode="eval").body)
                 module = ir.Module.create()
-                result_type = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.BoolType.get())
+                result_type = tvm_ffi.monad.ResultType.get(tvm_ffi.abi.BoolType.get())
                 with ir.InsertionPoint(module.body):
                     function = func.FuncOp("guard", ([array], [result_type]))
                     block = function.add_entry_block()
@@ -140,7 +137,7 @@ class GuardExpressionTest(unittest.TestCase):
                 self.assertIn("tvm_ffi_monad.bind", module_text)
                 self.assertIn("tvm_ffi_arith.eq", module_text)
                 # Tuple guards must check runtime arity instead of trusting the schema.
-                if container is tvm_ffi_api.TupleType:
+                if container is tvm_ffi.api.TupleType:
                     self.assertIn('"ffi.ArraySize"', module_text)
                 else:
                     self.assertIn("tvm_ffi_api.array.size", module_text)
@@ -162,9 +159,9 @@ class GuardExpressionTest(unittest.TestCase):
                 new_context() as context,
                 ir.Location.unknown(),
             ):
-                integer = tvm_ffi_abi.IntType.get()
-                array = tvm_ffi_api.ArrayType.get(integer)
-                result_type = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.BoolType.get())
+                integer = tvm_ffi.abi.IntType.get()
+                array = tvm_ffi.api.ArrayType.get(integer)
+                result_type = tvm_ffi.monad.ResultType.get(tvm_ffi.abi.BoolType.get())
                 module = ir.Module.create()
                 with ir.InsertionPoint(module.body):
                     function = func.FuncOp("guard", ([array], [result_type]))
@@ -189,7 +186,7 @@ class GuardExpressionTest(unittest.TestCase):
         # The second operand fails inside its bind while the outer bind is entering.
         text = "len(L['xs']) + len(L['xs'][0])"
         with new_context() as context, ir.Location.unknown():
-            array = tvm_ffi_api.ArrayType.get(tvm_ffi_abi.IntType.get())
+            array = tvm_ffi.api.ArrayType.get(tvm_ffi.abi.IntType.get())
             module = ir.Module.create()
             with ir.InsertionPoint(module.body):
                 function = func.FuncOp("guard", ([array], []))
@@ -236,88 +233,88 @@ class GuardExpressionTest(unittest.TestCase):
             (
                 "bitwise_or",
                 "(1 | 2) == 3",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_arith.or",),
             ),
             (
                 "boolean_logic",
                 "True and not False",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_arith.not",),
             ),
             (
                 "boolean_or",
                 "True | False",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_arith.or",),
             ),
             (
                 "chained_comparison",
                 "1 == 1 <= 3",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_arith.eq", "tvm_ffi_arith.le"),
             ),
             (
                 "dtype",
                 "torch.float32",
-                tvm_ffi_abi.DTypeType,
+                tvm_ffi.abi.DTypeType,
                 ("tvm_ffi_abi.constant.dtype",),
             ),
             (
                 "float_comparison",
                 "1.0 + 2.0 <= 4.0",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_arith.add", "tvm_ffi_arith.le"),
             ),
             (
                 "float_negation",
                 "-1.5",
-                tvm_ffi_abi.FloatType,
+                tvm_ffi.abi.FloatType,
                 ("tvm_ffi_arith.neg",),
             ),
             (
                 "float_not_negative_zero",
                 "not -0.0",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_arith.not",),
             ),
             (
                 "integer_addition",
                 "1 + 2",
-                tvm_ffi_abi.IntType,
+                tvm_ffi.abi.IntType,
                 ("tvm_ffi_arith.add",),
             ),
-            ("integer_not", "not 0", tvm_ffi_abi.BoolType, ("tvm_ffi_arith.not",)),
+            ("integer_not", "not 0", tvm_ffi.abi.BoolType, ("tvm_ffi_arith.not",)),
             (
                 "mixed_boolean_float",
                 "True + 2.0",
-                tvm_ffi_abi.FloatType,
+                tvm_ffi.abi.FloatType,
                 ("tvm_ffi_arith.add",),
             ),
             (
                 "mixed_boolean_integer",
                 "True | 1",
-                tvm_ffi_abi.IntType,
+                tvm_ffi.abi.IntType,
                 ("tvm_ffi_arith.or",),
             ),
-            ("negation", "-1", tvm_ffi_abi.IntType, ("tvm_ffi_arith.neg",)),
-            ("select", "1 if True else 2", tvm_ffi_abi.IntType, ("scf.if",)),
+            ("negation", "-1", tvm_ffi.abi.IntType, ("tvm_ffi_arith.neg",)),
+            ("select", "1 if True else 2", tvm_ffi.abi.IntType, ("scf.if",)),
             (
                 "storage_offset_expression",
                 "L['x'].storage_offset() + 1 != 2",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_abi.constant.bool true",),
             ),
             (
                 "string_equality",
                 "'name' == 'name'",
-                tvm_ffi_abi.BoolType,
+                tvm_ffi.abi.BoolType,
                 ("tvm_ffi_api.eq", "tvm_ffi_abi.to"),
             ),
             (
                 "true_division",
                 "5 / 2",
-                tvm_ffi_abi.FloatType,
+                tvm_ffi.abi.FloatType,
                 ("tvm_ffi_arith.truediv",),
             ),
         )
@@ -333,7 +330,7 @@ class GuardExpressionTest(unittest.TestCase):
     def test_tensor_base_comparison(self) -> None:
         with self.assertWarnsRegex(RuntimeWarning, "Tensor\\._base guard"):
             result_type, module = self._build_expression("L['x']._base.size()[0] == 1")
-        self.assertIsInstance(result_type, tvm_ffi_abi.BoolType)
+        self.assertIsInstance(result_type, tvm_ffi.abi.BoolType)
         self.assertIn("tvm_ffi_abi.constant.bool true", module)
 
 
@@ -342,13 +339,13 @@ class DispatcherTreeTest(unittest.TestCase):
 
     def _build_dispatcher(self, dispatcher: Root) -> ir.Module:
         module = ir.Module.create()
-        any_type = tvm_ffi_api.AnyType.get()
+        any_type = tvm_ffi.api.AnyType.get()
 
         def add_functions(
             node: Node | Root, input_types: tuple[ir.Type, ...] = ()
         ) -> None:
             if isinstance(node, ExecutionNode):
-                function = tvm_ffi_api.FuncOp(
+                function = tvm_ffi.api.FuncOp(
                     node.graph_symbol,
                     ir.TypeAttr.get(
                         ir.FunctionType.get(
@@ -359,9 +356,9 @@ class DispatcherTreeTest(unittest.TestCase):
                     sym_visibility="private",
                 )
                 with ir.InsertionPoint(function.add_entry_block()):
-                    tvm_ffi_api.return_(
+                    tvm_ffi.api.return_(
                         constant(True),
-                        tvm_ffi_api.upcast(any_type, constant(0)),
+                        tvm_ffi.api.upcast(any_type, constant(0)),
                     )
             else:
                 assert isinstance(node, (GuardNode, Root, SCMNode))
@@ -372,24 +369,24 @@ class DispatcherTreeTest(unittest.TestCase):
 
         with ir.InsertionPoint(module.body):
             add_functions(dispatcher)
-            function = tvm_ffi_api.PackFuncOp(
+            function = tvm_ffi.api.PackFuncOp(
                 "dispatch",
                 ir.TypeAttr.get(
                     ir.FunctionType.get(
-                        [tvm_ffi_abi.PackArgumentsType.get()], [any_type]
+                        [tvm_ffi.abi.PackArgumentsType.get()], [any_type]
                     )
                 ),
             )
             with ir.InsertionPoint(function.add_entry_block()) as ip:
                 [arguments] = ip.block.arguments
                 success, payload = dispatcher.build(Scope(arguments))
-                tvm_ffi_api.return_(success, payload)
+                tvm_ffi.api.return_(success, payload)
         self.assertTrue(module.operation.verify())
         return module
 
     def test_ordered_prefix_and_fresh_modules(self) -> None:
         with new_context(), ir.Location.unknown():
-            input_types = {"x": tvm_ffi_abi.IntType.get()}
+            input_types = {"x": tvm_ffi.abi.IntType.get()}
             checks = [["L['x'] >= 0", f"L['x'] < {index + 1}"] for index in range(3)]
             dispatcher = Root()
             for index, texts in enumerate(checks):
@@ -421,8 +418,8 @@ class DispatcherTreeTest(unittest.TestCase):
     def test_signature_boundaries(self) -> None:
         with new_context(), ir.Location.unknown():
             int_type, float_type = (
-                tvm_ffi_abi.IntType.get(),
-                tvm_ffi_abi.FloatType.get(),
+                tvm_ffi.abi.IntType.get(),
+                tvm_ffi.abi.FloatType.get(),
             )
             dispatcher = Root()
             signatures = (

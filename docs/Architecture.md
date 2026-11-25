@@ -21,8 +21,12 @@ TVM FFI is represented by four independently registered dialects:
 
 Arithmetic operations use names such as `tvm_ffi_arith.add`; Results use
 `!tvm_ffi_monad.result<T>` and operations such as `tvm_ffi_monad.bind`.
-Their Python builders are `arith.add` and `monad.bind`, and C++ operations are
-`arith::AddOp` and `monad::BindOp`. Old API-prefixed interfaces are removed.
+Python callers use `from trident.core.dialects import tvm_ffi` and access builders
+through `tvm_ffi.arith.add` and `tvm_ffi.monad.bind`; C++ operations are
+`arith::AddOp` and `monad::BindOp`. The Python package explicitly exports
+`abi`, `api`, `arith` and `monad`. Files also using the third-party runtime import
+it as `runtime` to distinguish it from the dialect package. Old API-prefixed
+interfaces are removed.
 
 Arith depends on ABI; Monad depends on API and ABI. API checks kernel Result
 payloads through the shared `TVMFFIResultTypeInterface`, without depending on
@@ -69,10 +73,11 @@ by ATen's boxed schema. Multiple ATen results are retrieved from an FFI Array.
 
 SymInt, SymFloat and SymBool values use TVM FFI Int, Float and Bool throughout
 Python construction, including constants, symbol bindings and graph-node results.
-Python uses `tvm_ffi_arith.*` builders directly for known operations and the
-shared `BINARY_ARITHMETIC` mapping in `utils/values.py` for dynamic operator
-selection. The dialect infers and verifies result types and owns operand
-promotion. `lower-tvm-ffi-arith` extracts temporary native `i64`, `f64` and
+Python uses `tvm_ffi.arith.*` builders directly for known operations and the
+shared `arithmetic(name, *operands)` helper in `utils/values.py` for dynamic
+operator selection. It constructs `tvm_ffi_arith.<name>` with result type inference.
+The dialect infers and verifies result types and owns operand promotion.
+`lower-tvm-ffi-arith` extracts temporary native `i64`, `f64` and
 `i1` SSA values with `tvm_ffi_abi.get`, widens operands, computes with `arith` and
 wraps results with `tvm_ffi_abi.to`.
 Bool-to-Int uses zero extension, Bool-to-Float uses unsigned conversion and
@@ -87,7 +92,7 @@ use example hints; unbound symbols produce an explicit import error.
 `torch.cond` imports its branches into `scf.if`, extracting only its predicate
 and retaining monadic Result values.
 
-`utils/values.py` shares the scalar arithmetic mapping and constant builders
+`utils/values.py` shares scalar arithmetic construction and constant builders
 with the guard frontend; `utils/monad.py` owns Result construction and lexical scopes.
 Numeric constants use `tvm_ffi_abi.constant.bool/int/float` directly.
 Importer-local `_make_result_types` wraps CABI
@@ -100,9 +105,12 @@ Bind arguments retain their CABI types; consumers extract native scalars only
 within a local builder or at an interface requiring them. No-data success uses
 `pure(constant(None))` explicitly. Shared `checked_call` constructs registry
 calls; importer-local `_container_get` wraps typed container extraction in
-Results. Guards use shared builders without depending on the graph importer. The shared `BINARY_ARITHMETIC` operation
-mappings also define the supported FX scalar operations; the importer only normalizes symbolic min/max
-aliases.
+Results. Guards use shared builders without depending on the graph importer.
+Dynamic FX scalar calls accept Python operator functions and built-in min/max,
+normalizing trailing underscores in their names and checking dialect operation
+registration before construction. The importer normalizes symbolic min/max aliases
+and retains dedicated handling for symbolic sum, constant powers and logical not.
+Guard expressions pass their operation names directly to the shared helper.
 Each asserting FFI call checks lookup success, a non-null handle and call success;
 a failed assertion terminates execution. Generic failed Results still propagate
 a nonzero packed ABI status unless handled explicitly at a graph-call boundary. A missing cached global establishes a RuntimeError

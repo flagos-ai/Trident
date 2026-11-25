@@ -4,22 +4,19 @@
 from __future__ import annotations
 
 import ast
-import operator
 import re
 from collections.abc import Hashable
 from functools import reduce
 from typing import Final
 
 import torch
-import tvm_ffi
+import tvm_ffi as runtime
 from typing_extensions import Self, override
 
 from trident.core import ir
-from trident.core.dialects import arith
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import arith, tvm_ffi
 from trident.utils.guards import input_path
-from trident.utils.values import BINARY_ARITHMETIC, constant, equal
+from trident.utils.values import constant, equal
 
 from ..scope import Scope
 from .base import GuardCode
@@ -112,15 +109,15 @@ class TensorDTypeCode(GuardCode):
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor, scope = scope.read(input_path(source))
-        if not isinstance(tensor.type, tvm_ffi_api.TensorType):
-            tensor = tvm_ffi_api.downcast(tvm_ffi_api.TensorType.get(), tensor)
+        if not isinstance(tensor.type, tvm_ffi.api.TensorType):
+            tensor = tvm_ffi.api.downcast(tvm_ffi.api.TensorType.get(), tensor)
         metadata: list[ir.Value] = [
-            tvm_ffi_abi.to(arith.extui(ir.IntegerType.get_signless(64), field))
-            for field in tvm_ffi_api.tensor_dtype(tensor)
+            tvm_ffi.abi.to(arith.extui(ir.IntegerType.get_signless(64), field))
+            for field in tvm_ffi.api.tensor_dtype(tensor)
         ]
-        dtype = tvm_ffi.convert(self.dtype)
+        dtype = runtime.convert(self.dtype)
         return reduce(
-            BINARY_ARITHMETIC[operator.and_],
+            tvm_ffi.arith.and_,
             [
                 equal(actual, constant(expected_value))
                 for actual, expected_value in zip(
@@ -181,16 +178,16 @@ class TensorDeviceCode(GuardCode):
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor, scope = scope.read(input_path(source))
-        if not isinstance(tensor.type, tvm_ffi_api.TensorType):
-            tensor = tvm_ffi_api.downcast(tvm_ffi_api.TensorType.get(), tensor)
+        if not isinstance(tensor.type, tvm_ffi.api.TensorType):
+            tensor = tvm_ffi.api.downcast(tvm_ffi.api.TensorType.get(), tensor)
         device_type, device_index = (
-            tvm_ffi_abi.to(arith.extsi(ir.IntegerType.get_signless(64), field))
-            for field in tvm_ffi_api.tensor_device(tensor)
+            tvm_ffi.abi.to(arith.extsi(ir.IntegerType.get_signless(64), field))
+            for field in tvm_ffi.api.tensor_device(tensor)
         )
-        return BINARY_ARITHMETIC[operator.and_](
+        return tvm_ffi.arith.and_(
             equal(
                 device_type,
-                constant(tvm_ffi.device(self.device.type).dlpack_device_type()),
+                constant(runtime.device(self.device.type).dlpack_device_type()),
             ),
             equal(
                 device_index,
@@ -243,10 +240,10 @@ class TensorRankCode(GuardCode):
         source = self.source
         assert source is not None, f"guard source is required: {self.text!r}"
         tensor, scope = scope.read(input_path(source))
-        if not isinstance(tensor.type, tvm_ffi_api.TensorType):
-            tensor = tvm_ffi_api.downcast(tvm_ffi_api.TensorType.get(), tensor)
+        if not isinstance(tensor.type, tvm_ffi.api.TensorType):
+            tensor = tvm_ffi.api.downcast(tvm_ffi.api.TensorType.get(), tensor)
         return equal(
-            tvm_ffi_abi.to(tvm_ffi_api.tensor_dim(tensor)), constant(self.expected)
+            tvm_ffi.abi.to(tvm_ffi.api.tensor_dim(tensor)), constant(self.expected)
         )
 
     @property
