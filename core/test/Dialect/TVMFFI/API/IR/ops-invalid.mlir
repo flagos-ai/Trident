@@ -210,14 +210,14 @@ func.func @to_mismatched_native_type(%value: i64) {
 // HasObject and Contains satisfy the combined constraint. Native Object is
 // admitted separately, without acquiring C ABI object classification.
 func.func @accepted(%any: !tvm_ffi_api.any, %array: !tvm_ffi_abi.array, %exception: !tvm_ffi_abi.exception, %function: !tvm_ffi_abi.function, %object: !tvm_ffi_abi.object, %str: !tvm_ffi_abi.str, %tensor: !tvm_ffi_abi.tensor, %union: !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none>) {
-  tvm_ffi_abi.ObjectIncRef %any : !tvm_ffi_api.any
-  tvm_ffi_abi.ObjectDecRef %array : !tvm_ffi_abi.array
-  tvm_ffi_abi.ObjectIncRef %exception : !tvm_ffi_abi.exception
-  tvm_ffi_abi.ObjectDecRef %function : !tvm_ffi_abi.function
-  tvm_ffi_abi.ObjectIncRef %object : !tvm_ffi_abi.object
-  tvm_ffi_abi.ObjectDecRef %str : !tvm_ffi_abi.str
-  tvm_ffi_abi.ObjectIncRef %tensor : !tvm_ffi_abi.tensor
-  tvm_ffi_abi.ObjectDecRef %union : !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none>
+  tvm_ffi_abi.object.inc_ref %any : !tvm_ffi_api.any
+  tvm_ffi_abi.object.dec_ref %array : !tvm_ffi_abi.array
+  tvm_ffi_abi.object.inc_ref %exception : !tvm_ffi_abi.exception
+  tvm_ffi_abi.object.dec_ref %function : !tvm_ffi_abi.function
+  tvm_ffi_abi.object.inc_ref %object : !tvm_ffi_abi.object
+  tvm_ffi_abi.object.dec_ref %str : !tvm_ffi_abi.str
+  tvm_ffi_abi.object.inc_ref %tensor : !tvm_ffi_abi.tensor
+  tvm_ffi_abi.object.dec_ref %union : !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none>
   return
 }
 
@@ -225,7 +225,7 @@ func.func @accepted(%any: !tvm_ffi_api.any, %array: !tvm_ffi_abi.array, %excepti
 
 func.func @array(%value: !tvm_ffi_api.array<!tvm_ffi_abi.int>) {
   // expected-error@+1 {{operand #0 must be TVM FFI ABI reference}}
-  tvm_ffi_abi.ObjectIncRef %value : !tvm_ffi_api.array<!tvm_ffi_abi.int>
+  tvm_ffi_abi.object.inc_ref %value : !tvm_ffi_api.array<!tvm_ffi_abi.int>
   return
 }
 
@@ -233,7 +233,7 @@ func.func @array(%value: !tvm_ffi_api.array<!tvm_ffi_abi.int>) {
 
 func.func @result(%value: !tvm_ffi_monad.result<!tvm_ffi_abi.tensor>) {
   // expected-error@+1 {{operand #0 must be TVM FFI ABI reference}}
-  tvm_ffi_abi.ObjectDecRef %value : !tvm_ffi_monad.result<!tvm_ffi_abi.tensor>
+  tvm_ffi_abi.object.dec_ref %value : !tvm_ffi_monad.result<!tvm_ffi_abi.tensor>
   return
 }
 
@@ -241,7 +241,7 @@ func.func @result(%value: !tvm_ffi_monad.result<!tvm_ffi_abi.tensor>) {
 
 func.func @scalar(%value: !tvm_ffi_abi.int) {
   // expected-error@+1 {{operand #0 must be TVM FFI ABI reference}}
-  tvm_ffi_abi.ObjectIncRef %value : !tvm_ffi_abi.int
+  tvm_ffi_abi.object.inc_ref %value : !tvm_ffi_abi.int
   return
 }
 
@@ -261,5 +261,21 @@ func.func @native_launch_rejects_semantic_operand(%value: !tvm_ffi_abi.int) {
   tvm_ffi_abi.native_kernel_launch @kernel::@entry
     blocks in (%one, %one, %one) : i64 threads in (%one, %one, %one)
     args (%value : !tvm_ffi_abi.int)
+  return
+}
+
+// -----
+
+func.func @global_native_argument(%value: i64) {
+  // expected-error@+1 {{operand #0 must be variadic of TVM FFI semantic value}}
+  %result = tvm_ffi_api.global.call "test.identity"(%value) : (i64) -> !tvm_ffi_abi.int
+  return
+}
+
+// -----
+
+func.func @global_result_result() {
+  // expected-error@+1 {{result #0 must be TVM FFI semantic value}}
+  %result = tvm_ffi_api.global.call "test.identity"() : () -> !tvm_ffi_monad.result<!tvm_ffi_abi.int>
   return
 }

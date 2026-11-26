@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // RUN: trident-core-opt %s --split-input-file --verify-each | trident-core-opt --split-input-file --verify-each | FileCheck %s
+// RUN: trident-core-opt %s --split-input-file --canonicalize | FileCheck %s --check-prefix=EFFECTS
 
 // CHECK-LABEL: func.func @array_ops(
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.int, %[[INDEX:[a-zA-Z0-9_]+]]: i64)
@@ -58,14 +59,14 @@ func.func @kernel_specializations(%tensor: !tvm_ffi_abi.tensor,
 // -----
 
 // CHECK-LABEL: func.func @function_call() -> !tvm_ffi_abi.array {
-// CHECK-NEXT: [[ARRAY_FUNC:%[a-zA-Z0-9_]+]] = tvm_ffi_api.FunctionGetGlobal "ffi.Array" : !tvm_ffi_abi.function
-// CHECK-NEXT: [[ARRAY_RESULT:%[a-zA-Z0-9_]+]] = tvm_ffi_api.FunctionCall [[ARRAY_FUNC]] : !tvm_ffi_abi.function() : () -> !tvm_ffi_abi.array
+// CHECK-NEXT: [[ARRAY_FUNC:%[a-zA-Z0-9_]+]] = tvm_ffi_api.function.get_global "ffi.Array" : !tvm_ffi_abi.function
+// CHECK-NEXT: [[ARRAY_RESULT:%[a-zA-Z0-9_]+]] = tvm_ffi_api.function.call [[ARRAY_FUNC]] : !tvm_ffi_abi.function() : () -> !tvm_ffi_abi.array
 // CHECK-NEXT: return [[ARRAY_RESULT]] : !tvm_ffi_abi.array
 // CHECK-NEXT: }
 func.func @function_call() -> !tvm_ffi_abi.array {
-  %func = tvm_ffi_api.FunctionGetGlobal "ffi.Array"
+  %func = tvm_ffi_api.function.get_global "ffi.Array"
      : !tvm_ffi_abi.function
-  %result = tvm_ffi_api.FunctionCall %func : !tvm_ffi_abi.function()
+  %result = tvm_ffi_api.function.call %func : !tvm_ffi_abi.function()
      : () -> !tvm_ffi_abi.array
 
   return %result : !tvm_ffi_abi.array
@@ -113,6 +114,17 @@ func.func @get_int(%arg: !tvm_ffi_abi.int) -> i64 {
 func.func @get_tensor(%arg: !tvm_ffi_abi.tensor) -> !tvm_ffi_abi.object {
   %value = tvm_ffi_api.get %arg : !tvm_ffi_abi.tensor -> !tvm_ffi_abi.object
   return %value : !tvm_ffi_abi.object
+}
+
+// -----
+
+// CHECK-LABEL: func.func @global_call(
+// CHECK: tvm_ffi_api.global.call "test.effect"() : () -> !tvm_ffi_abi.none
+// EFFECTS-LABEL: func.func @global_call(
+// EFFECTS: tvm_ffi_api.global.call "test.effect"() : () -> !tvm_ffi_abi.none
+func.func @global_call() {
+  %unit = tvm_ffi_api.global.call "test.effect"() : () -> !tvm_ffi_abi.none
+  return
 }
 
 // -----

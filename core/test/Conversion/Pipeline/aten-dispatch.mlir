@@ -30,15 +30,14 @@
 // CHECK: %[[RET_SLOT:[a-zA-Z0-9_]+]] = llvm.alloca
 // CHECK: llvm.call @TVMFFIFunctionCall(%[[HANDLE]], %[[CALL_ARGS:[a-zA-Z0-9_]+]], %[[NARGS:[a-zA-Z0-9_]+]], %[[RET_SLOT]]) : (!llvm.ptr, !llvm.ptr, i32, !llvm.ptr) -> i32
 // CHECK: %[[RET:[a-zA-Z0-9_]+]] = llvm.load %[[RET_SLOT]] : !llvm.ptr -> !llvm.struct<(i32, i32, i64)>
-// Automatic ownership releases the local handle before exporting the payload.
+// Global-call lowering releases the temporary handle before exporting the payload.
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[HANDLE]]) : (!llvm.ptr) -> i32
 // CHECK: llvm.store %[[RET]], %[[OUTPUT_SLOT]] : !llvm.struct<(i32, i32, i64)>, !llvm.ptr
 // CHECK: llvm.return %[[STATUS:[a-zA-Z0-9_]+]] : i32
 
 tvm_ffi_api.func @clone(%arg0: !tvm_ffi_api.tensor) -> !tvm_ffi_api.tensor {
   %memory_format = tvm_ffi_abi.constant.int 0
-  %clone_handle = tvm_ffi_api.FunctionGetGlobal "trident.aten.clone" : !tvm_ffi_api.function
-  %clone = tvm_ffi_api.FunctionCall %clone_handle : !tvm_ffi_api.function(%arg0, %memory_format) : (!tvm_ffi_api.tensor, !tvm_ffi_abi.int) -> !tvm_ffi_api.tensor
+  %clone = tvm_ffi_api.global.call "trident.aten.clone"(%arg0, %memory_format) : (!tvm_ffi_api.tensor, !tvm_ffi_abi.int) -> !tvm_ffi_api.tensor
 
   // The return retains its payload before local cleanup.
   %return_value_1 = tvm_ffi_api.upcast %clone : !tvm_ffi_api.tensor -> !tvm_ffi_api.any

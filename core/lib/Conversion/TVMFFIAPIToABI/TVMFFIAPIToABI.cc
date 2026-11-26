@@ -314,6 +314,28 @@ public:
   }
 };
 
+class ConvertGlobalCallOp final
+    : public mlir::OpConversionPattern<GlobalCallOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(GlobalCallOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Type const resultType = getTypeConverter()->convertType(op.getType());
+    if (!resultType) {
+      return mlir::failure();
+    }
+    mlir::Value const result =
+        createGlobalFunctionCall(rewriter, op.getLoc(), op.getName(),
+                                 resultType, adaptor.getArguments());
+    result.getDefiningOp()->setAttrs(op->getDiscardableAttrDictionary());
+    createObjectDecRefs(rewriter, op.getLoc(), op->getResultTypes(), {result});
+    rewriter.replaceOp(op, {result});
+    return mlir::success();
+  }
+};
+
 class ConvertIfOp final : public mlir::OpConversionPattern<mlir::scf::IfOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -563,7 +585,7 @@ void populateConvertTVMFFIAPIToABIConversionPatterns(
       ConvertGenericOp<TensorStrideOp, abi::TensorStrideOp>,
       ConvertGenericOp<UpcastOp, abi::UpcastOp>,
       ConvertGenericOp<mlir::func::CallOp, mlir::func::CallOp, true>,
-      ConvertTupleUnconstructOp>(converter, context);
+      ConvertGlobalCallOp, ConvertTupleUnconstructOp>(converter, context);
   patterns.add<ConvertConditionOp, ConvertExecuteRegionOp, ConvertForOp,
                ConvertIfOp, ConvertWhileOp, ConvertYieldOp>(converter, context);
   patterns.add<ConvertFunctionOp<FuncOp, abi::FuncOp>,

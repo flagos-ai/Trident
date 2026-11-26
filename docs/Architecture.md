@@ -28,6 +28,12 @@ through `tvm_ffi.arith.add` and `tvm_ffi.monad.bind`; C++ operations are
 it as `runtime` to distinguish it from the dialect package. Old API-prefixed
 interfaces are removed.
 
+Operation names use lowercase dot-separated families with snake_case within
+each segment, such as `function.call`, `function.get_global`, `object.dec_ref`
+and `object.inc_ref`. Python builders replace dots with underscores, while C++
+and Python OpView classes retain names such as `FunctionCallOp`. The previous
+capitalized operation spellings and builder names have no compatibility aliases.
+
 Arith depends on ABI; Monad depends on API and ABI. API checks kernel Result
 payloads through the shared `TVMFFIResultTypeInterface`, without depending on
 Monad IR. API kernel lowering produces Monad operations. Each dialect has a
@@ -103,8 +109,9 @@ type, and widens semantic values at Any/Union boundaries. Neither Result nor
 container construction implicitly accepts native scalar types or values.
 Bind arguments retain their CABI types; consumers extract native scalars only
 within a local builder or at an interface requiring them. No-data success uses
-`pure(constant(None))` explicitly. Shared `checked_call` constructs registry
-calls; importer-local `_container_get` wraps typed container extraction in
+`pure(constant(None))` explicitly. Shared `checked_call` constructs
+`tvm_ffi_api.global.call` and wraps its payload in a successful Result;
+importer-local `_container_get` wraps typed container extraction in
 Results. Guards use shared builders without depending on the graph importer.
 Dynamic FX scalar calls accept Python operator functions and built-in min/max,
 normalizing trailing underscores in their names and checking dialect operation
@@ -156,9 +163,23 @@ Low-level bindings remain available for inspection and tests; this is a frontend
 IR construction contract, not a restriction on MLIR parsing or Python `.get()`.
 Native `ObjectType` is a pointer outside CABI and is generated only by C++
 lowering, not by the Python frontend. It cannot be a Result or container payload.
-Global function lookup returns semantic Function, and registry calls accept it
-as their callee; decomposition changes both to ABI Function. Textual registry calls
-explicitly include their callee type.
+`tvm_ffi_api.global.call "name"(...)` calls a function by its constant registry
+key, with explicitly declared argument and result types. Its type constraints
+match `function.call`; it returns one payload, not a Result. No-data results use
+None and multiple results follow the callee's container convention. The operation
+has arbitrary callee side effects, including when its result is unused. Lookup
+status, a non-null handle and call status are asserted; the declared signature is
+not inferred or validated against the registry.
+
+API-to-ABI conversion expands registry calls to ABI `function.get_global` and
+`function.call`, releases the temporary handle immediately and registers cleanup
+for original Opaque results. Original Base results remain manually managed.
+Additional operation attributes move to the ABI call. Lookup uses the existing
+module-level handle cache. Explicit `function.get_global` still returns a semantic
+Function, and `function.call` accepts that value as its callee; decomposition
+changes both to ABI Function. Textual Function-value calls include their callee
+type. Local `call @symbol` and `pack.call @symbol` resolve module symbols instead
+of registry keys.
 
 `TVMFFICABIType` and its trait classify all tagged C ABI types. Base types have
 public C representations; indexed Base types implement `TVMFFITypeIndexInterface`.
@@ -578,8 +599,8 @@ Decomposition releases both the call's independent reference and its local tuple
 reference at dominance-scope exit, retaining any exported tuple first.
 Result attributes move to the call's payload result, with an empty entry for success.
 Local callee resolution and argument matching are deferred to lowering for
-unlowered callees. This local-symbol call is distinct from registry
-`tvm_ffi_api.FunctionCall`.
+unlowered callees. This local-symbol call is distinct from name-based
+`tvm_ffi_api.global.call` and Function-value `tvm_ffi_api.function.call`.
 
 `convert-tvm-ffi-api-to-abi` preserves the call's two results while converting container
 operands and explicitly constructed tuples to ABI Array. `LowerTVMFFIABIToPack` converts

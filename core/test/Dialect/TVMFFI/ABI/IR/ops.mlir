@@ -6,13 +6,13 @@
 // CHECK-LABEL: func.func @captured(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor)
 // CHECK: tvm_ffi_abi.defer {
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[INPUT]] : !tvm_ffi_abi.tensor
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[INPUT]] : !tvm_ffi_abi.tensor
 // CHECK-NEXT: tvm_ffi_abi.defer_yield
 // CHECK-NEXT: }
 // CHECK-NEXT: return
 func.func @captured(%input: !tvm_ffi_abi.tensor) {
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %input : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %input : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   return
