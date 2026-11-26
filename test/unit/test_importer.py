@@ -10,17 +10,15 @@ from typing import cast
 import sympy
 import torch
 from trident.core import ir
-from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
-from trident.core.dialects import func, scf
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import func, scf, tvm_ffi
 from trident.guards.scope import Scope
 from trident.importer import TridentFxImporter
 from trident.importer import _container_get as container_get
 from trident.importer import _make_result_types as make_result_types
 from trident.importer import _power as power
+from trident.importer import _scalar as scalar
 from trident.utils.monad import BindScope, ScopeStack, checked_call, pure
-from trident.utils.values import BINARY_ARITHMETIC, constant, native
+from trident.utils.values import arithmetic, constant, native
 from typing_extensions import override
 
 from test.support.ir import new_context
@@ -57,8 +55,8 @@ class ImporterTest(unittest.TestCase):
             with self.subTest(outputs=count), new_context() as context:
                 program = torch.export.export(Outputs(count), ([torch.ones(2), None],))
                 input_types = {
-                    "value": tvm_ffi_api.ArrayType.get(tvm_ffi_api.AnyType.get()),
-                    "bias": tvm_ffi_abi.IntType.get(),
+                    "value": tvm_ffi.api.ArrayType.get(tvm_ffi.api.AnyType.get()),
+                    "bias": tvm_ffi.abi.IntType.get(),
                 }
                 importer = TridentFxImporter(context=context, specialization_id=0)
                 function = importer.import_program(
@@ -69,7 +67,7 @@ class ImporterTest(unittest.TestCase):
                         program.graph_signature.input_specs[0].arg.name: ["value", 0]
                     },
                 )
-                self.assertIsInstance(function, tvm_ffi_api.FuncOp)
+                self.assertIsInstance(function, tvm_ffi.api.FuncOp)
                 self.assertEqual(function.sym_visibility.value, "private")
                 self.assertEqual(
                     list(function.function_type.value.inputs),
@@ -77,7 +75,7 @@ class ImporterTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     list(function.function_type.value.results),
-                    [tvm_ffi_api.AnyType.get()],
+                    [tvm_ffi.api.AnyType.get()],
                 )
                 self.assertTrue(importer.module.operation.verify())
                 operations: list[str] = []
@@ -103,7 +101,7 @@ class ImporterTest(unittest.TestCase):
                 ir.Location.unknown(),
             ):
                 module = ir.Module.create()
-                result_type = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.IntType.get())
+                result_type = tvm_ffi.monad.ResultType.get(tvm_ffi.abi.IntType.get())
                 with ir.InsertionPoint(module.body):
                     function = func.FuncOp(
                         "test",
@@ -149,7 +147,7 @@ class ImporterTest(unittest.TestCase):
         for count in (0, 1, 3, 1100):
             with self.subTest(count=count), new_context(), ir.Location.unknown():
                 module = ir.Module.create()
-                types = make_result_types([tvm_ffi_abi.IntType.get()])
+                types = make_result_types([tvm_ffi.abi.IntType.get()])
                 with ir.InsertionPoint(module.body):
                     function = func.FuncOp("chain", (types, types))
                 block = function.add_entry_block()
@@ -185,9 +183,9 @@ class ImporterTest(unittest.TestCase):
         importer = TridentFxImporter(context=context, specialization_id=0)
         with context, ir.Location.unknown(context):
             module = importer.module
-            integer = tvm_ffi_abi.IntType.get()
-            payload = tvm_ffi_monad.ResultType.get(integer)
-            unit = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.NoneType.get())
+            integer = tvm_ffi.abi.IntType.get()
+            payload = tvm_ffi.monad.ResultType.get(integer)
+            unit = tvm_ffi.monad.ResultType.get(tvm_ffi.abi.NoneType.get())
             with ir.InsertionPoint(module.body):
                 value = constant(7)
                 count = len(module.body.operations)
@@ -212,7 +210,7 @@ class ImporterTest(unittest.TestCase):
             parsed_bind = next(
                 op
                 for op in parsed.body.operations
-                if isinstance(op, tvm_ffi_monad.BindOp)
+                if isinstance(op, tvm_ffi.monad.BindOp)
             )
             self.assertEqual(
                 [value.type for value in parsed_bind.arguments],
@@ -222,9 +220,9 @@ class ImporterTest(unittest.TestCase):
     def test_input_extraction_is_fresh_in_nested_blocks(self) -> None:
         with new_context(), ir.Location.unknown():
             module = ir.Module.create()
-            tensor = tvm_ffi_api.TensorType.get()
-            array = tvm_ffi_api.ArrayType.get(tensor)
-            unit = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.NoneType.get())
+            tensor = tvm_ffi.api.TensorType.get()
+            array = tvm_ffi.api.ArrayType.get(tensor)
+            unit = tvm_ffi.monad.ResultType.get(tvm_ffi.abi.NoneType.get())
             with ir.InsertionPoint(module.body):
                 function = func.FuncOp("test", ([array, tensor], []))
                 block = function.add_entry_block()
@@ -264,10 +262,10 @@ class ImporterTest(unittest.TestCase):
     def test_input_extraction_is_local_to_sibling_blocks(self) -> None:
         with new_context(), ir.Location.unknown():
             module = ir.Module.create()
-            tensor = tvm_ffi_api.TensorType.get()
-            array = tvm_ffi_api.ArrayType.get(tensor)
-            nested_array = tvm_ffi_api.ArrayType.get(array)
-            unit = tvm_ffi_monad.ResultType.get(tvm_ffi_abi.NoneType.get())
+            tensor = tvm_ffi.api.TensorType.get()
+            array = tvm_ffi.api.ArrayType.get(tensor)
+            nested_array = tvm_ffi.api.ArrayType.get(array)
+            unit = tvm_ffi.monad.ResultType.get(tvm_ffi.abi.NoneType.get())
             with ir.InsertionPoint(module.body):
                 function = func.FuncOp("test", ([nested_array], []))
                 block = function.add_entry_block()
@@ -299,24 +297,24 @@ class ImporterTest(unittest.TestCase):
         with context, ir.Location.unknown(context):
             with ir.InsertionPoint(importer.module.body):
                 integer = constant(7)
-                array_type = tvm_ffi_api.ArrayType.get(integer.type)
-                created = tvm_ffi_api.array_create(array_type, [integer])
+                array_type = tvm_ffi.api.ArrayType.get(integer.type)
+                created = tvm_ffi.api.array_create(array_type, [integer])
                 self.assertEqual(created.type, array_type)
-                size = tvm_ffi_api.array_size(created)
+                size = tvm_ffi.api.array_size(created)
                 self.assertEqual(size.type, integer.type)
-                element = tvm_ffi_api.array_get(created, native(constant(0)))
+                element = tvm_ffi.api.array_get(created, native(constant(0)))
                 self.assertEqual(element.type, integer.type)
                 with BindScope(
-                    [tvm_ffi_monad.ResultType.get(array_type)], [pure(created)]
+                    [tvm_ffi.monad.ResultType.get(array_type)], [pure(created)]
                 ) as bound:
                     bound_arguments = bound.arguments
                     [array] = bound_arguments
-                    union = tvm_ffi_api.UnionType.get(
-                        [integer.type, tvm_ffi_abi.BoolType.get()]
+                    union = tvm_ffi.api.UnionType.get(
+                        [integer.type, tvm_ffi.abi.BoolType.get()]
                     )
                     for target, expected in (
                         (integer.type, integer.type),
-                        (tvm_ffi_api.AnyType.get(), tvm_ffi_api.AnyType.get()),
+                        (tvm_ffi.api.AnyType.get(), tvm_ffi.api.AnyType.get()),
                         (union, union),
                     ):
                         with self.subTest(target=target):
@@ -325,8 +323,8 @@ class ImporterTest(unittest.TestCase):
                             with BindScope([result.type], [result]) as widened:
                                 widened_arguments = widened.arguments
                                 [value] = widened_arguments
-                                narrowed = tvm_ffi_api.array_create(
-                                    tvm_ffi_api.ArrayType.get(expected), [value]
+                                narrowed = tvm_ffi.api.array_create(
+                                    tvm_ffi.api.ArrayType.get(expected), [value]
                                 )
                                 [element] = container_get(narrowed, 0, integer.type)
                                 self.assertEqual(
@@ -377,10 +375,10 @@ class ImporterTest(unittest.TestCase):
         with context, ir.Location.unknown(context):
             with ir.InsertionPoint(importer.module.body):
                 integer, boolean = constant(7), constant(True)
-                type_ = tvm_ffi_api.TupleType.get([integer.type, boolean.type])
-                tuple_ = tvm_ffi_api.tuple_construct(type_, [integer, boolean])
+                type_ = tvm_ffi.api.TupleType.get([integer.type, boolean.type])
+                tuple_ = tvm_ffi.api.tuple_construct(type_, [integer, boolean])
                 self.assertEqual(tuple_.type, type_)
-                elements = tvm_ffi_api.TupleUnconstructOp(type_.types, tuple_).elements
+                elements = tvm_ffi.api.TupleUnconstructOp(type_.types, tuple_).elements
                 self.assertEqual(
                     [value.type for value in elements], [integer.type, boolean.type]
                 )
@@ -401,10 +399,10 @@ class ImporterTest(unittest.TestCase):
                         ),
                     ):
                         container_get(tuple_, index, integer.type)
-                empty_type = tvm_ffi_api.TupleType.get([])
-                empty = tvm_ffi_api.tuple_construct(empty_type, [])
+                empty_type = tvm_ffi.api.TupleType.get([])
+                empty = tvm_ffi.api.tuple_construct(empty_type, [])
                 self.assertEqual(
-                    len(tvm_ffi_api.TupleUnconstructOp([], empty).elements), 0
+                    len(tvm_ffi.api.TupleUnconstructOp([], empty).elements), 0
                 )
             self.assertTrue(importer.module.operation.verify())
             self.assertTrue(ir.Module.parse(f"{importer.module}").operation.verify())
@@ -417,7 +415,7 @@ class ImporterTest(unittest.TestCase):
                     for child in block.operations:
                         if isinstance(
                             child,
-                            (tvm_ffi_api.ArrayCreateOp, tvm_ffi_api.TupleConstructOp),
+                            (tvm_ffi.api.ArrayCreateOp, tvm_ffi.api.TupleConstructOp),
                         ):
                             calls.append(child)
                         calls.extend(collect(child.operation))
@@ -432,8 +430,8 @@ class ImporterTest(unittest.TestCase):
                 context = new_context()
                 importer = TridentFxImporter(context=context, specialization_id=0)
                 with context, ir.Location.unknown(context):
-                    none_result = tvm_ffi_monad.ResultType.get(
-                        tvm_ffi_abi.NoneType.get()
+                    none_result = tvm_ffi.monad.ResultType.get(
+                        tvm_ffi.abi.NoneType.get()
                     )
                     with ir.InsertionPoint(importer.module.body):
                         results = importer.build_arguments(arguments)
@@ -443,7 +441,7 @@ class ImporterTest(unittest.TestCase):
                             self.assertEqual(len(bound_arguments), count)
                             *_, last_argument = bound_arguments
                             self.assertIsInstance(
-                                last_argument.type, tvm_ffi_abi.NoneType
+                                last_argument.type, tvm_ffi.abi.NoneType
                             )
                             bound.yield_(
                                 [pure(constant(None), result_type=none_result)]
@@ -456,22 +454,22 @@ class ImporterTest(unittest.TestCase):
 
     def test_frontend_uses_semantic_object_types(self) -> None:
         forbidden = (
-            tvm_ffi_abi.AnyType,
-            tvm_ffi_abi.ArrayType,
-            tvm_ffi_abi.ExceptionType,
-            tvm_ffi_abi.FunctionType,
-            tvm_ffi_abi.StrType,
-            tvm_ffi_abi.TensorType,
-            tvm_ffi_abi.ObjectType,
+            tvm_ffi.abi.AnyType,
+            tvm_ffi.abi.ArrayType,
+            tvm_ffi.abi.ExceptionType,
+            tvm_ffi.abi.FunctionType,
+            tvm_ffi.abi.StrType,
+            tvm_ffi.abi.TensorType,
+            tvm_ffi.abi.ObjectType,
         )
 
         def check_type(type_: ir.Type) -> None:
             self.assertNotIsInstance(type_, forbidden)
-            if isinstance(type_, tvm_ffi_api.ArrayType):
+            if isinstance(type_, tvm_ffi.api.ArrayType):
                 check_type(type_.element_type)
-            elif isinstance(type_, tvm_ffi_monad.ResultType):
+            elif isinstance(type_, tvm_ffi.monad.ResultType):
                 check_type(type_.payload_type)
-            elif isinstance(type_, (tvm_ffi_api.TupleType, tvm_ffi_api.UnionType)):
+            elif isinstance(type_, (tvm_ffi.api.TupleType, tvm_ffi.api.UnionType)):
                 for member in type_.types:
                     check_type(member)
             elif isinstance(type_, ir.FunctionType):
@@ -507,14 +505,14 @@ class ImporterTest(unittest.TestCase):
         context = new_context()
         importer = TridentFxImporter(context=context, specialization_id=0)
         with context, ir.Location.unknown(context):
-            tensor = tvm_ffi_api.TensorType.get()
-            string = tvm_ffi_api.StrType.get()
+            tensor = tvm_ffi.api.TensorType.get()
+            string = tvm_ffi.api.StrType.get()
             with ir.InsertionPoint(importer.module.body):
                 function = func.FuncOp("semantic", ([tensor, string], []))
                 with ir.InsertionPoint(function.add_entry_block()):
                     tensor_value, _ = function.arguments
                     checked_call("test.identity", [tensor_value], tensor)
-                    pure(tvm_ffi_api.exception("GuardMatch"))
+                    pure(tvm_ffi.api.exception("GuardMatch"))
                     importer.build_arguments(
                         [torch.zeros(2), ("", "1234567", "12345678"), [None, 3]]
                     )
@@ -545,16 +543,16 @@ class ImporterTest(unittest.TestCase):
             importer.import_program(
                 program,
                 func_name="scalars",
-                input_types={"value": tvm_ffi_api.TensorType.get()},
+                input_types={"value": tvm_ffi.api.TensorType.get()},
                 input_paths={
                     program.graph_signature.input_specs[0].arg.name: ["value"]
                 },
             )
             self.assertTrue(importer.module.operation.verify())
             scalar_types = (
-                tvm_ffi_abi.BoolType,
-                tvm_ffi_abi.FloatType,
-                tvm_ffi_abi.IntType,
+                tvm_ffi.abi.BoolType,
+                tvm_ffi.abi.FloatType,
+                tvm_ffi.abi.IntType,
             )
             self.assertTrue(importer.symbols)
             for symbol, value in importer.symbols.items():
@@ -586,9 +584,9 @@ class ImporterTest(unittest.TestCase):
         context = new_context()
         with context, ir.Location.unknown(context):
             module = ir.Module.create()
-            integer = tvm_ffi_abi.IntType.get()
-            boxed = tvm_ffi_abi.IntType.get()
-            union = tvm_ffi_api.UnionType.get([boxed, tvm_ffi_abi.NoneType.get()])
+            integer = tvm_ffi.abi.IntType.get()
+            boxed = tvm_ffi.abi.IntType.get()
+            union = tvm_ffi.api.UnionType.get([boxed, tvm_ffi.abi.NoneType.get()])
             with ir.InsertionPoint(module.body):
                 value = constant(7)
                 inferred = pure(value)
@@ -600,12 +598,12 @@ class ImporterTest(unittest.TestCase):
                     pure(native(value))
                 string = constant("text")
                 string_result = pure(string)
-                self.assertIsInstance(string.type, tvm_ffi_api.StrType)
+                self.assertIsInstance(string.type, tvm_ffi.api.StrType)
                 self.assertEqual(string_result.type.payload_type, string.type)
                 self.assertEqual(make_result_types([string.type]), [string_result.type])
                 empty = pure(constant(None))
-                self.assertIsInstance(empty.type.payload_type, tvm_ffi_abi.NoneType)
-                for target in (boxed, tvm_ffi_api.AnyType.get(), union):
+                self.assertIsInstance(empty.type.payload_type, tvm_ffi.abi.NoneType)
+                for target in (boxed, tvm_ffi.api.AnyType.get(), union):
                     with self.subTest(target=target):
                         result_types = make_result_types([target])
                         [result_type] = result_types
@@ -614,12 +612,12 @@ class ImporterTest(unittest.TestCase):
                         self.assertEqual(operation.value.type, target)
                         widened = operation.value
                         self.assertIsInstance(
-                            widened.owner.opview, tvm_ffi_api.UpcastOp
+                            widened.owner.opview, tvm_ffi.api.UpcastOp
                         )
-                        narrowed = tvm_ffi_api.downcast(boxed, widened)
+                        narrowed = tvm_ffi.api.downcast(boxed, widened)
                         self.assertEqual(narrowed.type, boxed)
                         self.assertIsInstance(
-                            narrowed.owner.opview, tvm_ffi_api.DowncastOp
+                            narrowed.owner.opview, tvm_ffi.api.DowncastOp
                         )
                 for invalid in ([], [value], [value, value]):
                     with (
@@ -630,8 +628,8 @@ class ImporterTest(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, "payload type"):
                     pure(
                         value,
-                        result_type=tvm_ffi_monad.ResultType.get(
-                            tvm_ffi_abi.FloatType.get()
+                        result_type=tvm_ffi.monad.ResultType.get(
+                            tvm_ffi.abi.FloatType.get()
                         ),
                     )
                 with (
@@ -647,7 +645,7 @@ class ImporterTest(unittest.TestCase):
     def test_scope_stack_boundaries(self) -> None:
         with new_context(), ir.Location.unknown():
             module = ir.Module.create()
-            types = make_result_types([tvm_ffi_abi.IntType.get()])
+            types = make_result_types([tvm_ffi.abi.IntType.get()])
             with ir.InsertionPoint(module.body):
                 function = func.FuncOp("nested", (types, types))
             block = function.add_entry_block()
@@ -706,27 +704,51 @@ class ImporterTest(unittest.TestCase):
 
     def test_scalar_builders(self) -> None:
         cases = (
-            (operator.add, True, True, tvm_ffi_abi.IntType),
-            (operator.add, 2.0, 1, tvm_ffi_abi.FloatType),
-            (operator.and_, True, False, tvm_ffi_abi.BoolType),
+            ("add", True, True, tvm_ffi.abi.IntType),
+            ("add", 2.0, 1, tvm_ffi.abi.FloatType),
+            ("and", True, False, tvm_ffi.abi.BoolType),
         )
         with new_context(), ir.Location.unknown():
             module = ir.Module.create()
             with ir.InsertionPoint(module.body):
                 for operation, lhs, rhs, expected in cases:
                     with self.subTest(operation=operation, lhs=lhs, rhs=rhs):
-                        result = BINARY_ARITHMETIC[operation](
-                            constant(lhs), constant(rhs)
-                        )
+                        result = arithmetic(operation, constant(lhs), constant(rhs))
                         self.assertIsInstance(result.type, expected)
                 with self.assertRaisesRegex(ir.MLIRError, "Operation creation failed"):
-                    BINARY_ARITHMETIC[operator.and_](constant(1.0), constant(1))
+                    arithmetic("and", constant(1.0), constant(1))
                 with self.assertRaisesRegex(ir.MLIRError, "Operation creation failed"):
-                    BINARY_ARITHMETIC[operator.add](constant(None), constant(1))
+                    arithmetic("add", constant(None), constant(1))
+                graph = torch.fx.Graph()
+                for target, name in (
+                    (operator.and_, "and"),
+                    (operator.or_, "or"),
+                    (torch.sym_max, "max"),
+                    (torch.sym_min, "min"),
+                ):
+                    with self.subTest(target=target):
+                        node = graph.call_function(target, (1, 2))
+                        result = scalar(node, [constant(1), constant(2)])
+                        self.assertEqual(result.owner.name, f"tvm_ffi_arith.{name}")
+
+                def add(lhs: int, rhs: int) -> int:
+                    return lhs + rhs
+
+                for target in (operator.matmul, add):
+                    with (
+                        self.subTest(target=target),
+                        self.assertRaisesRegex(
+                            NotImplementedError, "unsupported FX call"
+                        ),
+                    ):
+                        scalar(
+                            graph.call_function(target, (1, 2)),
+                            [constant(1), constant(2)],
+                        )
                 for base, exponent, expected in (
-                    (True, 0, tvm_ffi_abi.IntType),
-                    (1.5, 0, tvm_ffi_abi.FloatType),
-                    (1.5, 3, tvm_ffi_abi.FloatType),
+                    (True, 0, tvm_ffi.abi.IntType),
+                    (1.5, 0, tvm_ffi.abi.FloatType),
+                    (1.5, 3, tvm_ffi.abi.FloatType),
                 ):
                     with self.subTest(base=base, exponent=exponent):
                         self.assertIsInstance(

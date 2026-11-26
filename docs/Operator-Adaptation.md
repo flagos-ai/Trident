@@ -27,10 +27,12 @@ frontend does not functionalize the graph.
 Check membership in `torch._C._dispatch_get_all_op_names()` before emitting a
 registry call. A JIT schema alone does not establish dispatch support. Scalar
 shape arithmetic uses the shared semantic builders, including comparisons,
-floor division, remainder and boolean operations. The shared `BINARY_ARITHMETIC`
-mapping in `python/trident/utils/values.py` selects `tvm_ffi_arith.*` builders for
-dynamic source operators; call the dialect builder directly when the operation
-is known.
+floor division, remainder and boolean operations. The shared
+`arithmetic(name, *operands)` helper in `python/trident/utils/values.py` constructs
+`tvm_ffi_arith.<name>` operations with result type inference for dynamic source
+operators. FX normalizes trailing underscores and checks operation registration;
+guard expressions already supply dialect operation names. Call the dialect builder
+directly when the operation is known.
 Extend the dialect's shared TableGen operation families, result inference and
 `lower-tvm-ffi-arith` patterns when adding scalar operations; keep promotion
 and native extraction out of Python. The pass emits `tvm_ffi_abi.get`, native `arith`
@@ -176,7 +178,7 @@ chain of binds: `stack.enter_scope(scope)` enters and tracks an existing Scope,
 and restores insertion points. An empty stack forwards values unchanged. Child
 stacks leave parent scopes open. Use `BindScope` directly for a single bind.
 Build simple SCF branches and function bodies with `ir.InsertionPoint` and
-explicit `scf.yield_`, `func.return_` or `tvm_ffi_api.return_`; they do not need Scope
+explicit `scf.yield_`, `func.return_` or `tvm_ffi.api.return_`; they do not need Scope
 wrappers. Context exits do not generate terminators, including on construction
 failure.
 Decomposition automatically retains semantic exported references before releasing
@@ -234,8 +236,11 @@ lists. Actual None arguments retain their positions. Runtime errors propagate
 through return and packed ABI status.
 
 Use the concrete Python type bindings when constructing or inspecting MLIR
-types: for example, `tvm_ffi_d.TensorType.get()` and
-`isinstance(value.type, tvm_ffi_d.TensorType)`. For native integers, inspect both
+types. Import `tvm_ffi` with `from trident.core.dialects import tvm_ffi`, then use
+`tvm_ffi.api.TensorType.get()` and
+`isinstance(value.type, tvm_ffi.api.TensorType)`. Scalar types are available through
+`tvm_ffi.abi`, arithmetic through `tvm_ffi.arith`, and Results through
+`tvm_ffi.monad`. For native integers, inspect both
 `IntegerType.width` and `IntegerType.is_signless` when the ABI requires a specific
 signless width. Build unions with `UnionType.get(types, context=...)`; invalid,
 duplicate or cross-context members raise `ValueError`. Type printing is for IR

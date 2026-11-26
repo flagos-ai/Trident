@@ -12,10 +12,7 @@ from typing import Final
 from typing_extensions import override
 
 from trident.core import ir
-from trident.core.dialects.tvm_ffi import monad as tvm_ffi_monad
-from trident.core.dialects import cf, scf
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import cf, scf, tvm_ffi
 from trident.utils.values import constant, native
 
 from .codes import GuardCode
@@ -50,10 +47,10 @@ class ExecutionNode(Node):
     def build(self, scope: Scope, fallback_block: ir.Block) -> ir.Block:
         entry: ir.Block = fallback_block.region.blocks.append()
         with ir.InsertionPoint(entry):
-            success, payload = tvm_ffi_api.pack_call(
+            success, payload = tvm_ffi.api.pack_call(
                 ir.FlatSymbolRefAttr.get(self.graph_symbol),
                 scope.value,
-                results=[tvm_ffi_abi.BoolType.get(), tvm_ffi_api.AnyType.get()],
+                results=[tvm_ffi.abi.BoolType.get(), tvm_ffi.api.AnyType.get()],
             )
             scf.yield_([success, payload])
         return entry
@@ -72,14 +69,14 @@ class GuardNode(Node):
         entry, matched, failed = blocks.append(), blocks.append(), blocks.append()
         with ir.InsertionPoint(entry):
             [result] = self.code.build_result(scope, ir.Context.current)
-            success, payload = tvm_ffi_monad.unpack(result)
+            success, payload = tvm_ffi.monad.unpack(result)
             cf.cond_br(success, [], [], matched, failed)
         with ir.InsertionPoint(failed):
-            none = tvm_ffi_api.upcast(tvm_ffi_api.AnyType.get(), constant(None))
-            scf.yield_([tvm_ffi_abi.to(success), none])
+            none = tvm_ffi.api.upcast(tvm_ffi.api.AnyType.get(), constant(None))
+            scf.yield_([tvm_ffi.abi.to(success), none])
         passed: ir.Block = _build_children(self.children, scope, fallback_block)
         with ir.InsertionPoint(matched):
-            predicate = tvm_ffi_api.downcast(tvm_ffi_abi.BoolType.get(), payload)
+            predicate = tvm_ffi.api.downcast(tvm_ffi.abi.BoolType.get(), payload)
             cf.cond_br(native(predicate), [], [], passed, fallback_block)
         return entry
 
@@ -99,9 +96,9 @@ class SCMNode(Node):
                 scope.value,
                 {
                     name: Scope(
-                        tvm_ffi_api.downcast(
+                        tvm_ffi.api.downcast(
                             type_,
-                            tvm_ffi_api.pack_get(scope.value, native(constant(index))),
+                            tvm_ffi.api.pack_get(scope.value, native(constant(index))),
                         )
                     )
                     for index, (name, type_) in enumerate(self.input_types.items())
@@ -154,12 +151,12 @@ class Root:
     def build(self, scope: Scope) -> Sequence[ir.Value]:
         """Build a fresh dispatch region without retaining SSA in the tree."""
         machine = scf.ExecuteRegionOp(
-            [tvm_ffi_abi.BoolType.get(), tvm_ffi_api.AnyType.get()], no_inline=True
+            [tvm_ffi.abi.BoolType.get(), tvm_ffi.api.AnyType.get()], no_inline=True
         )
         entry, miss = machine.region.blocks.append(), machine.region.blocks.append()
         with ir.InsertionPoint(miss):
-            rejection = tvm_ffi_api.upcast(
-                tvm_ffi_api.AnyType.get(), tvm_ffi_api.exception("GuardMiss")
+            rejection = tvm_ffi.api.upcast(
+                tvm_ffi.api.AnyType.get(), tvm_ffi.api.exception("GuardMiss")
             )
             scf.yield_([constant(True), rejection])
         first: ir.Block = _build_children(self.children, scope, miss)

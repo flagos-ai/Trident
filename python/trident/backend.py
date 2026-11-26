@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import sympy
 import torch
-import tvm_ffi
-import tvm_ffi.utils
+import tvm_ffi as runtime
+import tvm_ffi.utils as runtime_utils
 from torch.export._trace import _extract_fake_inputs
 from torch.export.graph_signature import (
     InputKind,
@@ -31,9 +31,7 @@ from trident.core import (
     register_all_dialects,
     register_all_passes,
 )
-from trident.core.dialects import transform
-from trident.core.dialects.tvm_ffi import abi as tvm_ffi_abi
-from trident.core.dialects.tvm_ffi import api as tvm_ffi_api
+from trident.core.dialects import transform, tvm_ffi
 from trident.core.execution_engine import ExecutionEngine
 from trident.ffi import Exception
 from trident.utils.runtime import find_runtime_libraries
@@ -51,7 +49,7 @@ if TYPE_CHECKING:
 
 def _map_containers(value: Any, convert: Callable[[Any], Any]) -> Any:
     """Convert leaves while preserving Python containers and unpacking FFI Arrays."""
-    if isinstance(value, (tvm_ffi.Array, list)):
+    if isinstance(value, (runtime.Array, list)):
         return [_map_containers(element, convert) for element in value]
     elif isinstance(value, tuple):
         return tuple(_map_containers(element, convert) for element in value)
@@ -239,7 +237,7 @@ class TridentGraphModule:
                         for index, child in enumerate(value)
                     ]
                     return (
-                        tvm_ffi_api.TupleType.get(child_types)
+                        tvm_ffi.api.TupleType.get(child_types)
                         if isinstance(value, tuple)
                         else array_type(child_types)
                     )
@@ -327,7 +325,7 @@ class TridentGraphModule:
             f"available: {[op.sym_name.value for op in combined.body.operations if hasattr(op, 'sym_name')]}"
         )
 
-        fn: tvm_ffi.Function = tvm_ffi.Function.__from_mlir_packed_safe_call__(
+        fn: runtime.Function = runtime.Function.__from_mlir_packed_safe_call__(
             ptr,
             keep_alive_object=engine,
         )
@@ -339,9 +337,9 @@ class TridentGraphModule:
                         _map_containers(
                             value,
                             lambda leaf: (
-                                tvm_ffi.device(f"{leaf}")
+                                runtime.device(f"{leaf}")
                                 if isinstance(leaf, torch.device)
-                                else tvm_ffi.convert(leaf)
+                                else runtime.convert(leaf)
                                 if isinstance(leaf, torch.dtype)
                                 else leaf
                             ),
@@ -351,7 +349,7 @@ class TridentGraphModule:
                 ),
                 lambda leaf: (
                     torch.from_dlpack(leaf)
-                    if isinstance(leaf, tvm_ffi.Tensor)
+                    if isinstance(leaf, runtime.Tensor)
                     else leaf
                 ),
             )
@@ -367,16 +365,16 @@ class TridentGraphModule:
             )
             return pytree.tree_unflatten(leaves, self._output_spec)
 
-        return tvm_ffi.utils.kwargs_wrapper.make_kwargs_wrapper_from_signature(
+        return runtime_utils.kwargs_wrapper.make_kwargs_wrapper_from_signature(
             invoke, self._signature
         )
 
     def _build_dispatcher(self, combined: ir.Module) -> None:
         """Generate the ordered guard tree directly as an execute-region CFG."""
         with self.ctx, combined.operation.location, ir.InsertionPoint(combined.body):
-            any_type = tvm_ffi_api.AnyType.get()
-            parameter_types: list[ir.Type] = [tvm_ffi_abi.PackArgumentsType.get()]
-            dispatcher = tvm_ffi_api.PackFuncOp(
+            any_type = tvm_ffi.api.AnyType.get()
+            parameter_types: list[ir.Type] = [tvm_ffi.abi.PackArgumentsType.get()]
+            dispatcher = tvm_ffi.api.PackFuncOp(
                 self.fn.__name__,
                 ir.TypeAttr.get(ir.FunctionType.get(parameter_types, [any_type])),
             )
@@ -384,4 +382,4 @@ class TridentGraphModule:
             with ir.InsertionPoint(entry):
                 [arguments] = entry.arguments
                 success, payload = self._dispatcher.build(Scope(arguments))
-                tvm_ffi_api.return_(success, payload)
+                tvm_ffi.api.return_(success, payload)
