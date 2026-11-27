@@ -168,7 +168,7 @@ def TVMFFIAPI_FuncOp
   let skipDefaultBuilders = 1;
 }
 
-def TVMFFIAPI_FunctionCallOp : TVMFFIAPI_Op<"FunctionCall"> {
+def TVMFFIAPI_FunctionCallOp : TVMFFIAPI_Op<"function.call"> {
   let summary = "Call a TVM FFI function handle";
   let arguments = (ins TVMFFIAPI_FunctionValue:$callee,
       Variadic<AnyTVMFFISemanticType>:$arguments);
@@ -178,8 +178,8 @@ def TVMFFIAPI_FunctionCallOp : TVMFFIAPI_Op<"FunctionCall"> {
 }
 
 def TVMFFIAPI_FunctionGetGlobalOp
-    : TVMFFIAPI_Op<"FunctionGetGlobal", [DeclareOpInterfaceMethods<
-                                            InferTypeOpInterface>]> {
+    : TVMFFIAPI_Op<"function.get_global", [DeclareOpInterfaceMethods<
+                                              InferTypeOpInterface>]> {
   let summary = "Get a TVM FFI global function by name";
   let arguments = (ins StrAttr:$name);
   let results = (outs TVMFFIAPI_FunctionValue:$result);
@@ -202,6 +202,32 @@ def TVMFFIAPI_GetOp
   let hasVerifier = 1;
   let assemblyFormat =
       "$operand attr-dict `:` type($operand) `->` type($result)";
+}
+
+def TVMFFIAPI_GlobalCallOp : TVMFFIAPI_Op<"global.call"> {
+  let summary = "Call a TVM FFI function by its registry name";
+  // clang-format off
+  let description = [{
+    Calls the function registered under the constant string name and returns
+    one payload of the declared type. Parameters and results follow the same
+    semantic type constraints as function.call. No-data results use None;
+    multiple values follow the callee's container return convention.
+
+    Lookup status, a non-null handle and call status are asserted before using
+    the result. This operation does not return a Result or resolve a local
+    symbol. It may have arbitrary callee side effects, even when unused.
+
+    API-to-ABI conversion expands the lookup and call, releases the temporary
+    handle and manages semantic result ownership. Global handle caching follows
+    the existing ABI lookup policy. The declared signature is not inferred or
+    validated against the registry.
+  }];
+  // clang-format on
+  let arguments = (ins StrAttr:$name,
+      Variadic<AnyTVMFFISemanticType>:$arguments);
+  let results = (outs AnyTVMFFISemanticType:$result);
+  let assemblyFormat = "$name `(` $arguments `)` attr-dict `:` "
+                       "functional-type($arguments, $result)";
 }
 
 def TVMFFIAPI_IsaOp : TVMFFIAPI_Op<"isa", [Pure]> {

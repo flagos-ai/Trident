@@ -15,8 +15,8 @@
 // CHECK: tvm_ffi_abi.call @check(%[[ROOT]])
 // CHECK: tvm_ffi_abi.call @check_branch(%[[ROOT]])
 // CHECK: %[[OK:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.pack.call @run(%[[ARGS]])
-// CHECK: tvm_ffi_abi.ObjectIncRef %[[VALUE]]
-// CHECK: tvm_ffi_abi.ObjectDecRef %[[VALUE]]
+// CHECK: tvm_ffi_abi.object.inc_ref %[[VALUE]]
+// CHECK: tvm_ffi_abi.object.dec_ref %[[VALUE]]
 // CHECK: scf.yield %[[OK]], %[[VALUE]]
 // CHECK: tvm_ffi_abi.pack.call @run_fallback(%[[ARGS]])
 // LLVM-LABEL: llvm.func @__tvm_ffi_dispatch(

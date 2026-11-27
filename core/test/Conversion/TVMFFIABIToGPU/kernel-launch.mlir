@@ -191,12 +191,12 @@ module attributes {gpu.container_module} {
 // CHECK: %[[ONE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.constant.int 1
 // CHECK: %[[TRUE_TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.constant.bool true
 // CHECK: %[[NAME:[a-zA-Z0-9_]+]] = tvm_ffi_abi.constant.raw_str "name"
-// CHECK: %[[INNER:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionCall %[[INNER_HANDLE:[a-zA-Z0-9_]+]] : !tvm_ffi_abi.function(%[[TRUE_TUPLE]], %[[NAME]])
-// CHECK: %[[EXPECTED_TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionCall %[[OUTER_HANDLE:[a-zA-Z0-9_]+]] : !tvm_ffi_abi.function(%[[ONE]], %[[INNER]])
-// CHECK: tvm_ffi_abi.ObjectDecRef %[[OUTER_HANDLE]]
-// CHECK: tvm_ffi_abi.ObjectDecRef %[[INNER]]
+// CHECK: %[[INNER:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.call %[[INNER_HANDLE:[a-zA-Z0-9_]+]] : !tvm_ffi_abi.function(%[[TRUE_TUPLE]], %[[NAME]])
+// CHECK: %[[EXPECTED_TUPLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.call %[[OUTER_HANDLE:[a-zA-Z0-9_]+]] : !tvm_ffi_abi.function(%[[ONE]], %[[INNER]])
+// CHECK: tvm_ffi_abi.object.dec_ref %[[OUTER_HANDLE]]
+// CHECK: tvm_ffi_abi.object.dec_ref %[[INNER]]
 // CHECK: %[[TUPLE_EQUAL:[a-zA-Z0-9_]+]] = tvm_ffi_abi.eq %[[TUPLE]], %[[EXPECTED_TUPLE]] : !tvm_ffi_abi.array
-// CHECK: tvm_ffi_abi.ObjectDecRef %[[EXPECTED_TUPLE]]
+// CHECK: tvm_ffi_abi.object.dec_ref %[[EXPECTED_TUPLE]]
 // CHECK: %[[TUPLE_CHECK:[a-zA-Z0-9_]+]] = arith.andi %[[INITIAL_TUPLE]], %[[TUPLE_EQUAL]] : i1
 // CHECK: scf.if %[[TUPLE_CHECK]]
 // CHECK: gpu.launch_func

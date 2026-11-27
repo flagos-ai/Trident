@@ -126,8 +126,7 @@ def checked_call(
     name: str, arguments: Sequence[ir.Value], result: ir.Type
 ) -> list[ir.Value]:
     """Return an asserting invocation wrapped as a successful Result."""
-    handle = tvm_ffi.api.FunctionGetGlobalOp(name).result
-    call = tvm_ffi.api.FunctionCallOp(result, handle, arguments)
+    call = tvm_ffi.api.GlobalCallOp(result, name, arguments)
     return [pure(call.result)]
 
 

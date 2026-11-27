@@ -19,7 +19,7 @@ Python `torch.dtype` arguments to ATen's integer enum in the same ordered
 argument traversal, including nested list/tuple elements. Existing SSA dtype
 values and ordinary dtype constants retain their TVM FFI representation.
 The same branch constructs metadata operations or emits a checked
-`tvm_ffi_api.FunctionCall`, retaining the node's single Result, tuple of Results, or
+`tvm_ffi_api.global.call`, retaining the node's single Result, tuple of Results, or
 unit Result for binding before the next node. Most ATen operators therefore
 need no individual import pattern. Tensor aliases and mutations follow the boxed ATen call directly; the
 frontend does not functionalize the graph.
@@ -152,8 +152,18 @@ Results after construction. Only these complete Results may leave the successful
 scope; do not return bare payloads. MLIR verification checks `monad.yield`
 termination and matching Result types.
 
-`trident.utils.monad.checked_call` checks global lookup status, a non-null handle and call status,
-returning a complete Result without consuming a callback. `build_arguments`
+`trident.utils.monad.checked_call` emits `tvm_ffi_api.global.call` and wraps its
+payload in a successful Result without consuming a callback. The registry call
+takes a constant string key, semantic arguments and one declared payload type;
+its constraints match `function.call`. Use None for no-data results and the
+callee's container convention for multiple values. It retains arbitrary callee
+side effects even when its result is unused. Lowering checks global lookup status,
+a non-null handle and call status, aborting on failure rather than returning a
+failed Result. It reuses cached lookup, releases the temporary handle and registers
+semantic result cleanup; Base results remain manually managed. Signature inference
+and registry signature validation are not performed. Additional operation
+attributes move to the ABI call. Explicit Function lookup/call remains available;
+local-symbol `call` and `pack.call` keep their existing contracts. `build_arguments`
 constructs nested list/tuple arguments in order and returns Results, leaving
 operator execution and subsequent graph traversal to its caller. Keep pure
 argument prefixes iterative. `pure(value, result_type=...)` borrows one semantic
@@ -259,7 +269,8 @@ constructs a tuple borrowing those results. Decomposition automatically releases
 the call payload and local tuple, retaining any exported tuple first. Result attributes apply
 to the call's payload, with an empty success-result entry. Local callee resolution
 and argument matching are deferred to lowering for unlowered callees. Registry
-calls continue to use `tvm_ffi_api.FunctionCall`.
+calls by name use `tvm_ffi_api.global.call`; explicit Function values use
+`tvm_ffi_api.function.call`.
 
 `convert-tvm-ffi-api-to-abi` preserves the call's two results and converts container
 operands and explicit tuples to ABI Arrays. `TVMFFIABIToFunc` requires this decomposition

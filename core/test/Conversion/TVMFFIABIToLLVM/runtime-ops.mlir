@@ -55,8 +55,8 @@ func.func @exception() -> !tvm_ffi_abi.exception {
 // CHECK: llvm.call @TVMFFIObjectDecRef(%[[FUNCTION]]) : (!llvm.ptr) -> i32
 // CHECK: return
 func.func @function_refs(%function: !tvm_ffi_abi.function) {
-  tvm_ffi_abi.ObjectIncRef %function : !tvm_ffi_abi.function
-  tvm_ffi_abi.ObjectDecRef %function : !tvm_ffi_abi.function
+  tvm_ffi_abi.object.inc_ref %function : !tvm_ffi_abi.function
+  tvm_ffi_abi.object.dec_ref %function : !tvm_ffi_abi.function
   return
 }
 
@@ -132,9 +132,9 @@ func.func @function_refs(%function: !tvm_ffi_abi.function) {
 // CHECK: llvm.mlir.global_ctors ctors = [@__trident_tvm_ffi_ctor_test.identity], priorities = [65535 : i32], data = [#llvm.zero]
 // CHECK: llvm.mlir.global_dtors dtors = [@__trident_tvm_ffi_dtor_test.identity], priorities = [65535 : i32], data = [#llvm.zero]
 func.func @global_call(%arg: !tvm_ffi_abi.int) -> !tvm_ffi_abi.int {
-  %callee = tvm_ffi_abi.FunctionGetGlobal "test.identity"
+  %callee = tvm_ffi_abi.function.get_global "test.identity"
      : !tvm_ffi_abi.function
-  %result = tvm_ffi_abi.FunctionCall %callee : !tvm_ffi_abi.function(%arg)
+  %result = tvm_ffi_abi.function.call %callee : !tvm_ffi_abi.function(%arg)
      : (!tvm_ffi_abi.int) -> !tvm_ffi_abi.int
   return %result : !tvm_ffi_abi.int
 }
@@ -171,8 +171,8 @@ func.func @global_call(%arg: !tvm_ffi_abi.int) -> !tvm_ffi_abi.int {
 // CHECK: ^[[DEC_SKIP]]:
 // CHECK: return
 func.func @object_refs(%object: !tvm_ffi_abi.tensor) {
-  tvm_ffi_abi.ObjectIncRef %object : !tvm_ffi_abi.tensor
-  tvm_ffi_abi.ObjectDecRef %object : !tvm_ffi_abi.tensor
+  tvm_ffi_abi.object.inc_ref %object : !tvm_ffi_abi.tensor
+  tvm_ffi_abi.object.dec_ref %object : !tvm_ffi_abi.tensor
   return
 }
 

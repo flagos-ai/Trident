@@ -221,7 +221,7 @@ def TVMFFIABI_FuncOp
   let skipDefaultBuilders = 1;
 }
 
-def TVMFFIABI_FunctionCallOp : TVMFFIABI_Op<"FunctionCall"> {
+def TVMFFIABI_FunctionCallOp : TVMFFIABI_Op<"function.call"> {
   let summary = "Call a TVM FFI function handle";
   let arguments = (ins TVMFFIABI_FunctionType:$callee,
       Variadic<AnyTVMFFIABIValueType>:$arguments);
@@ -231,8 +231,8 @@ def TVMFFIABI_FunctionCallOp : TVMFFIABI_Op<"FunctionCall"> {
 }
 
 def TVMFFIABI_FunctionGetGlobalOp
-    : TVMFFIABI_Op<"FunctionGetGlobal", [DeclareOpInterfaceMethods<
-                                            InferTypeOpInterface>]> {
+    : TVMFFIABI_Op<"function.get_global", [DeclareOpInterfaceMethods<
+                                              InferTypeOpInterface>]> {
   let summary = "Get a TVM FFI global function by name";
   let arguments = (ins StrAttr:$name);
   let results = (outs TVMFFIABI_FunctionType:$result);
@@ -307,13 +307,13 @@ def TVMFFIABI_NativeKernelLaunchOp
   // clang-format on
 }
 
-def TVMFFIABI_ObjectDecRefOp : TVMFFIABI_Op<"ObjectDecRef"> {
+def TVMFFIABI_ObjectDecRefOp : TVMFFIABI_Op<"object.dec_ref"> {
   let summary = "Decrement a TVM FFI object reference";
   let arguments = (ins AnyTVMFFIABIObjectOrAnyType:$object);
   let assemblyFormat = "$object attr-dict `:` type($object)";
 }
 
-def TVMFFIABI_ObjectIncRefOp : TVMFFIABI_Op<"ObjectIncRef"> {
+def TVMFFIABI_ObjectIncRefOp : TVMFFIABI_Op<"object.inc_ref"> {
   let summary = "Increment a TVM FFI object reference";
   let arguments = (ins AnyTVMFFIABIObjectOrAnyType:$object);
   let assemblyFormat = "$object attr-dict `:` type($object)";

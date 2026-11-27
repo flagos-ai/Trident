@@ -5,7 +5,7 @@
 
 // CHECK-LABEL: func.func @narrow_union(
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.any) -> !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[VALUE]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[VALUE]] : !tvm_ffi_abi.any
 // CHECK-NEXT: return %[[VALUE]] : !tvm_ffi_abi.any
 func.func @narrow_union(%value: !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.float, !tvm_ffi_abi.none>) -> !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none> {
   %narrow = tvm_ffi_api.downcast %value : !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.float, !tvm_ffi_abi.none> -> !tvm_ffi_api.union<!tvm_ffi_abi.int, !tvm_ffi_abi.none>
@@ -24,7 +24,7 @@ func.func @unused_string_downcast(%value: !tvm_ffi_api.any) {
 // CHECK-LABEL: func.func @result_payload(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_monad.result<!tvm_ffi_abi.any>) -> !tvm_ffi_abi.any
 // CHECK: %[[OK:[a-zA-Z0-9_]+]], %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi_monad.unpack %[[INPUT]] : (!tvm_ffi_monad.result<!tvm_ffi_abi.any>) -> (i1, !tvm_ffi_abi.any)
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[PAYLOAD]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[PAYLOAD]] : !tvm_ffi_abi.any
 // CHECK-NEXT: return %[[PAYLOAD]] : !tvm_ffi_abi.any
 func.func @result_payload(%input: !tvm_ffi_monad.result<!tvm_ffi_api.any>) -> !tvm_ffi_api.any {
   %ok, %payload = tvm_ffi_monad.unpack %input : (!tvm_ffi_monad.result<!tvm_ffi_api.any>) -> (i1, !tvm_ffi_api.any)
@@ -35,7 +35,7 @@ func.func @result_payload(%input: !tvm_ffi_monad.result<!tvm_ffi_api.any>) -> !t
 // CHECK-LABEL: tvm_ffi_abi.func @boundary(
 // CHECK-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.any) -> !tvm_ffi_abi.any
 // CHECK: %[[PAYLOAD:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[VALUE]] : !tvm_ffi_abi.any -> !tvm_ffi_abi.any
-// CHECK: tvm_ffi_abi.ObjectIncRef %[[PAYLOAD]] : !tvm_ffi_abi.any
+// CHECK: tvm_ffi_abi.object.inc_ref %[[PAYLOAD]] : !tvm_ffi_abi.any
 // CHECK-NEXT: tvm_ffi_abi.return %[[OK:[a-zA-Z0-9_]+]], %[[PAYLOAD]]
 tvm_ffi_api.func @boundary(%value: !tvm_ffi_api.union<!tvm_ffi_api.tensor, !tvm_ffi_abi.tensor, !tvm_ffi_api.str>) -> !tvm_ffi_api.union<!tvm_ffi_api.tensor, !tvm_ffi_api.str> {
   %payload = tvm_ffi_api.upcast %value : !tvm_ffi_api.union<!tvm_ffi_api.tensor, !tvm_ffi_abi.tensor, !tvm_ffi_api.str> -> !tvm_ffi_api.any
@@ -48,8 +48,8 @@ tvm_ffi_api.func @boundary(%value: !tvm_ffi_api.union<!tvm_ffi_api.tensor, !tvm_
 // CHECK-LABEL: func.func @invoke(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor, %[[SECOND:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.int) -> (!tvm_ffi_abi.bool, !tvm_ffi_abi.any)
 // CHECK-NEXT: %[[OK:[a-zA-Z0-9_]+]], %[[VALUE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.call @identity(%[[INPUT]], %[[SECOND]]) {arg_attrs = [{test.argument}, {}], res_attrs = [{test.success}, {test.payload}]} : (!tvm_ffi_abi.tensor, !tvm_ffi_abi.int) -> (!tvm_ffi_abi.bool, !tvm_ffi_abi.any)
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[VALUE]] : !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[VALUE]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[VALUE]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[VALUE]] : !tvm_ffi_abi.any
 // CHECK-NEXT: return %[[OK]], %[[VALUE]]
 // CHECK-LABEL: func.func @invoke_empty(
 // CHECK-NEXT: %[[EMPTY_OK:[a-zA-Z0-9_]+]], %[[EMPTY_VALUE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.call @empty() : () -> (!tvm_ffi_abi.bool, !tvm_ffi_abi.any)
@@ -102,12 +102,12 @@ func.func @objects(%tensor: !tvm_ffi_api.tensor, %function: !tvm_ffi_api.functio
 }
 
 // CHECK-LABEL: func.func @lookup(
-// CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionGetGlobal "ffi.Array" : !tvm_ffi_abi.function
-// CHECK: %[[ARRAY:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionCall %[[HANDLE]] : !tvm_ffi_abi.function() : () -> !tvm_ffi_abi.array
+// CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.get_global "ffi.Array" : !tvm_ffi_abi.function
+// CHECK: %[[ARRAY:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.call %[[HANDLE]] : !tvm_ffi_abi.function() : () -> !tvm_ffi_abi.array
 // CHECK: return %[[ARRAY]] : !tvm_ffi_abi.array
 func.func @lookup() -> !tvm_ffi_api.array<!tvm_ffi_api.any> {
-  %handle = tvm_ffi_api.FunctionGetGlobal "ffi.Array" : !tvm_ffi_api.function
-  %array = tvm_ffi_api.FunctionCall %handle : !tvm_ffi_api.function() : () -> !tvm_ffi_api.array<!tvm_ffi_api.any>
+  %handle = tvm_ffi_api.function.get_global "ffi.Array" : !tvm_ffi_api.function
+  %array = tvm_ffi_api.function.call %handle : !tvm_ffi_api.function() : () -> !tvm_ffi_api.array<!tvm_ffi_api.any>
   return %array : !tvm_ffi_api.array<!tvm_ffi_api.any>
 }
 
@@ -138,9 +138,9 @@ func.func @result_and_attributes(%value: !tvm_ffi_monad.result<!tvm_ffi_api.tens
 // CHECK: %[[OWNED:[a-zA-Z0-9_]+]] = tvm_ffi_abi.tensor.clone %[[INPUT]]
 // CHECK: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[OWNED]]
 // CHECK: %[[EXPORT:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[OWNED]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[EXPORT]] : !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[EXPORT]] : !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[OWNED]] : !tvm_ffi_abi.tensor
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[EXPORT]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[EXPORT]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[OWNED]] : !tvm_ffi_abi.tensor
 // CHECK-NEXT: return %[[EXPORT]], %[[EXPORT]]
 func.func @cast_exports(%input: !tvm_ffi_api.tensor) -> (!tvm_ffi_api.any, !tvm_ffi_api.any) {
   %owned = tvm_ffi_api.tensor.clone %input : !tvm_ffi_api.tensor -> !tvm_ffi_api.tensor
@@ -156,8 +156,8 @@ func.func @cast_exports(%input: !tvm_ffi_api.tensor) -> (!tvm_ffi_api.any, !tvm_
 // CHECK-SAME: %[[BASE:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor, %[[POD:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.int)
 // CHECK-NEXT: %[[OBJECT:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[BASE]]
 // CHECK-NEXT: %[[SCALAR:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[POD]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[OBJECT]] : !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[SCALAR]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[OBJECT]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[SCALAR]] : !tvm_ffi_abi.any
 // CHECK-NEXT: return %[[OBJECT]], %[[SCALAR]]
 func.func @opaque_exports(%base: !tvm_ffi_abi.tensor, %pod: !tvm_ffi_abi.int) -> (!tvm_ffi_api.any, !tvm_ffi_api.any) {
   %object = tvm_ffi_api.upcast %base : !tvm_ffi_abi.tensor -> !tvm_ffi_api.any
@@ -169,18 +169,18 @@ func.func @opaque_exports(%base: !tvm_ffi_abi.tensor, %pod: !tvm_ffi_abi.int) ->
 // CHECK-LABEL: func.func @string_elements(
 // CHECK-SAME: %[[ARRAY:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.array, %[[TUPLE:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.array, %[[INDEX:[a-zA-Z0-9_]+]]: i64)
 // CHECK: %[[BOXED:[a-zA-Z0-9_]+]] = tvm_ffi_abi.to %[[INDEX]] : i64 -> !tvm_ffi_abi.int
-// CHECK: %[[ARRAY_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionGetGlobal "ffi.ArrayGetItem"
-// CHECK: %[[FIRST:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionCall %[[ARRAY_HANDLE]] : !tvm_ffi_abi.function(%[[ARRAY]], %[[BOXED]]) : (!tvm_ffi_abi.array, !tvm_ffi_abi.int) -> !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[ARRAY_HANDLE]] : !tvm_ffi_abi.function
+// CHECK: %[[ARRAY_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.get_global "ffi.ArrayGetItem"
+// CHECK: %[[FIRST:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.call %[[ARRAY_HANDLE]] : !tvm_ffi_abi.function(%[[ARRAY]], %[[BOXED]]) : (!tvm_ffi_abi.array, !tvm_ffi_abi.int) -> !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[ARRAY_HANDLE]] : !tvm_ffi_abi.function
 // CHECK: %[[ZERO:[a-zA-Z0-9_]+]] = arith.constant 0 : i64
 // CHECK: %[[OFFSET:[a-zA-Z0-9_]+]] = tvm_ffi_abi.to %[[ZERO]] : i64 -> !tvm_ffi_abi.int
-// CHECK: %[[TUPLE_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionGetGlobal "ffi.ArrayGetItem"
-// CHECK: %[[SECOND:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionCall %[[TUPLE_HANDLE]] : !tvm_ffi_abi.function(%[[TUPLE]], %[[OFFSET]]) : (!tvm_ffi_abi.array, !tvm_ffi_abi.int) -> !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[TUPLE_HANDLE]] : !tvm_ffi_abi.function
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[FIRST]] : !tvm_ffi_abi.any
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[SECOND]] : !tvm_ffi_abi.any
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[SECOND]] : !tvm_ffi_abi.any
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[FIRST]] : !tvm_ffi_abi.any
+// CHECK: %[[TUPLE_HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.get_global "ffi.ArrayGetItem"
+// CHECK: %[[SECOND:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.call %[[TUPLE_HANDLE]] : !tvm_ffi_abi.function(%[[TUPLE]], %[[OFFSET]]) : (!tvm_ffi_abi.array, !tvm_ffi_abi.int) -> !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[TUPLE_HANDLE]] : !tvm_ffi_abi.function
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[FIRST]] : !tvm_ffi_abi.any
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[SECOND]] : !tvm_ffi_abi.any
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[SECOND]] : !tvm_ffi_abi.any
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[FIRST]] : !tvm_ffi_abi.any
 // CHECK-NEXT: return %[[FIRST]], %[[SECOND]]
 func.func @string_elements(%array: !tvm_ffi_api.array<!tvm_ffi_api.str>, %tuple: !tvm_ffi_api.tuple<!tvm_ffi_api.str>, %index: i64) -> (!tvm_ffi_api.str, !tvm_ffi_api.str) {
   %first = tvm_ffi_api.array.get %array[%index] : !tvm_ffi_api.array<!tvm_ffi_api.str> -> !tvm_ffi_api.str

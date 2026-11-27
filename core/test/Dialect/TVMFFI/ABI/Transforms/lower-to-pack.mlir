@@ -110,24 +110,24 @@ tvm_ffi_abi.func private @packed_unit() -> !tvm_ffi_abi.none {
 // CHECK: ^[[BODY]]:
 // CHECK-NEXT: cf.br ^[[DEFINITION:bb[0-9]+]]
 // CHECK: ^[[CLEANUP:bb[0-9]+]]:
-// CHECK: tvm_ffi_abi.ObjectDecRef %[[ARRAY:[a-zA-Z0-9_]+]] : !tvm_ffi_abi.array
+// CHECK: tvm_ffi_abi.object.dec_ref %[[ARRAY:[a-zA-Z0-9_]+]] : !tvm_ffi_abi.array
 // CHECK: tvm_ffi_abi.return
 // CHECK: ^[[DEFINITION]]:
-// CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.FunctionGetGlobal "ffi.Array"
-// CHECK: %[[ARRAY]] = tvm_ffi_abi.FunctionCall %[[HANDLE]] : !tvm_ffi_abi.function(%[[ONE:[a-zA-Z0-9_]+]])
+// CHECK: %[[HANDLE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.function.get_global "ffi.Array"
+// CHECK: %[[ARRAY]] = tvm_ffi_abi.function.call %[[HANDLE]] : !tvm_ffi_abi.function(%[[ONE:[a-zA-Z0-9_]+]])
 // CHECK: cf.br ^[[CLEANUP]]
 tvm_ffi_abi.func @forward_block_use() -> !tvm_ffi_abi.none {
   cf.br ^definition
 ^cleanup:
-  tvm_ffi_abi.ObjectDecRef %array : !tvm_ffi_abi.array
+  tvm_ffi_abi.object.dec_ref %array : !tvm_ffi_abi.array
   %unit_none = tvm_ffi_abi.constant.none
   %payload = tvm_ffi_abi.upcast %unit_none : !tvm_ffi_abi.none -> !tvm_ffi_abi.any
   %ok = tvm_ffi_abi.constant.bool true
   tvm_ffi_abi.return %ok, %payload : !tvm_ffi_abi.bool, !tvm_ffi_abi.any
 ^definition:
   %one = tvm_ffi_abi.constant.int 1
-  %function = tvm_ffi_abi.FunctionGetGlobal "ffi.Array" : !tvm_ffi_abi.function
-  %array = tvm_ffi_abi.FunctionCall %function : !tvm_ffi_abi.function(%one) : (!tvm_ffi_abi.int) -> !tvm_ffi_abi.array
+  %function = tvm_ffi_abi.function.get_global "ffi.Array" : !tvm_ffi_abi.function
+  %array = tvm_ffi_abi.function.call %function : !tvm_ffi_abi.function(%one) : (!tvm_ffi_abi.int) -> !tvm_ffi_abi.array
   cf.br ^cleanup
 }
 // -----

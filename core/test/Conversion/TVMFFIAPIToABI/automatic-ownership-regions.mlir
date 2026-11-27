@@ -10,7 +10,7 @@
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor)
 // CHECK-NEXT: scf.execute_region {
 // CHECK-NEXT: %[[CLONE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.tensor.clone %[[INPUT]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[CLONE]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[CLONE]]
 // CHECK-NEXT: scf.yield
 // CHECK-NEXT: }
 // CHECK-NEXT: return
@@ -28,13 +28,13 @@ func.func @execute_capture(%input: !tvm_ffi_api.tensor) {
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = scf.execute_region -> !tvm_ffi_abi.tensor
 // CHECK: %[[CLONE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.tensor.clone
 // CHECK: cf.cond_br
-// CHECK: tvm_ffi_abi.ObjectIncRef %[[BORROWED:[a-zA-Z0-9_]+]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[CLONE]]
+// CHECK: tvm_ffi_abi.object.inc_ref %[[BORROWED:[a-zA-Z0-9_]+]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[CLONE]]
 // CHECK-NEXT: scf.yield %[[BORROWED]]
-// CHECK: tvm_ffi_abi.ObjectIncRef %[[CLONE]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[CLONE]]
+// CHECK: tvm_ffi_abi.object.inc_ref %[[CLONE]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[CLONE]]
 // CHECK-NEXT: scf.yield %[[CLONE]]
-// CHECK: tvm_ffi_abi.ObjectDecRef %[[RESULT]]
+// CHECK: tvm_ffi_abi.object.dec_ref %[[RESULT]]
 // LLVM-LABEL: llvm.func @execute_cfg(
 func.func @execute_cfg(%condition: i1, %input: !tvm_ffi_api.tensor) {
   %result = scf.execute_region -> !tvm_ffi_api.tensor {
@@ -54,19 +54,19 @@ func.func @execute_cfg(%condition: i1, %input: !tvm_ffi_api.tensor) {
 // CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = scf.for
 // CHECK-SAME: iter_args(%[[CURRENT:[a-zA-Z0-9_]+]] = %[[INPUT:[a-zA-Z0-9_]+]])
 // CHECK-NEXT: %[[NEXT:[a-zA-Z0-9_]+]] = scf.if
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[CURRENT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[CURRENT]]
 // CHECK-NEXT: scf.yield %[[CURRENT]]
 // CHECK-NEXT: } else {
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[CURRENT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[CURRENT]]
 // CHECK-NEXT: scf.yield %[[CURRENT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[NEXT]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[NEXT]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[CURRENT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[NEXT]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[NEXT]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[CURRENT]]
 // CHECK-NEXT: scf.yield %[[NEXT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[RESULT]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[RESULT]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]
 // CHECK-NEXT: return %[[RESULT]]
 // LLVM-LABEL: llvm.func @for_nested_if(
 func.func @for_nested_if(%input: !tvm_ffi_api.tensor, %condition: i1, %lower: index, %upper: index, %step: index) -> !tvm_ffi_api.tensor {
@@ -85,18 +85,18 @@ func.func @for_nested_if(%input: !tvm_ffi_api.tensor, %condition: i1, %lower: in
 // semantic slot owns a reference; the identically represented Base slot borrows.
 // CHECK-LABEL: func.func @for_slots(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor,
-// CHECK: tvm_ffi_abi.ObjectIncRef %[[INPUT]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[INPUT]]
+// CHECK: tvm_ffi_abi.object.inc_ref %[[INPUT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[INPUT]]
 // CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]]:3 = scf.for unsigned
 // CHECK-SAME: iter_args(%[[FIRST:[a-zA-Z0-9_]+]] = %[[INPUT]], %[[SECOND:[a-zA-Z0-9_]+]] = %[[INPUT]], %[[MANUAL:[a-zA-Z0-9_]+]] = %[[BASE:[a-zA-Z0-9_]+]])
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[SECOND]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[FIRST]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[FIRST]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[SECOND]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[SECOND]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[FIRST]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[FIRST]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[SECOND]]
 // CHECK-NEXT: scf.yield %[[SECOND]], %[[FIRST]], %[[MANUAL]]
 // CHECK-NEXT: } {test.marker = "preserved"}
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]#0
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]#1
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]#0
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]#1
 // CHECK-NEXT: return
 // LLVM-LABEL: llvm.func @for_slots(
 func.func @for_slots(%input: !tvm_ffi_api.tensor, %manual: !tvm_ffi_abi.tensor, %lower: index, %upper: index, %step: index) {
@@ -112,18 +112,18 @@ func.func @for_slots(%input: !tvm_ffi_api.tensor, %manual: !tvm_ffi_abi.tensor, 
 // CHECK-SAME: %[[COND:[a-zA-Z0-9_]+]]: i1, %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor)
 // CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]]:2 = scf.if %[[COND]]
 // CHECK-NEXT: %[[CLONE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.tensor.clone %[[INPUT]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[CLONE]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[CLONE]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[CLONE]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[CLONE]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[CLONE]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[CLONE]]
 // CHECK-NEXT: scf.yield {test.marker = "if_yield"} %[[CLONE]], %[[CLONE]]
 // CHECK-NEXT: } else {
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[INPUT]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[INPUT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[INPUT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[INPUT]]
 // CHECK-NEXT: scf.yield %[[INPUT]], %[[INPUT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[RESULT]]#0
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]#0
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]#1
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[RESULT]]#0
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]#0
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]#1
 // CHECK-NEXT: return %[[RESULT]]#0
 // LLVM-LABEL: llvm.func @if_repeated_exports(
 func.func @if_repeated_exports(%condition: i1, %input: !tvm_ffi_api.tensor) -> !tvm_ffi_api.tensor {
@@ -140,22 +140,22 @@ func.func @if_repeated_exports(%condition: i1, %input: !tvm_ffi_api.tensor) -> !
 // the incoming reference are released. Before/after payload types may differ.
 // CHECK-LABEL: func.func @while_cast(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor, %[[COND:[a-zA-Z0-9_]+]]: i1)
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[INPUT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[INPUT]]
 // CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]] = scf.while (%[[BEFORE:[a-zA-Z0-9_]+]] = %[[INPUT]])
 // CHECK-NEXT: %[[CLONE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.tensor.clone %[[BEFORE]]
 // CHECK-NEXT: %[[WIDE:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[CLONE]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[WIDE]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[CLONE]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[BEFORE]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[WIDE]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[CLONE]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[BEFORE]]
 // CHECK-NEXT: scf.condition(%[[COND]]) %[[WIDE]]
 // CHECK: ^[[BODY:[a-zA-Z0-9_]+]](%[[AFTER:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.any):
 // CHECK-NEXT: %[[NARROW:[a-zA-Z0-9_]+]] = tvm_ffi_abi.downcast %[[AFTER]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[NARROW]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[AFTER]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[NARROW]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[AFTER]]
 // CHECK-NEXT: scf.yield %[[NARROW]]
 // CHECK-NEXT: }
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[RESULT]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[RESULT]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]
 // CHECK-NEXT: return %[[RESULT]]
 // LLVM-LABEL: llvm.func @while_cast(
 func.func @while_cast(%input: !tvm_ffi_api.tensor, %condition: i1) -> !tvm_ffi_api.any {
@@ -175,21 +175,21 @@ func.func @while_cast(%input: !tvm_ffi_api.tensor, %condition: i1) -> !tvm_ffi_a
 // retain independently, while the Base slot receives no automatic references.
 // CHECK-LABEL: func.func @while_slots(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor, %[[MANUAL:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor, %[[COND:[a-zA-Z0-9_]+]]: i1)
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[INPUT]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[INPUT]]
 // CHECK-NEXT: %[[RESULT:[a-zA-Z0-9_]+]]:3 = scf.while (%[[BEFORE:[a-zA-Z0-9_]+]] = %[[INPUT]])
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[BEFORE]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[BEFORE]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[BEFORE]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[BEFORE]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[BEFORE]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[BEFORE]]
 // CHECK-NEXT: scf.condition(%[[COND]]) %[[BEFORE]], %[[MANUAL]], %[[BEFORE]]
 // CHECK-NEXT: } do {
 // CHECK-NEXT: ^[[BODY:[a-zA-Z0-9_]+]](%[[FIRST:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor, %[[BASE:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor, %[[LAST:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor):
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[LAST]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[FIRST]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[LAST]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[LAST]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[FIRST]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[LAST]]
 // CHECK-NEXT: scf.yield %[[LAST]]
 // CHECK-NEXT: }
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]#0
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[RESULT]]#2
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]#0
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[RESULT]]#2
 // CHECK-NEXT: return
 // LLVM-LABEL: llvm.func @while_slots(
 func.func @while_slots(%input: !tvm_ffi_api.tensor, %manual: !tvm_ffi_abi.tensor, %condition: i1) {

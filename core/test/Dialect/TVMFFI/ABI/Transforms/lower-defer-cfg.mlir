@@ -12,20 +12,20 @@
 // CHECK: ^[[LEFT_BODY]]:
 // CHECK: %[[A:[a-zA-Z0-9_]+]] = tvm_ffi_abi.constant.none
 // CHECK-NEXT: %[[WA:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[A]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[WA]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[WA]]
 // CHECK-NEXT: return
 // CHECK: ^[[RIGHT]]:
 // CHECK-NEXT: cf.br ^[[RIGHT_BODY:bb[0-9]+]]
 // CHECK: ^[[RIGHT_BODY]]:
 // CHECK: %[[B:[a-zA-Z0-9_]+]] = tvm_ffi_abi.constant.none
 // CHECK-NEXT: %[[WB:[a-zA-Z0-9_]+]] = tvm_ffi_abi.upcast %[[B]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[WB]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[WB]]
 // CHECK-NEXT: return
 func.func @cfg_local_ssa(%c: i1) {
   tvm_ffi_abi.defer {
     %none = tvm_ffi_abi.constant.none
     %wide = tvm_ffi_abi.upcast %none : !tvm_ffi_abi.none -> !tvm_ffi_abi.any
-    tvm_ffi_abi.ObjectDecRef %wide : !tvm_ffi_abi.any
+    tvm_ffi_abi.object.dec_ref %wide : !tvm_ffi_abi.any
     tvm_ffi_abi.defer_yield
   }
   cf.cond_br %c, ^left, ^right
@@ -42,10 +42,10 @@ func.func @cfg_local_ssa(%c: i1) {
 // CHECK: ^[[LEFT]]:
 // CHECK-NEXT: cf.cond_br %[[C]], ^[[E1:bb[0-9]+]](%[[X]] : i32), ^[[E2:bb[0-9]+]](%[[Y]] : i32)
 // CHECK: ^[[E1]](%[[P1:[a-zA-Z0-9_]+]]: i32):
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[V]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[V]]
 // CHECK-NEXT: cf.br ^[[JOIN]](%[[P1]] : i32)
 // CHECK: ^[[E2]](%[[P2:[a-zA-Z0-9_]+]]: i32):
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[V]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[V]]
 // CHECK-NEXT: cf.br ^[[JOIN]](%[[P2]] : i32)
 // CHECK: ^[[JOIN]](%[[P:[a-zA-Z0-9_]+]]: i32):
 // CHECK-NEXT: return %[[P]]
@@ -53,7 +53,7 @@ func.func @critical_edges(%c: i1, %v: !tvm_ffi_abi.tensor, %x: i32, %y: i32) -> 
   cf.cond_br %c, ^left, ^join(%x : i32)
 ^left:
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %v : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %v : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   cf.cond_br %c, ^join(%x : i32), ^join(%y : i32)
@@ -66,30 +66,30 @@ func.func @critical_edges(%c: i1, %v: !tvm_ffi_abi.tensor, %x: i32, %y: i32) -> 
 // CHECK-SAME: %[[C:[a-zA-Z0-9_]+]]: i1, %[[V:[a-zA-Z0-9_]+]]: !tvm_ffi_abi.tensor)
 // CHECK: cf.br ^[[HEADER:bb[0-9]+]]
 // CHECK: ^[[BACK:bb[0-9]+]]:
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[V]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[V]]
 // CHECK-NEXT: cf.br ^[[HEADER]]
 // CHECK: ^[[HEADER]]:
 // CHECK-NEXT: cf.br ^[[FORWARD:bb[0-9]+]]
 // CHECK: ^[[FORWARD]]:
 // CHECK-NEXT: cf.br ^[[LATCH:bb[0-9]+]]
 // CHECK: ^[[LATCH]]:
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[V]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[V]]
 // CHECK-NEXT: cf.cond_br %[[C]], ^[[BACK]], ^[[EXIT:bb[0-9]+]]
 // CHECK: ^[[EXIT]]:
 // CHECK-NEXT: cf.br ^[[FINAL:bb[0-9]+]]
 // CHECK: ^[[FINAL]]:
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[V]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[V]]
 // CHECK-NEXT: return
 func.func @latch(%c: i1, %v: !tvm_ffi_abi.tensor) {
   cf.br ^header
 ^header:
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %v : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %v : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   cf.br ^latch
 ^latch:
-  tvm_ffi_abi.ObjectIncRef %v : !tvm_ffi_abi.tensor
+  tvm_ffi_abi.object.inc_ref %v : !tvm_ffi_abi.tensor
   cf.cond_br %c, ^header, ^exit
 ^exit:
   return
@@ -102,25 +102,25 @@ func.func @latch(%c: i1, %v: !tvm_ffi_abi.tensor) {
 // CHECK: ^[[ENTRY_EDGE]]:
 // CHECK-NEXT: cf.br ^[[BODY:bb[0-9]+]]
 // CHECK: ^[[BACK:bb[0-9]+]]:
-// CHECK-NEXT: tvm_ffi_abi.ObjectDecRef %[[INNER]]
+// CHECK-NEXT: tvm_ffi_abi.object.dec_ref %[[INNER]]
 // CHECK-NEXT: cf.br ^[[BODY]]
 // CHECK: ^[[BODY]]:
 // CHECK-NEXT: cf.cond_br %[[C]], ^[[BACK]], ^[[EXIT:bb[0-9]+]]
 // CHECK: ^[[EXIT]]:
 // CHECK-NEXT: cf.br ^[[FINAL:bb[0-9]+]]
 // CHECK: ^[[FINAL]]:
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[INNER]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[OUTER]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[INNER]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[OUTER]]
 // CHECK-NEXT: return
 func.func @loop(%c: i1, %outer: !tvm_ffi_abi.tensor, %inner: !tvm_ffi_abi.tensor) {
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %outer : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %outer : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   cf.br ^body
 ^body:
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %inner : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %inner : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   cf.cond_br %c, ^body, ^exit
@@ -139,38 +139,38 @@ func.func @loop(%c: i1, %outer: !tvm_ffi_abi.tensor, %inner: !tvm_ffi_abi.tensor
 // CHECK: ^[[JOIN_EDGE]]:
 // CHECK-NEXT: cf.br ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[EDGE]]:
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[X]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[Y]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[X]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[Y]]
 // CHECK-NEXT: cf.br ^[[JOIN]]
 // CHECK: ^[[JOIN]]:
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[A]]
-// CHECK-NEXT: tvm_ffi_abi.ObjectIncRef %[[B]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[A]]
-// CHECK-DAG: tvm_ffi_abi.ObjectDecRef %[[B]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[A]]
+// CHECK-NEXT: tvm_ffi_abi.object.inc_ref %[[B]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[A]]
+// CHECK-DAG: tvm_ffi_abi.object.dec_ref %[[B]]
 // CHECK-NEXT: return
 func.func @scoped_exits(%c: i1, %a: !tvm_ffi_abi.tensor, %b: !tvm_ffi_abi.tensor, %x: !tvm_ffi_abi.tensor, %y: !tvm_ffi_abi.tensor) {
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %a : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %a : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %b : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %b : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   cf.cond_br %c, ^inner, ^join
 ^inner:
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %x : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %x : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %y : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %y : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   cf.br ^join
 ^join:
-  tvm_ffi_abi.ObjectIncRef %a : !tvm_ffi_abi.tensor
-  tvm_ffi_abi.ObjectIncRef %b : !tvm_ffi_abi.tensor
+  tvm_ffi_abi.object.inc_ref %a : !tvm_ffi_abi.tensor
+  tvm_ffi_abi.object.inc_ref %b : !tvm_ffi_abi.tensor
   return
 }
 
@@ -188,7 +188,7 @@ func.func @unreachable_and_empty(%v: !tvm_ffi_abi.tensor) {
   cf.br ^exit
 ^dead:
   tvm_ffi_abi.defer {
-    tvm_ffi_abi.ObjectDecRef %v : !tvm_ffi_abi.tensor
+    tvm_ffi_abi.object.dec_ref %v : !tvm_ffi_abi.tensor
     tvm_ffi_abi.defer_yield
   }
   llvm.unreachable
