@@ -15,3 +15,23 @@ def LowerTVMFFIAPIKernelLaunch
                            "trident::tvm_ffi::api::TVMFFIAPIDialect",
                            "trident::tvm_ffi::monad::TVMFFIMonadDialect"];
 }
+def DirectAllocations : Pass<"direct-allocations", "mlir::ModuleOp"> {
+  let summary =
+      "Route supported ATen allocation and view ops through the direct C ABI";
+  let dependentDialects = ["trident::tvm_ffi::api::TVMFFIAPIDialect",
+                           "trident::tvm_ffi::monad::TVMFFIMonadDialect"];
+}
+
+def FlattenDirectAllocations
+    : Pass<"flatten-direct-allocations", "mlir::ModuleOp"> {
+  let summary =
+      "Replace local shape arrays with native direct allocation dimensions";
+  let dependentDialects = ["trident::tvm_ffi::api::TVMFFIAPIDialect"];
+}
+
+def UnboxScfIfTuples : Pass<"unbox-scf-if-tuples", "mlir::ModuleOp"> {
+  let summary = "Unbox semantic tuple results across scf.if boundaries";
+  let dependentDialects = ["mlir::arith::ArithDialect", "mlir::scf::SCFDialect",
+                           "trident::tvm_ffi::abi::TVMFFIABIDialect",
+                           "trident::tvm_ffi::api::TVMFFIAPIDialect"];
+}

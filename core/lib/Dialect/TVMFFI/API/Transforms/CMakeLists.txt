@@ -5,6 +5,7 @@
 add_mlir_library(
   TVMFFIAPITransforms
   LowerTVMFFIAPIKernelLaunch.cc
+  DirectAllocations.cc
   DEPENDS
   MLIRTVMFFIAPITransformsPassIncGen
   LINK_LIBS

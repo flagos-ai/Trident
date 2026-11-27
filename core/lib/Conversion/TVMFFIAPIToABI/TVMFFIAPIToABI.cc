@@ -565,6 +565,7 @@ void populateConvertTVMFFIAPIToABIConversionPatterns(
       ConvertGenericOp<EqOp, abi::EqOp>,
       ConvertGenericOp<ExceptionOp, abi::ExceptionOp, true>,
       ConvertGenericOp<FunctionCallOp, abi::FunctionCallOp, true>,
+      ConvertGenericOp<DirectAllocationOp, abi::DirectAllocationOp, true>,
       ConvertGenericOp<FunctionGetGlobalOp, abi::FunctionGetGlobalOp, true>,
       ConvertGenericOp<GetOp, abi::GetOp>, ConvertGenericOp<IsaOp, abi::IsaOp>,
       ConvertGenericOp<tvm_ffi::monad::FailOp>,

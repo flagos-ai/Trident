@@ -18,6 +18,7 @@
 #include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABITensorMetadata.h"
 #include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABIToPack.h"
 #include "trident/core/Dialect/TVMFFI/API/IR/TVMFFIDialect.h"
+#include "trident/core/Dialect/TVMFFI/API/Transforms/DirectAllocations.h"
 #include "trident/core/Dialect/TVMFFI/API/Transforms/LowerTVMFFIAPIKernelLaunch.h"
 #include "trident/core/Dialect/TVMFFI/Arith/IR/TVMFFIDialect.h"
 #include "trident/core/Dialect/TVMFFI/Arith/Transforms/LowerTVMFFIArith.h"
@@ -52,6 +53,9 @@ void trident::conversion::registerAllPasses() {
   trident::tvm_ffi::abi::registerLowerTVMFFIABITensorMetadataPass();
   trident::tvm_ffi::abi::registerLowerTVMFFIABIToPackPass();
   trident::tvm_ffi::api::registerLowerTVMFFIAPIKernelLaunchPass();
+  trident::tvm_ffi::api::registerDirectAllocationsPass();
+  trident::tvm_ffi::api::registerFlattenDirectAllocationsPass();
+  trident::tvm_ffi::api::registerUnboxScfIfTuplesPass();
   trident::tvm_ffi::arith::registerLowerTVMFFIArithPass();
   trident::tvm_ffi::monad::registerLowerTVMFFIMonadPass();
 }

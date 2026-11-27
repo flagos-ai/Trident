@@ -99,3 +99,10 @@ def TVMFFIMonad_YieldOp : TVMFFIMonad_Op<"yield", [Terminator]> {
   let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
   let hasVerifier = 1;
 }
+
+def TVMFFIMonad_DirectAllocationOp : TVMFFIMonad_Op<"direct_allocation"> {
+  let arguments = (ins I32Attr:$kind, Variadic<AnyTVMFFIAnyABIType>:$arguments);
+  let results = (outs TVMFFIMonad_ResultType:$result);
+  let assemblyFormat = "$kind `(` $arguments `)` attr-dict `:` "
+                       "functional-type($arguments, $result)";
+}
