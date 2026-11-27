@@ -201,6 +201,10 @@ class TridentFxImporter:
     def _convert_torch_enum(self) -> runtime.Function:
         return runtime.get_global_func("trident.runtime.torch_enum_to_int")
 
+    @cached_property
+    def _convert_torch_dtype(self) -> runtime.Function:
+        return runtime.get_global_func("trident.runtime.tvm_ffi_to_torch_type")
+
     def argument(self, value: Any) -> ir.Value:
         """Import a non-container value without opening a failure scope."""
         if isinstance(value, torch.fx.Node):
@@ -244,6 +248,10 @@ class TridentFxImporter:
             values: list[ir.Value] = []
             for argument in arguments:
                 if isinstance(argument, torch.dtype):
+                    scalar_type = self._convert_torch_dtype(runtime.convert(argument))
+                    if scalar_type >= 0:
+                        values.append(constant(int(scalar_type)))
+                        continue
                     current = checked_call(
                         "trident.runtime.tvm_ffi_to_torch_type",
                         [self.argument(argument)],

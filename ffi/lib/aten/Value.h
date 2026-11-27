@@ -316,13 +316,7 @@ template <> struct Value<c10::ScalarTypeType> {
       if (dtype->lanes != 1) {
         throw std::runtime_error("Aten dtype must have exactly one lane");
       }
-      int32_t scalarType = tvm::ffi::Function::GetGlobalRequired(
-                               "trident.runtime.tvm_ffi_to_torch_type")(*dtype)
-                               .cast<int32_t>();
-      if (scalarType < 0) {
-        throw std::runtime_error("unsupported TVM FFI dtype");
-      }
-      return static_cast<c10::ScalarType>(scalarType);
+      return at::toScalarType(*dtype);
     } else {
       return static_cast<c10::ScalarType>(any.cast<int64_t>());
     }

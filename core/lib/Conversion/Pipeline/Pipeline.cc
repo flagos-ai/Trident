@@ -14,6 +14,7 @@
 #include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABIDefer.h"
 #include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABITensorMetadata.h"
 #include "trident/core/Dialect/TVMFFI/ABI/Transforms/LowerTVMFFIABIToPack.h"
+#include "trident/core/Dialect/TVMFFI/API/Transforms/DirectAllocations.h"
 #include "trident/core/Dialect/TVMFFI/API/Transforms/LowerTVMFFIAPIKernelLaunch.h"
 #include "trident/core/Dialect/TVMFFI/Arith/Transforms/LowerTVMFFIArith.h"
 #include "trident/core/Dialect/TVMFFI/Monad/Transforms/LowerTVMFFIMonad.h"
@@ -41,10 +42,14 @@ namespace trident::conversion {
 
 class TridentLoweringPipelinePass final
     : public impl::TridentLoweringPipelineBase<TridentLoweringPipelinePass> {
+public:
+  using impl::TridentLoweringPipelineBase<
+      TridentLoweringPipelinePass>::TridentLoweringPipelineBase;
   void runOnOperation() final {
     mlir::PassManager pm(&getContext(), mlir::ModuleOp::getOperationName());
-    // Expand semantic arithmetic and guarded launches before simplifying
-    // Results.
+    // Expand semantic arithmetic, direct allocations/views, and guarded
+    // launches before simplifying Results.
+    pm.addPass(tvm_ffi::api::createDirectAllocations());
     pm.addPass(tvm_ffi::arith::createLowerTVMFFIArith());
     pm.addPass(tvm_ffi::api::createLowerTVMFFIAPIKernelLaunch());
     pm.addPass(createConvertTVMFFIABIToGPU());
@@ -52,6 +57,9 @@ class TridentLoweringPipelinePass final
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(tvm_ffi::monad::createLowerTVMFFIMonad());
     pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(tvm_ffi::api::createUnboxScfIfTuples());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(tvm_ffi::api::createFlattenDirectAllocations());
     // Materialize lexical cleanup before inlining can merge its block scopes.
     pm.addPass(trident::conversion::createConvertTVMFFIAPIToABI());
     pm.addPass(tvm_ffi::abi::createLowerTVMFFIABIDefer());

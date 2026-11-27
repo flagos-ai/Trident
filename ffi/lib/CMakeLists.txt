@@ -32,7 +32,7 @@ add_custom_command(
   COMMENT "Generating ${ATENGEN_CC}"
   VERBATIM)
 
-add_library(TridentAtenFFI SHARED "${ATENGEN_CC}")
+add_library(TridentAtenFFI SHARED "${ATENGEN_CC}" aten/DirectAllocations.cc)
 set_source_files_properties("${ATENGEN_CC}" PROPERTIES SKIP_LINTING TRUE)
 target_include_directories(TridentAtenFFI
                            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/aten")

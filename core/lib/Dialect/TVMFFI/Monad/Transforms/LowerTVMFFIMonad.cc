@@ -133,6 +133,22 @@ public:
   }
 };
 
+class LowerDirectAllocationOp final
+    : public mlir::OpConversionPattern<DirectAllocationOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  mlir::LogicalResult
+  matchAndRewrite(DirectAllocationOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rw) const override {
+    auto direct = api::DirectAllocationOp::create(
+        rw, op.getLoc(), abi::BoolType::get(rw.getContext()),
+        api::AnyType::get(rw.getContext()), op.getKindAttr(),
+        rw.getI64IntegerAttr(-1), adaptor.getArguments());
+    rw.replaceOpWithNewOp<api::TupleConstructOp>(
+        op, resultTupleType(rw.getContext()), direct.getResults());
+    return mlir::success();
+  }
+};
 class LowerBindOp final : public mlir::OpConversionPattern<BindOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -306,9 +322,9 @@ void populateLowerTVMFFIMonadConversionPatterns(
                (body.empty() ||
                 converter.isLegal(body.front().getArgumentTypes()));
       });
-  patterns.add<LowerBindOp, LowerCallOp, LowerExecuteRegionOp, LowerFailOp,
-               LowerPureOp, LowerUnpackOp, LowerYieldOp,
-               GenericOpPattern<mlir::func::CallOp>,
+  patterns.add<LowerBindOp, LowerCallOp, LowerDirectAllocationOp,
+               LowerExecuteRegionOp, LowerFailOp, LowerPureOp, LowerUnpackOp,
+               LowerYieldOp, GenericOpPattern<mlir::func::CallOp>,
                GenericOpPattern<mlir::func::ReturnOp>>(converter, context);
   // Preserve yield attributes instead of using the upstream structural rewrite.
   patterns.add<GenericOpPattern<mlir::scf::YieldOp>>(converter, context,

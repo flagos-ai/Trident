@@ -536,3 +536,12 @@ def TVMFFIAPI_UpcastOp
   let assemblyFormat = "$value `:` type($value) `->` type($result) attr-dict";
   let hasFolder = 1;
 }
+// A status-returning direct allocation. rank=-1 borrows shape arrays;
+// nonnegative rank passes flattened native dimensions to the C ABI.
+def TVMFFIAPI_DirectAllocationOp : TVMFFIAPI_Op<"direct_allocation"> {
+  let arguments = (ins I32Attr:$kind, I64Attr:$rank,
+      Variadic<AnyTVMFFISemanticType>:$arguments);
+  let results = (outs TVMFFIABI_BoolType:$success, TVMFFIAPI_AnyValue:$value);
+  let assemblyFormat = "$kind `rank` $rank `(` $arguments `)` attr-dict `:` "
+                       "functional-type($arguments, results)";
+}

@@ -47,8 +47,31 @@ if TYPE_CHECKING:
     from torch.export.dynamic_shapes import _DimHint
 
 
+_TORCH_TENSOR = torch.Tensor
+_FFI_TENSOR = runtime.Tensor
+_FROM_DLPACK = torch.from_dlpack
+_PASSTHROUGH_TYPES = frozenset((torch.Tensor, int, float, bool, type(None)))
+
+
+def _convert_input_leaf(leaf: Any) -> Any:
+    if isinstance(leaf, torch.device):
+        return runtime.device(f"{leaf}")
+    if isinstance(leaf, torch.dtype):
+        return runtime.convert(leaf)
+    return leaf
+
+
+def _convert_output_leaf(leaf: Any) -> Any:
+    return _FROM_DLPACK(leaf) if type(leaf) is _FFI_TENSOR else leaf
+
+
 def _map_containers(value: Any, convert: Callable[[Any], Any]) -> Any:
     """Convert leaves while preserving Python containers and unpacking FFI Arrays."""
+    t = type(value)
+    if t in _PASSTHROUGH_TYPES:
+        return value
+    if t is _FFI_TENSOR:
+        return convert(value)
     if isinstance(value, (runtime.Array, list)):
         return [_map_containers(element, convert) for element in value]
     elif isinstance(value, tuple):
@@ -72,7 +95,13 @@ class TridentGraphModule:
     """
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if not kwargs:
+            fast = self._fast_call
+            if fast is not None:
+                return fast(*args)
         result = self.executor(*args, **kwargs)
+        if type(result) is _TORCH_TENSOR:
+            return result
         if isinstance(result, Exception):
             kind = result.get_kind()
             if kind == "GuardMiss":
@@ -94,6 +123,7 @@ class TridentGraphModule:
         register_all_passes()
         self._sub_modules: list[ir.Module] = []
         self._dispatcher: Root = Root()
+        self._fast_call: Callable[..., Any] | None = None
         self.executor: Callable[..., Any] = self.compile
 
     def __name__(self) -> str:
@@ -330,44 +360,124 @@ class TridentGraphModule:
             keep_alive_object=engine,
         )
 
-        def invoke(*values: Any) -> Any:
-            result = _map_containers(
-                fn(
-                    *(
-                        _map_containers(
-                            value,
-                            lambda leaf: (
-                                runtime.device(f"{leaf}")
-                                if isinstance(leaf, torch.device)
-                                else runtime.convert(leaf)
-                                if isinstance(leaf, torch.dtype)
-                                else leaf
-                            ),
-                        )
-                        for value in values
-                    )
-                ),
-                lambda leaf: (
-                    torch.from_dlpack(leaf)
-                    if isinstance(leaf, runtime.Tensor)
-                    else leaf
-                ),
-            )
+        output_spec = getattr(self, "_output_spec", None)
+        output_is_leaf = output_spec is not None and output_spec.is_leaf()
 
+        def invoke(*values: Any) -> Any:
+            raw = fn(
+                *(
+                    value
+                    if type(value) in _PASSTHROUGH_TYPES
+                    else _map_containers(value, _convert_input_leaf)
+                    for value in values
+                )
+            )
+            if output_is_leaf and type(raw) is _FFI_TENSOR:
+                return _FROM_DLPACK(raw)
+            result = (
+                raw
+                if type(raw) in _PASSTHROUGH_TYPES
+                else _map_containers(raw, _convert_output_leaf)
+            )
             if isinstance(result, Exception):
                 kind = result.get_kind()
                 if kind != "GuardMiss":
                     raise RuntimeError(f"Compiled execution failed: {kind}")
                 return result
-            count = self._output_spec.num_leaves
+            spec = self._output_spec
+            if spec.is_leaf():
+                return result
+            count = spec.num_leaves
             leaves: list[Any] = (
                 [] if count == 0 else [result] if count == 1 else list(result)
             )
-            return pytree.tree_unflatten(leaves, self._output_spec)
+            return pytree.tree_unflatten(leaves, spec)
+
+        self._fast_call = (
+            self._build_fast_call(fn, invoke, output_is_leaf)
+            if output_spec is not None
+            else None
+        )
 
         return runtime_utils.kwargs_wrapper.make_kwargs_wrapper_from_signature(
             invoke, self._signature
         )
+
+    def _build_fast_call(
+        self,
+        fn: runtime.Function,
+        fallback_invoke: Callable[..., Any],
+        output_is_leaf: bool,
+    ) -> Callable[..., Any] | None:
+        params = list(self._signature.parameters.values())
+        if any(
+            p.kind
+            not in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            for p in params
+        ):
+            return None
+        n_total = len(params)
+        n_req = sum(p.default is inspect.Parameter.empty for p in params)
+        if any(type(p.default) not in _PASSTHROUGH_TYPES for p in params[n_req:]):
+            return None
+        defaults = tuple(p.default for p in params[n_req:])
+        # Generate a tiny arity-specialized fast path avoiding kwargs_wrapper,
+        # generators, lambdas, _map_containers, and pytree.tree_unflatten.
+        arg_names = [f"a{i}" for i in range(n_total)]
+        sig_parts = []
+        for i in range(n_total):
+            if i < n_req:
+                sig_parts.append(arg_names[i])
+            else:
+                sig_parts.append(f"{arg_names[i]}=_d{i - n_req}")
+        sig_str = ", ".join(sig_parts)
+        call_str = ", ".join(arg_names)
+        check_parts = [f"type({a}) in _PT" for a in arg_names]
+        check_str = " and ".join(check_parts) if check_parts else "True"
+
+        ns: dict[str, Any] = {
+            "_fn": fn,
+            "_FT": _FFI_TENSOR,
+            "_from_dlpack": _FROM_DLPACK,
+            "_PT": _PASSTHROUGH_TYPES,
+            "_Exc": Exception,
+            "_compile": self.compile,
+            "_fallback": fallback_invoke,
+        }
+        for i, val in enumerate(defaults):
+            ns[f"_d{i}"] = val
+
+        if output_is_leaf:
+            body = (
+                f"def _fast({sig_str}):\n"
+                f"    if {check_str}:\n"
+                f"        r = _fn({call_str})\n"
+                f"        if type(r) is _FT:\n"
+                f"            return _from_dlpack(r)\n"
+                f"        if isinstance(r, _Exc):\n"
+                f"            k = r.get_kind()\n"
+                f"            if k == 'GuardMiss':\n"
+                f"                return _compile({call_str})\n"
+                f"            raise RuntimeError(f'Compiled execution failed: {{k}}')\n"
+                f"        return r\n"
+                f"    r = _fallback({call_str})\n"
+                f"    if isinstance(r, _Exc):\n"
+                f"        return _compile({call_str})\n"
+                f"    return r\n"
+            )
+        else:
+            body = (
+                f"def _fast({sig_str}):\n"
+                f"    r = _fallback({call_str})\n"
+                f"    if isinstance(r, _Exc):\n"
+                f"        return _compile({call_str})\n"
+                f"    return r\n"
+            )
+        exec(body, ns)
+        return ns["_fast"]
 
     def _build_dispatcher(self, combined: ir.Module) -> None:
         """Generate the ordered guard tree directly as an execute-region CFG."""

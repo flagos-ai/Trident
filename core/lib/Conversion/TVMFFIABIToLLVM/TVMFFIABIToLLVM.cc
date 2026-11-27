@@ -356,6 +356,179 @@ public:
   }
 };
 
+class ConvertDirectAllocationOp final
+    : public mlir::OpConversionPattern<tvm_ffi::abi::DirectAllocationOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  mlir::LogicalResult
+  matchAndRewrite(tvm_ffi::abi::DirectAllocationOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    auto module = op->getParentOfType<mlir::ModuleOp>();
+    auto ptr = mlir::LLVM::LLVMPointerType::get(rw.getContext());
+    auto i32 = rw.getI32Type();
+    auto i64 = rw.getI64Type();
+    auto any = tvm_ffi::TVMFFICABIType::getLLVMType(rw.getContext());
+    auto c64 = [&](int64_t v) -> mlir::Value {
+      return mlir::LLVM::ConstantOp::create(rw, loc, i64, v);
+    };
+    auto c32 = [&](int32_t v) -> mlir::Value {
+      return mlir::LLVM::ConstantOp::create(rw, loc, i32, v);
+    };
+    auto null = [&]() -> mlir::Value {
+      return mlir::LLVM::ZeroOp::create(rw, loc, ptr);
+    };
+    auto payload = [&](mlir::Value v) -> mlir::Value {
+      return mlir::LLVM::ExtractValueOp::create(rw, loc, v,
+                                                llvm::ArrayRef<int64_t>{2});
+    };
+    auto object = [&](mlir::Value v) -> mlir::Value {
+      return mlir::LLVM::IntToPtrOp::create(rw, loc, ptr, payload(v));
+    };
+    auto args = adaptor.getArguments();
+    auto origArgs = op.getArguments();
+    int64_t rank = op.getRank();
+    int kind = op.getKind();
+    auto nativeDimensions = [&](mlir::ValueRange dims) -> mlir::Value {
+      auto buffer =
+          mlir::LLVM::AllocaOp::create(rw, loc, ptr, i64,
+                                       c64(std::max<size_t>(1, dims.size())))
+              .getResult();
+      for (auto [index, dim] : llvm::enumerate(dims)) {
+        auto slot = mlir::LLVM::GEPOp::create(
+            rw, loc, ptr, i64, buffer,
+            llvm::ArrayRef<mlir::LLVM::GEPArg>{static_cast<int32_t>(index)});
+        mlir::LLVM::StoreOp::create(rw, loc, payload(dim), slot);
+      }
+      return buffer;
+    };
+    auto out = mlir::LLVM::AllocaOp::create(rw, loc, ptr, any, c64(1));
+    mlir::LLVM::StoreOp::create(rw, loc,
+                                mlir::LLVM::ZeroOp::create(rw, loc, any), out);
+
+    auto emitCall =
+        [&](llvm::StringRef symbol,
+            llvm::ArrayRef<mlir::Value> operands) -> mlir::LogicalResult {
+      llvm::SmallVector<mlir::Type> types;
+      types.reserve(operands.size());
+      for (auto v : operands)
+        types.push_back(v.getType());
+      auto signature = mlir::LLVM::LLVMFunctionType::get(i32, types);
+      auto declaration =
+          utils::detail::getOrCreateCAPIImpl(module, symbol, signature);
+      if (mlir::failed(declaration))
+        return op.emitError("incompatible direct allocation ABI");
+      auto status = mlir::LLVM::CallOp::create(rw, loc, *declaration, operands)
+                        .getResult();
+      auto ok = mlir::LLVM::ICmpOp::create(
+          rw, loc, mlir::LLVM::ICmpPredicate::eq, status, c32(0));
+      auto flag = createConstantABI(
+          rw, loc, kTVMFFIBool, mlir::LLVM::ZExtOp::create(rw, loc, i64, ok));
+      auto result = mlir::LLVM::LoadOp::create(rw, loc, any, out);
+      rw.replaceOp(op, {flag, result});
+      return mlir::success();
+    };
+
+    auto isNone = [&](size_t idx) -> bool {
+      return idx >= origArgs.size() ||
+             mlir::isa<tvm_ffi::abi::NoneType>(origArgs[idx].getType());
+    };
+    auto isIntOrNone = [&](size_t idx) -> bool {
+      return isNone(idx) ||
+             mlir::isa<tvm_ffi::abi::IntType>(origArgs[idx].getType());
+    };
+    auto isBoolOrNone = [&](size_t idx) -> bool {
+      return isNone(idx) ||
+             mlir::isa<tvm_ffi::abi::BoolType>(origArgs[idx].getType());
+    };
+    auto isDeviceOrNone = [&](size_t idx) -> bool {
+      return isNone(idx) ||
+             mlir::isa<tvm_ffi::abi::DeviceType>(origArgs[idx].getType());
+    };
+    auto extractScalarType = [&](size_t idx) -> mlir::Value {
+      if (isNone(idx))
+        return c32(-1);
+      return mlir::LLVM::TruncOp::create(rw, loc, i32, payload(args[idx]));
+    };
+    auto extractPinMemory = [&](size_t idx) -> mlir::Value {
+      if (isNone(idx))
+        return c32(-1);
+      return mlir::LLVM::TruncOp::create(rw, loc, i32, payload(args[idx]));
+    };
+    auto extractPackedDevice = [&](size_t idx) -> mlir::Value {
+      if (isNone(idx))
+        return c64(0);
+      return payload(args[idx]);
+    };
+
+    // Fast register-only C ABIs (<= 6 args, zero stack spilling).
+    if ((kind == 0 || kind == 3) && rank >= 0) {
+      size_t opt = static_cast<size_t>(rank);
+      if (isIntOrNone(opt) && isNone(opt + 1) && isDeviceOrNone(opt + 2) &&
+          isBoolOrNone(opt + 3) && isNone(opt + 4)) {
+        mlir::Value sizes = nativeDimensions(args.take_front(rank));
+        return emitCall(
+            kind == 0 ? "trident_c_allocate_empty" : "trident_c_allocate_zeros",
+            {c64(rank), sizes, extractScalarType(opt),
+             extractPackedDevice(opt + 2), extractPinMemory(opt + 3), out});
+      }
+    } else if (kind == 2 || kind == 4) {
+      if (isIntOrNone(1) && isNone(2) && isNone(3) && isBoolOrNone(4) &&
+          isNone(5)) {
+        return emitCall(
+            kind == 2 ? "trident_c_allocate_empty_like"
+                      : "trident_c_allocate_zeros_like",
+            {object(args[0]), extractScalarType(1), extractPinMemory(4), out});
+      }
+    } else if (kind == 5) {
+      if (rank >= 0) {
+        mlir::Value sizes = nativeDimensions(args.slice(1, rank));
+        return emitCall("trident_c_view",
+                        {object(args[0]), c64(rank), sizes, out});
+      }
+      return emitCall("trident_c_view_array",
+                      {object(args[0]), object(args[1]), out});
+    }
+
+    // General fallback C ABI for explicit layout/memory_format/unflattened
+    // arrays.
+    mlir::Value sizes = null(), strides = null(), self = null(),
+                sizeObj = null(), strideObj = null();
+    size_t optionStart = 1;
+    if (kind == 2 || kind == 4) {
+      self = object(args[0]);
+    } else if (rank >= 0) {
+      sizes = nativeDimensions(args.take_front(rank));
+      optionStart = rank;
+      if (kind == 1) {
+        strides = nativeDimensions(args.slice(rank, rank));
+        optionStart = rank * 2;
+      }
+    } else {
+      sizeObj = object(args[0]);
+      if (kind == 1) {
+        strideObj = object(args[1]);
+        optionStart = 2;
+      }
+    }
+    llvm::SmallVector<mlir::Value> operands{
+        c32(kind), c64(rank), sizes, strides, self, sizeObj, strideObj};
+    for (size_t index = 0; index < 5; ++index) {
+      if (optionStart + index < args.size()) {
+        auto v = args[optionStart + index];
+        operands.push_back(mlir::LLVM::ExtractValueOp::create(
+            rw, loc, v, llvm::ArrayRef<int64_t>{0}));
+        operands.push_back(payload(v));
+      } else {
+        operands.push_back(c32(kTVMFFINone));
+        operands.push_back(c64(0));
+      }
+    }
+    operands.push_back(out);
+    return emitCall("trident_c_allocate", operands);
+  }
+};
+
 class ConvertFunctionCallOp final
     : public mlir::OpConversionPattern<tvm_ffi::abi::FunctionCallOp> {
 public:
@@ -1065,8 +1238,9 @@ void populateTVMFFIABIToLLVMConversionPatterns(
   patterns
       .add<ConvertAsOp, ConvertConstantDTypeOp, ConvertConstantDeviceOp,
            ConvertConstantRawStrOp, ConvertEqOp, ConvertExceptionOp,
-           ConvertFunctionCallOp, ConvertFunctionGetGlobalOp, ConvertGetOp,
-           ConvertIsaOp, ConvertPackGetOp, ConvertPackSizeOp,
+           ConvertDirectAllocationOp, ConvertFunctionCallOp,
+           ConvertFunctionGetGlobalOp, ConvertGetOp, ConvertIsaOp,
+           ConvertPackGetOp, ConvertPackSizeOp,
            ConvertRefOp<tvm_ffi::abi::ObjectDecRefOp,
                         &conversion::utils::getOrCreateTVMFFIObjectDecRef>,
            ConvertRefOp<tvm_ffi::abi::ObjectIncRefOp,
