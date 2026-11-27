@@ -46,6 +46,13 @@ from .importer import TridentFxImporter
 if TYPE_CHECKING:
     from torch.export.dynamic_shapes import _DimHint
 
+# Retain created MLIR ExecutionEngine instances for the lifetime of the
+# process. Destroying an LLVM ORC LLJIT ExecutionEngine after repeated
+# dispatcher rebuilds can leave dangling EH-frame (FDE) entries in libgcc_s,
+# causing subsequent C++ exception unwinding (_Unwind_Find_FDE) to crash with
+# SIGSEGV/SIGABRT or deadlock inside signal-handler backtraces.
+_RETAINED_EXECUTION_ENGINES: list[ExecutionEngine] = []
+
 
 def _map_containers(value: Any, convert: Callable[[Any], Any]) -> Any:
     """Convert leaves while preserving Python containers and unpacking FFI Arrays."""
@@ -317,6 +324,7 @@ class TridentGraphModule:
             shared_libs=find_runtime_libraries(),
         )
         engine.initialize()
+        _RETAINED_EXECUTION_ENGINES.append(engine)
 
         symbol: str = f"__tvm_ffi_{self.fn.__name__}"
         ptr: int = engine.raw_lookup(symbol)

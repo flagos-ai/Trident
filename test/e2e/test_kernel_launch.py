@@ -3,6 +3,7 @@
 
 """Mutation-only Triton launches return a None payload."""
 
+import gc
 import unittest
 
 import torch
@@ -25,6 +26,13 @@ def shift_kernel(value: tl.tensor, BLOCK: tl.constexpr, MODE: tl.constexpr) -> N
     offsets = tl.arange(0, BLOCK)
     delta = 1 if MODE == "increment" else -1
     tl.store(value + offsets, tl.load(value + offsets) + delta)
+
+
+@triton.jit
+def copy_kernel(src: tl.tensor, dst: tl.tensor, n: int, BLOCK: tl.constexpr) -> None:
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < n
+    tl.store(dst + offsets, tl.load(src + offsets, mask=mask), mask=mask)
 
 
 class KernelLaunchTest(unittest.TestCase):
@@ -119,3 +127,34 @@ class KernelLaunchTest(unittest.TestCase):
 
         device = torch.device("cuda", torch.cuda.current_device())
         assert_no_cuda_leak(self, check, device)
+
+    def test_repeated_recompilation_and_exception_unwinding(self) -> None:
+        """Repeated dispatcher rebuilds must not corrupt libgcc_s EH frames."""
+
+        @trident.jit
+        def launch(src: torch.Tensor, dst: torch.Tensor) -> torch.Tensor:
+            n = src.numel()
+            copy_kernel[(triton.cdiv(n, 128),)](src, dst, n, BLOCK=128)
+            return dst
+
+        dtypes = (
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+            torch.uint8,
+            torch.float16,
+            torch.bfloat16,
+            torch.float32,
+        )
+        for ndim in (1, 2, 3):
+            for dtype in dtypes:
+                src = torch.ones((4,) * ndim, dtype=dtype, device="cuda")
+                dst = torch.zeros_like(src)
+                out = launch(src, dst)
+                torch.testing.assert_close(out, src)
+                gc.collect()
+                # Exercise C++ exception unwinding (_Unwind_Find_FDE) after each
+                # dispatcher rebuild to catch dangling JIT EH-frame entries.
+                with self.assertRaises(RuntimeError):
+                    torch.empty((-1,), device="cuda")
